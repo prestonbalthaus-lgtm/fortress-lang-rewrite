@@ -1,0 +1,23 @@
+component specificity
+export Executable
+
+(* The case a naive reading of "one applicable declaration at the static
+   argument types" gets wrong. At the call site the static type is Ink, and only
+   `name(Ink)` applies to Ink itself -- but the cell (Solid) has both applicable
+   and `name(Solid)` wins it. The decision belongs to the table, not to the
+   static tuple, so this call has to dispatch. *)
+trait Ink end
+object Solid extends {Ink} end
+object Dotted extends {Ink} end
+
+name(x: Solid): ZZ32 = 1
+name(x: Ink): ZZ32 = 2
+
+pick(n: ZZ32): Ink = if n === 0 then Solid else Dotted end
+
+run() = do
+   println(name(pick(0)))
+   println(name(pick(1)))
+   println(name(Solid))
+end
+end

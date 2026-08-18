@@ -15,10 +15,15 @@ pub enum ParseError {
     PostfixOperatorUnsupported {
         span: Span,
     },
-    /// One of the 80 reserved words the M1 parser does not act on.
+    /// One of the 70 reserved words the parser does not act on.
     ReservedWord {
         span: Span,
         word: String,
+    },
+    /// `trait Foo[\T\]`. Generics are M3d; refusing here is better than
+    /// parsing a static parameter list the rest of the compiler ignores.
+    StaticParametersUnsupported {
+        span: Span,
     },
 }
 
@@ -28,7 +33,8 @@ impl ParseError {
         match self {
             Self::UnexpectedToken { span, .. }
             | Self::PostfixOperatorUnsupported { span }
-            | Self::ReservedWord { span, .. } => Some(*span),
+            | Self::ReservedWord { span, .. }
+            | Self::StaticParametersUnsupported { span } => Some(*span),
             Self::UnexpectedEndOfInput { .. } => None,
         }
     }
@@ -59,10 +65,15 @@ impl core::fmt::Display for ParseError {
             Self::ReservedWord { span, word } => {
                 write!(
                     f,
-                    "{}..{}: reserved word `{word}` is not in the M1 subset",
+                    "{}..{}: reserved word `{word}` is not in the implemented subset",
                     span.start, span.end
                 )
             }
+            Self::StaticParametersUnsupported { span } => write!(
+                f,
+                "{}..{}: static parameters `[\\...\\]` on a declaration are not implemented; generics are M3d",
+                span.start, span.end
+            ),
         }
     }
 }

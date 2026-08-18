@@ -608,3 +608,314 @@ fn a_function_call_is_not_an_assignment_target() {
         "expected an invalid-target error, got {e}"
     );
 }
+
+// ------------------------------------ M3c: traits, objects and dispatch
+
+/// A program with a hierarchy in front of it, so the tests below say only what
+/// they are about.
+fn with_shapes(rest: &str) -> String {
+    format!(
+        "component t\n\
+         trait Ink end\n\
+         object Solid extends {{Ink}} end\n\
+         object Dotted extends {{Ink}} end\n\
+         {rest}\n\
+         end\n"
+    )
+}
+
+fn last_target(src: &str) -> String {
+    let c = typed(src);
+    let f = c.functions.last().expect("a function");
+    target_of(&f.body).unwrap_or_else(|| panic!("the body is not a call: {:?}", f.body))
+}
+
+#[test]
+fn an_object_is_a_subtype_of_the_trait_it_extends() {
+    let c = typed(&with_shapes("ink(): Ink = Solid"));
+    let f = c.functions.last().expect("a function");
+    assert_eq!(f.return_type, Type::Trait("Ink"));
+    // The value keeps its concrete type; only the slot is the trait.
+    assert_eq!(f.body.ty, Type::Object("Solid"));
+}
+
+#[test]
+fn a_lone_declaration_still_gets_its_bare_symbol_and_a_direct_call() {
+    // The whole pre-M3c language is this case, and it has to be unchanged.
+    let c = typed(&with_shapes(
+        "one(x: Ink): ZZ32 = 1\nrun() = println(one(Solid))",
+    ));
+    assert_eq!(
+        c.functions.first().map(|f| f.name.as_str()),
+        Some("one"),
+        "an overload set of one is not mangled"
+    );
+    assert!(c.dispatches.is_empty(), "nothing to decide at run time");
+}
+
+#[test]
+fn concrete_arguments_never_reach_a_switch() {
+    let src =
+        with_shapes("name(x: Solid): ZZ32 = 1\nname(x: Ink): ZZ32 = 2\nrun(): ZZ32 = name(Solid)");
+    assert_eq!(last_target(&src), "name$Solid");
+    assert!(typed(&src).dispatches.is_empty());
+}
+
+/// The case a naive reading gets wrong: at the static type `Ink` only
+/// `name(Ink)` is applicable, but the cell `(Solid)` has a different winner, so
+/// the call has to dispatch rather than bind statically to `name(Ink)`.
+#[test]
+fn a_trait_typed_argument_dispatches_even_when_one_declaration_applies_statically() {
+    let src = with_shapes(
+        "name(x: Solid): ZZ32 = 1\n\
+         name(x: Ink): ZZ32 = 2\n\
+         pick(n: ZZ32): Ink = if n === 0 then Solid else Dotted end\n\
+         run(): ZZ32 = name(pick(0))",
+    );
+    assert_eq!(last_target(&src), "name$dispatch$Ink");
+
+    let c = typed(&src);
+    let d = c.dispatches.first().expect("a dispatch function");
+    assert_eq!(d.params, vec![Type::Trait("Ink")]);
+    assert_eq!(d.returns, Type::ZZ32);
+    match &d.tree {
+        fortress_types::DispatchNode::Switch { position, arms } => {
+            assert_eq!(*position, 0);
+            assert_eq!(arms.len(), 2, "one arm per concrete type under Ink");
+        }
+        other => panic!("expected a switch, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_row_whose_winners_agree_collapses_instead_of_switching() {
+    // Both concrete types under Ink land on the same declaration, so there is
+    // nothing left to decide and the table is a leaf.
+    let src = with_shapes(
+        "name(x: Ink): ZZ32 = 2\n\
+         pick(n: ZZ32): Ink = if n === 0 then Solid else Dotted end\n\
+         run(): ZZ32 = name(pick(0))",
+    );
+    assert_eq!(last_target(&src), "name");
+    assert!(typed(&src).dispatches.is_empty());
+}
+
+#[test]
+fn a_symmetrically_ambiguous_call_is_refused_and_names_both_declarations() {
+    let src = "component t\n\
+        trait Top end\n\
+        trait Left extends {Top} end\n\
+        trait Right extends {Top} end\n\
+        object OL extends {Left} end\n\
+        object OR extends {Right} end\n\
+        pick(x: Top, y: Top): ZZ32 = 0\n\
+        pick(x: Left, y: Top): ZZ32 = 1\n\
+        pick(x: Top, y: Right): ZZ32 = 2\n\
+        topOf(n: ZZ32): Top = if n === 0 then OL else OR end\n\
+        run(): ZZ32 = pick(topOf(0), topOf(1))\n\
+        end\n";
+    let e = type_error(src);
+    let TypeError::AmbiguousDispatch {
+        arguments,
+        first,
+        second,
+        ..
+    } = &e
+    else {
+        panic!("expected an ambiguity, got {e}")
+    };
+    assert_eq!(arguments, "OL, OR");
+    assert_ne!(first, second, "two different declarations must be named");
+}
+
+#[test]
+fn a_call_no_declaration_covers_is_refused_before_the_table_is_built() {
+    // Every cell has a winner, but nothing applies to (Ink) itself, so there is
+    // no statically computed return type for the covariance check to use.
+    let e = body_error(
+        "trait Ink end\n\
+         object Solid extends {Ink} end\n\
+         object Dotted extends {Ink} end\n\
+         name(x: Solid): ZZ32 = 1\n\
+         name(x: Dotted): ZZ32 = 2\n\
+         pick(n: ZZ32): Ink = if n === 0 then Solid else Dotted end\n\
+         run(): ZZ32 = name(pick(0))",
+    );
+    assert!(
+        matches!(e, TypeError::NoApplicableDeclaration { .. }),
+        "got {e}"
+    );
+}
+
+#[test]
+fn two_overloads_with_inferred_returns_keep_their_own_types() {
+    let c = typed(&with_shapes(
+        "size(x: Solid) = 7\nsize(x: Dotted) = \"wide\"",
+    ));
+    let mut returns: Vec<(String, Type)> = c
+        .functions
+        .iter()
+        .map(|f| (f.name.clone(), f.return_type))
+        .collect();
+    returns.sort_by(|a, b| a.0.cmp(&b.0));
+    assert_eq!(
+        returns,
+        vec![
+            ("size$Dotted".to_owned(), Type::String),
+            ("size$Solid".to_owned(), Type::ZZ32),
+        ]
+    );
+}
+
+#[test]
+fn a_field_reads_at_its_declared_type() {
+    let e = body("object Box(width: ZZ32) end\nrun(): ZZ32 = Box(3).width");
+    assert_eq!(e.ty, Type::ZZ32);
+    assert!(matches!(e.kind, TypedExprKind::Field { index: 0, .. }));
+}
+
+#[test]
+fn a_field_that_does_not_exist_is_a_diagnostic() {
+    let e = body_error("object Box(width: ZZ32) end\nrun(): ZZ32 = Box(3).height");
+    assert!(matches!(e, TypeError::UnknownField { .. }), "got {e}");
+}
+
+#[test]
+fn a_dotted_method_is_not_the_function_of_the_same_name() {
+    let e = body_error(
+        "object Box(width: ZZ32) end\nwidth(b: Box): ZZ32 = 1\nrun(): ZZ32 = Box(3).width(0)",
+    );
+    assert!(
+        matches!(e, TypeError::DottedMethodUnsupported { .. }),
+        "got {e}"
+    );
+}
+
+#[test]
+fn a_singleton_is_a_value_and_not_a_constructor() {
+    let e = body_error("object Solid end\nrun(): ZZ32 = do Solid(1)\n 1 end");
+    assert!(
+        matches!(e, TypeError::SingletonNotConstructible { .. }),
+        "got {e}"
+    );
+}
+
+#[test]
+fn a_field_initializer_may_not_reach_a_singleton() {
+    // Initializers run when the object is built, which for a singleton is
+    // before `run`. Reaching another one would make declaration order load
+    // bearing, and a forward reference a null dereference.
+    let e = body_error(
+        "object Unit end\nobject Box(w: ZZ32) other: Unit = Unit end\nrun(): ZZ32 = Box(1).w",
+    );
+    assert!(
+        matches!(e, TypeError::SingletonInitializerRestricted { .. }),
+        "got {e}"
+    );
+}
+
+#[test]
+fn a_mutable_field_is_refused_rather_than_ignored() {
+    let e = body_error("object Box(w: ZZ32) var seen: ZZ32 = 0 end\nrun(): ZZ32 = Box(1).w");
+    assert!(
+        matches!(e, TypeError::MutableFieldUnsupported { .. }),
+        "got {e}"
+    );
+}
+
+#[test]
+fn a_trait_that_extends_itself_is_a_diagnostic_rather_than_a_hang() {
+    let e = body_error("trait A extends {B} end\ntrait B extends {A} end\nrun(): ZZ32 = 1");
+    assert!(matches!(e, TypeError::TraitCycle { .. }), "got {e}");
+}
+
+#[test]
+fn an_object_cannot_extend_an_object() {
+    let e = body_error("object A end\nobject B extends {A} end\nrun(): ZZ32 = 1");
+    assert!(matches!(e, TypeError::NotATrait { .. }), "got {e}");
+}
+
+#[test]
+fn an_api_is_parsed_and_refused() {
+    let src = "api t\nf(x: ZZ32): ZZ32\nend\n";
+    let e = type_error(src);
+    assert!(matches!(e, TypeError::ApiNotExecutable { .. }), "got {e}");
+}
+
+#[test]
+fn println_refuses_what_there_is_no_shim_for() {
+    let e = body_error("run() = do a:Array[\\ZZ64\\] = array(2)\n println(a) end");
+    assert!(matches!(e, TypeError::NotPrintable { .. }), "got {e}");
+}
+
+#[test]
+fn a_branch_of_each_concrete_type_is_allowed_under_a_shared_trait() {
+    let c = typed(&with_shapes(
+        "pick(n: ZZ32): Ink = if n === 0 then Solid else Dotted end",
+    ));
+    assert_eq!(
+        c.functions.last().map(|f| f.return_type),
+        Some(Type::Trait("Ink"))
+    );
+}
+
+#[test]
+fn objects_are_tagged_from_one_so_that_zero_is_never_valid() {
+    let c = typed(&with_shapes("run(): ZZ32 = 1"));
+    let tags: Vec<u32> = c.objects.iter().map(|o| o.tag).collect();
+    assert_eq!(tags, vec![1, 2]);
+}
+
+#[test]
+fn a_cell_may_not_return_something_the_call_site_cannot_hold() {
+    // The static type `Ink` picks `name(Ink)` and with it a ZZ32 result, but
+    // the cell (Solid) would return a String through the same signature.
+    let e = body_error(
+        "trait Ink end\n\
+         object Solid extends {Ink} end\n\
+         object Dotted extends {Ink} end\n\
+         name(x: Ink): ZZ32 = 1\n\
+         name(x: Solid): String = \"a\"\n\
+         pick(n: ZZ32): Ink = if n === 0 then Solid else Dotted end\n\
+         run(): ZZ32 = name(pick(0))",
+    );
+    assert!(
+        matches!(e, TypeError::ReturnTypeNotCovariant { .. }),
+        "got {e}"
+    );
+}
+
+#[test]
+fn a_table_that_would_not_fit_is_a_diagnostic_rather_than_a_hang() {
+    // 101 concrete types across three dispatched positions is 1,030,301 cells.
+    // The bound is checked on the product, before anything is enumerated.
+    let objects: String = (0..101)
+        .map(|i| format!("object O{i} extends {{Big}} end\n"))
+        .collect();
+    let e = body_error(&format!(
+        "trait Big end\n{objects}\
+         f(a: Big, b: Big, c: Big): ZZ32 = 1\n\
+         f(a: O0, b: Big, c: Big): ZZ32 = 2\n\
+         g(x: Big): ZZ32 = f(x, x, x)"
+    ));
+    match e {
+        TypeError::DispatchTableTooLarge { cells, .. } => assert_eq!(cells, 101 * 101 * 101),
+        other => panic!("got {other}"),
+    }
+}
+
+#[test]
+fn a_lone_declaration_is_never_sized_or_enumerated() {
+    // The same hierarchy with one declaration is a direct call, so the bound
+    // above must not fire on it.
+    let objects: String = (0..101)
+        .map(|i| format!("object O{i} extends {{Big}} end\n"))
+        .collect();
+    let src = format!(
+        "component t\ntrait Big end\n{objects}\
+         f(a: Big, b: Big, c: Big): ZZ32 = 1\n\
+         g(x: Big): ZZ32 = f(x, x, x)\nend\n"
+    );
+    assert_eq!(last_target(&src), "f");
+    assert!(typed(&src).dispatches.is_empty());
+}

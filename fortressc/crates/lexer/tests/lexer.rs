@@ -237,7 +237,7 @@ fn the_acceptance_programs_vocabulary_is_not_reserved() {
 #[test]
 fn the_other_reserved_words_are_reserved_not_identifiers() {
     for word in [
-        "atomic", "trait", "object", "opr", "grammar", "where", "for", "var",
+        "atomic", "opr", "grammar", "for", "import", "syntax", "value",
     ] {
         assert_eq!(
             kinds(word),
@@ -245,6 +245,45 @@ fn the_other_reserved_words_are_reserved_not_identifiers() {
             "{word} should be reserved"
         );
     }
+}
+
+/// M3c promoted nine of them out of the reserved list and gave them to the
+/// parser. Being reserved and being a keyword are different states, and this is
+/// the line between them.
+#[test]
+fn the_declaration_vocabulary_is_a_keyword_rather_than_a_reserved_word() {
+    for (word, kind) in [
+        ("api", Kind::KwApi),
+        ("trait", Kind::KwTrait),
+        ("object", Kind::KwObject),
+        ("extends", Kind::KwExtends),
+        ("comprises", Kind::KwComprises),
+        ("excludes", Kind::KwExcludes),
+        ("where", Kind::KwWhere),
+        ("var", Kind::KwVar),
+        ("self", Kind::KwSelf),
+    ] {
+        assert_eq!(
+            kinds(word),
+            vec![kind, Kind::Eof],
+            "{word} should be a keyword"
+        );
+    }
+}
+
+#[test]
+fn braces_lex() {
+    assert_eq!(
+        kinds("{a, b}"),
+        vec![
+            Kind::LBrace,
+            Kind::Ident("a"),
+            Kind::Comma,
+            Kind::Ident("b"),
+            Kind::RBrace,
+            Kind::Eof
+        ]
+    );
 }
 
 #[test]
