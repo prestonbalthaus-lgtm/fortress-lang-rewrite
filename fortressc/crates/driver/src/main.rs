@@ -99,15 +99,25 @@ fn compile(options: &Options) -> Result<(), Failure> {
     Ok(())
 }
 
-/// `lld` is not installed on every box, and `cc` is. The linker driver only has
-/// to find crt startup files and libc.
+/// The M1 runtime, embedded so the compiler does not have to locate a file at
+/// run time. `lld` is not installed on every box and `cc` is; the linker driver
+/// only has to find crt startup files and libc.
+const RUNTIME_SHIMS: &str = include_str!("../../../runtime/shims.c");
+
 fn link(object: &Path, output: &Path) -> Result<(), Failure> {
+    let shims = output.with_extension("shims.c");
+    std::fs::write(&shims, RUNTIME_SHIMS)
+        .map_err(|e| Failure::Internal(format!("could not write the runtime shims: {e}")))?;
+
     let result = Command::new("cc")
         .arg(object)
+        .arg(&shims)
         .arg("-o")
         .arg(output)
         .output()
-        .map_err(|e| Failure::Internal(format!("could not run cc: {e}")))?;
+        .map_err(|e| Failure::Internal(format!("could not run cc: {e}")));
+    let _ = std::fs::remove_file(&shims);
+    let result = result?;
 
     if result.status.success() {
         return Ok(());

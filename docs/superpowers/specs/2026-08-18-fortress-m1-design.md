@@ -199,6 +199,10 @@ M1 is done when the acceptance program compiles to an ELF, runs on a compute
 node, prints `fact(20) = 2432902008176640000`, and `ldd` on the binary shows libc
 and nothing else.
 
+**MET, 2026-08-18.** Byte exact, checked against `math.factorial(20)`, with
+`ldd` reporting only `libc.so.6`, `linux-vdso.so.1` and the loader. Not yet run
+on a compute node: that is M2's business, along with the C ABI and OpenMPI.
+
 ## What M1 does not answer
 
 M1 deliberately avoids the three things most likely to force a redesign. None of

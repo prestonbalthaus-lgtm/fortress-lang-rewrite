@@ -79,8 +79,32 @@ dialect rather than the full language, and this is the notice that says so.
 
 ## Status
 
-The rewrite has not started. There is no Rust in this tree yet. Everything here
-is the legacy Sun implementation, kept as reference material.
+M1 is done. A Fortress program compiles to a native ELF and runs:
+
+```
+$ fortressc tests/fact.fss -o fact
+$ ./fact
+fact(20) = 2432902008176640000
+$ ldd fact
+    linux-vdso.so.1
+    libc.so.6 => /lib64/libc.so.6
+    /lib64/ld-linux-x86-64.so.2
+```
+
+No JVM in the toolchain or the output. That factorial is real 64 bit recursion
+through `f(x) = if x < 2 then 1 else x f(x-1) end`, where the juxtaposition
+`x f(x-1)` resolved to a multiply and `"fact(20) = " f(j)` to a string
+concatenation, from identical syntax, on operand types alone.
+
+The compiler lives in `fortressc/`: a six crate Rust workspace, lexer through
+LLVM codegen. See `docs/superpowers/specs/` for the M1 design and the lexer
+plan, both of which record why the rules are what they are.
+
+What M1 does not do: traits, objects, generics, arrays, `for`, parallelism,
+`atomic`, or user definable syntax. It parses about 9% of the legacy corpus,
+which is the point rather than a shortfall.
+
+The legacy Sun implementation is kept as reference material:
 
 | Path | What it is |
 |------|------------|
@@ -96,13 +120,21 @@ compiler gets measured against.
 
 ## Building
 
-Nothing to build yet. The new compiler does not exist.
+```
+cd fortressc
+./setup-llvm.sh                       # only if llvm-devel is not installed
+export LLVM_SYS_221_PREFIX=...        # the script prints the value
+cargo build --workspace
+cargo test --workspace
+```
+
+Needs LLVM 22 and a C compiler. `setup-llvm.sh` exists because Fedora splits
+LLVM across `llvm-libs` and `llvm-devel`, and the latter needs root; the script
+unpacks it into `~/.local` instead. With root, `dnf install llvm-devel` does the
+same job.
 
 The legacy interpreter builds with Ant against Java 6 era code. It has not been
-verified to still work on a current toolchain, and getting it running is phase 0
-of the roadmap precisely because the answer is unknown.
-
-See [ROADMAP.md](ROADMAP.md) for the plan.
+verified to still work.
 
 ## License
 
