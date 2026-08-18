@@ -53,12 +53,28 @@ for the Platinum 8160s.
 
 ## Decisions to make before writing code
 
-**1. The macro tier.** Fortress has user definable syntax. `Syntax.rats` is the
-macro language, and the `templateparser/` directory is another 28 grammar files
-serving it. A `logos` plus recursive descent frontend cannot do user extensible
-grammar cheaply. Recommendation: cut it from v1, keep the syntax reserved, and
-revisit once the core compiles. Check what fraction of `Library/` depends on it
-before committing.
+**1. The macro tier. Measured, and the answer is cut it.** Fortress has user
+definable syntax. `Syntax.rats` is the macro language and `templateparser/` is
+another 28 grammar files serving it. A `logos` plus recursive descent frontend
+cannot do user extensible grammar cheaply, so the question was how much real code
+depends on it. Counted across all 1956 `.fss` and `.fsi` files:
+
+* 34 files declare a `grammar`. Every one is in
+  `ProjectFortress/syntax_abstraction_tests/` (110 files total with its consumer
+  cases), which is the feature testing itself.
+* `Library/` has 126 source files and zero grammar declarations.
+* Three files in `Library/` touch the macro APIs (`FortressSyntax.fsi`,
+  `FortressAstUtil.fss`, `FortressAstUtil.fsi`, 218 lines together). They import
+  each other and nothing else in `Library/` imports them. `FortressLibrary.fss`
+  does not.
+
+So the standard library does not use syntax abstraction at all. Cutting it from
+v1 costs the 110 test files and those 218 lines. Nothing else breaks.
+
+Two things that follow. The 110 files come out of the conformance denominator, so
+corpus percentages in phases 1 and 2 should be quoted against 1846, not 1956. And
+the specification still documents the feature, so v1 is a Fortress dialect rather
+than the whole language. Say so in the README when v1 ships.
 
 **2. Whitespace and newlines.** The grammar has dedicated `Spacing`,
 `NoSpaceLiteral`, `MayNewlineHeader` and `NoNewlineHeader` modules. Newlines are
