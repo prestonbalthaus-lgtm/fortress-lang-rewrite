@@ -1,0 +1,39 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/ast",
+    "crates/lexer",
+    "crates/parser",
+    "crates/types",
+    "crates/codegen",
+    "crates/driver",
+]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.97"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+fortress-ast = { path = "crates/ast" }
+fortress-lexer = { path = "crates/lexer" }
+fortress-parser = { path = "crates/parser" }
+fortress-types = { path = "crates/types" }
+fortress-codegen = { path = "crates/codegen" }
+
+# M1 error handling rules, enforced by the compiler rather than by review.
+# Panicking on anything derived from user source is a compiler bug, so it fails the build.
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+indexing_slicing = "deny"
+integer_division = "deny"
+missing_panics_doc = "deny"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+unused_must_use = "deny"

@@ -1,0 +1,27 @@
+//! Shared vocabulary. Types only, no logic, so that `parser` and `codegen`
+//! never need to depend on each other.
+
+/// Byte offsets into the source. Line and column are derived on demand by the
+/// diagnostic renderer rather than carried on every token.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Span {
+    pub start: usize,
+    pub end: usize,
+}
+
+impl Span {
+    #[must_use]
+    pub const fn new(start: usize, end: usize) -> Self {
+        Self { start, end }
+    }
+
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.end.saturating_sub(self.start)
+    }
+
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.start >= self.end
+    }
+}

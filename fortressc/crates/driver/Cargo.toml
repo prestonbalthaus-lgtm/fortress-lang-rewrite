@@ -1,0 +1,21 @@
+[package]
+name = "fortress-driver"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "fortressc"
+path = "src/main.rs"
+
+[dependencies]
+fortress-ast.workspace = true
+fortress-lexer.workspace = true
+fortress-parser.workspace = true
+fortress-types.workspace = true
+fortress-codegen.workspace = true
+
+[lints]
+workspace = true

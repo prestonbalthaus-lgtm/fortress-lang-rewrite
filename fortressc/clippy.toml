@@ -1,0 +1,4 @@
+# Test code is allowed to unwrap. Compiler code is not.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true

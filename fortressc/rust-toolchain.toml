@@ -1,0 +1,5 @@
+# Only honoured under rustup. Cargo enforces the floor independently via
+# workspace.package.rust-version, so a distro toolchain is still checked.
+[toolchain]
+channel = "1.97"
+components = ["clippy", "rustfmt"]
