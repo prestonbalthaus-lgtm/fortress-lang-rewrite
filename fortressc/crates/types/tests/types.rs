@@ -350,3 +350,92 @@ fn widen_in_the_acceptance_program_pins_its_literal_to_zz32() {
         "20 pins to ZZ32 inside widen"
     );
 }
+
+// -------------------------------------------------------- the MPI builtins
+
+#[test]
+fn mpi_comm_rank_resolves_to_the_prefixed_shim_and_returns_zz32() {
+    let e = body("f():ZZ32 = mpiCommRank()");
+    assert_eq!(e.ty, Type::ZZ32);
+    assert_eq!(target_of(&e).as_deref(), Some("fortress_mpi_comm_rank"));
+}
+
+#[test]
+fn mpi_comm_size_resolves_to_the_prefixed_shim_and_returns_zz32() {
+    let e = body("f():ZZ32 = mpiCommSize()");
+    assert_eq!(e.ty, Type::ZZ32);
+    assert_eq!(target_of(&e).as_deref(), Some("fortress_mpi_comm_size"));
+}
+
+#[test]
+fn mpi_init_is_void_and_names_the_prefixed_shim() {
+    let e = body("f() = mpiInit()");
+    assert_eq!(e.ty, Type::Void);
+    assert_eq!(target_of(&e).as_deref(), Some("fortress_mpi_init"));
+}
+
+#[test]
+fn mpi_finalize_is_void_and_names_the_prefixed_shim() {
+    let e = body("f() = mpiFinalize()");
+    assert_eq!(e.ty, Type::Void);
+    assert_eq!(target_of(&e).as_deref(), Some("fortress_mpi_finalize"));
+}
+
+/// The prefix is the point: `MPI_Comm_rank` is a real symbol in libmpi and a
+/// Fortress function called `mpiCommRank` must never collide with it.
+#[test]
+fn no_mpi_target_emits_a_bare_mpi_symbol() {
+    for decl in [
+        "f() = mpiInit()",
+        "f():ZZ32 = mpiCommRank()",
+        "f():ZZ32 = mpiCommSize()",
+        "f() = mpiFinalize()",
+    ] {
+        let symbol = target_of(&body(decl)).unwrap_or_default();
+        assert!(
+            symbol.starts_with("fortress_mpi_"),
+            "{decl} emitted `{symbol}`"
+        );
+    }
+}
+
+#[test]
+fn an_mpi_builtin_takes_no_arguments() {
+    let e = body_error("f():ZZ32 = mpiCommRank(1)");
+    assert!(
+        matches!(
+            e,
+            TypeError::ArityMismatch {
+                ref name,
+                expected: 0,
+                found: 1,
+                ..
+            } if name == "mpiCommRank"
+        ),
+        "expected an arity error, got {e}"
+    );
+}
+
+#[test]
+fn an_mpi_rank_is_not_implicitly_a_zz64() {
+    let e = body_error("f():ZZ64 = mpiCommRank()");
+    assert!(
+        matches!(e, TypeError::ImplicitWideningRejected { .. }),
+        "the no-implicit-conversion rule applies to builtins too, got {e}"
+    );
+}
+
+#[test]
+fn a_component_that_never_calls_mpi_does_not_claim_to_use_it() {
+    let c = typed("component t\nrun() = println(\"hi\")\nend\n");
+    assert!(!c.uses_mpi);
+}
+
+#[test]
+fn one_mpi_call_anywhere_marks_the_whole_component() {
+    let c = typed("component t\nhelper():ZZ32 = mpiCommSize()\nrun() = println(helper())\nend\n");
+    assert!(
+        c.uses_mpi,
+        "uses_mpi drives whether the driver links the MPI shim"
+    );
+}

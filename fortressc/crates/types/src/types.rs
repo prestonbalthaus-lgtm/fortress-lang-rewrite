@@ -102,6 +102,60 @@ impl CompareOp {
     }
 }
 
+/// The MPI surface. Four calls, no arguments, no communicator: `MPI_COMM_WORLD`
+/// is a macro whose expansion differs between OpenMPI and MPICH, so it is never
+/// named in generated code. It lives in `runtime/mpi_shims.c` and nowhere else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MpiOp {
+    Init,
+    CommRank,
+    CommSize,
+    Finalize,
+}
+
+impl MpiOp {
+    /// The Fortress spelling, used for diagnostics.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Init => "mpiInit",
+            Self::CommRank => "mpiCommRank",
+            Self::CommSize => "mpiCommSize",
+            Self::Finalize => "mpiFinalize",
+        }
+    }
+
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "mpiInit" => Some(Self::Init),
+            "mpiCommRank" => Some(Self::CommRank),
+            "mpiCommSize" => Some(Self::CommSize),
+            "mpiFinalize" => Some(Self::Finalize),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn returns(self) -> Type {
+        match self {
+            Self::Init | Self::Finalize => Type::Void,
+            Self::CommRank | Self::CommSize => Type::ZZ32,
+        }
+    }
+
+    /// The C symbol. The `fortress_mpi_` prefix keeps these clear of `libmpi`'s
+    /// own `MPI_*` symbols and of any Fortran-linkage name a user picks.
+    const fn symbol(self) -> &'static str {
+        match self {
+            Self::Init => "fortress_mpi_init",
+            Self::CommRank => "fortress_mpi_comm_rank",
+            Self::CommSize => "fortress_mpi_comm_size",
+            Self::Finalize => "fortress_mpi_finalize",
+        }
+    }
+}
+
 /// A statically chosen implementation. `symbol()` is the name codegen emits.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Target {
@@ -134,6 +188,7 @@ pub enum Target {
     UserFn {
         name: String,
     },
+    Mpi(MpiOp),
 }
 
 impl Target {
@@ -148,6 +203,7 @@ impl Target {
             Self::Concat => "concat_string_string".to_owned(),
             Self::Println { ty } => format!("println_{}", ty.symbol()),
             Self::UserFn { name } => name.clone(),
+            Self::Mpi(op) => op.symbol().to_owned(),
         }
     }
 }
@@ -157,6 +213,9 @@ pub struct TypedComponent {
     pub name: String,
     pub exports: Vec<String>,
     pub functions: Vec<TypedFn>,
+    /// Set when any function resolved an MPI builtin. The driver reads it to
+    /// decide whether the MPI shim goes into the link.
+    pub uses_mpi: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

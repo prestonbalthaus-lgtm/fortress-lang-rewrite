@@ -1,0 +1,49 @@
+Bootstrap: docker
+From: rockylinux/rockylinux:9
+
+# The cluster's OS, not this laptop's. The compiler stays on the build host
+# because Rocky 9 has no LLVM 22; what lives in here is the half of the
+# toolchain that has to match the compute nodes: mpicc, mpirun and libmpi.
+#
+# Build:  apptainer build --fakeroot apptainer/fortress-mpi.sif apptainer/fortress-mpi.def
+# Use:    tools/mpi-gate.sh
+
+%post
+    set -eux
+    dnf -y install dnf-plugins-core
+    dnf config-manager --set-enabled crb
+    dnf -y install gcc binutils openmpi openmpi-devel
+    dnf clean all
+    rm -rf /var/cache/dnf
+
+    # Rocky puts the MPI toolchain outside the default paths and expects an
+    # environment module to add it. There are no modules in here, so the paths
+    # are fixed in %environment and asserted at build time.
+    test -x /usr/lib64/openmpi/bin/mpicc
+    test -x /usr/lib64/openmpi/bin/mpirun
+
+%environment
+    export PATH=/usr/lib64/openmpi/bin:$PATH
+    export LD_LIBRARY_PATH=/usr/lib64/openmpi/lib:$LD_LIBRARY_PATH
+    # Cross memory attach needs ptrace on the peer process, which Yama blocks
+    # between unrelated processes on most hosts. Without this, shared memory
+    # transport fails at rank startup rather than falling back.
+    export OMPI_MCA_btl_vader_single_copy_mechanism=none
+
+%test
+    set -eux
+    export PATH=/usr/lib64/openmpi/bin:$PATH
+    export LD_LIBRARY_PATH=/usr/lib64/openmpi/lib:$LD_LIBRARY_PATH
+    mpicc --showme:version
+    mpirun --version
+    nm --version > /dev/null
+
+%labels
+    Milestone M2a
+    Purpose Fortress MPI link and launch toolchain
+
+%help
+    Carries mpicc, mpirun and libmpi for the Fortress compiler's MPI
+    milestone. fortressc runs on the host and emits an object; this image
+    links it and launches the ranks. Nothing Fortress specific is baked in,
+    so the image does not need rebuilding when the compiler changes.

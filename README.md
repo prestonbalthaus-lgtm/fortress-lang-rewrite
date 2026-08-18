@@ -96,9 +96,41 @@ through `f(x) = if x < 2 then 1 else x f(x-1) end`, where the juxtaposition
 `x f(x-1)` resolved to a multiply and `"fact(20) = " f(j)` to a string
 concatenation, from identical syntax, on operand types alone.
 
+M2a is done: the MPI boundary. A Fortress program calls MPI and runs as real
+ranks.
+
+```
+$ cat fortressc/tests/mpi_hello.fss
+component mpi_hello
+export Executable
+
+run() = do
+   mpiInit()
+   rank:ZZ32 = mpiCommRank()
+   size:ZZ32 = mpiCommSize()
+   println("rank " rank " of " size)
+   mpiFinalize()
+end
+end
+
+$ fortressc tests/mpi_hello.fss -o mpi_hello --cc tools/mpicc-in-image.sh
+$ apptainer exec apptainer/fortress-mpi.sif mpirun -np 4 ./mpi_hello
+rank 0 of 4
+rank 1 of 4
+rank 2 of 4
+rank 3 of 4
+```
+
+`MPI_COMM_WORLD` is a macro that expands to a pointer under OpenMPI and to an
+integer under MPICH, so no MPI symbol is ever emitted into LLVM IR. Generated
+code calls four `fortress_mpi_` shims, and `runtime/mpi_shims.c` is the only
+file that includes `<mpi.h>`. The cluster's own `mpicc` compiles it at link
+time, which is what `--cc` selects. Run `tools/mpi-gate.sh` to check the whole
+path, including the ranks.
+
 The compiler lives in `fortressc/`: a six crate Rust workspace, lexer through
-LLVM codegen. See `docs/superpowers/specs/` for the M1 design and the lexer
-plan, both of which record why the rules are what they are.
+LLVM codegen. See `docs/superpowers/specs/` for the M1 design, the lexer plan
+and the M2a MPI boundary, all of which record why the rules are what they are.
 
 What M1 does not do: traits, objects, generics, arrays, `for`, parallelism,
 `atomic`, or user definable syntax. It parses about 9% of the legacy corpus,

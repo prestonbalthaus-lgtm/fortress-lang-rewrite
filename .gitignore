@@ -1,0 +1,3 @@
+# Built by apptainer/fortress-mpi.def; 160MB, rebuild rather than commit.
+apptainer/*.sif
+fortressc/build/
