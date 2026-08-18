@@ -1,0 +1,34 @@
+component gcarray
+export Executable
+
+(* Array[\String\] end to end, under allocation pressure. This is a
+   CORRECTNESS fixture, not the tracing proof: reading an array back after a
+   collection passes whether the storage is traced or not, because freed
+   memory usually still reads correctly. It does here, measured. What proves
+   tracing is runtime/tests/array_trace.c, which reads live bytes from the
+   collector instead of trusting the contents. *)
+run() = do
+   held:Array[\String\] = array(64)
+   i:ZZ64 := 0
+   while i < 64 do
+      held[i] := "item " i
+      i := i + 1
+   end
+
+   j:ZZ64 := 0
+   while j < 1000000 do
+      garbage:String = "g" j
+      j := j + 1
+   end
+
+   total:ZZ64 := 0
+   k:ZZ64 := 0
+   while k < 64 do
+      total := total + length(held)
+      k := k + 1
+   end
+   println(held[0])
+   println(held[63])
+   println("visits = " total)
+end
+end

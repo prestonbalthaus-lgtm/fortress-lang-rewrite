@@ -8,6 +8,30 @@ Every phase has one exit criterion. The measure throughout is the ~1950 `.fss`
 and `.fsi` files already in this tree, run against the legacy interpreter for a
 differential baseline.
 
+## Where the work actually is, 2026-08-18
+
+Phases 1, 2 and 5 are done for a subset, and phase 6's C ABI half is done and
+gated: a Fortress program calls MPI and runs as four ranks under `mpirun`,
+inside an Apptainer image.
+
+The rest of phase 6 and all of phase 8 are **shelved**. There is no cluster to
+test on, and MPI is not what is blocking the language. Slurm, `sbatch`,
+multi-node runs and the InfiniBand fabric wait until the compiler is finished.
+
+What is in front instead is language completion, in this order and no other:
+
+1. **Memory.** Done. Boehm collector, `docs/superpowers/specs/2026-08-18-m3a-memory.md`.
+2. **Arrays and iteration.** Done, primitively.
+   `docs/superpowers/specs/2026-08-18-m3b-arrays.md`. `Array[\T\]`, `ZZ64`
+   subscripts, bounds checking, `while`, and mutable bindings. It forced the
+   scannable allocator, as expected. `for`, generators and comprehensions are
+   held back with traits: `for` is parallel by default and cannot be faked with
+   a counter.
+3. **Traits and dispatch.** Next, and last of the three, because it is the
+   largest and because the standard library's arrays are written in terms of it.
+   It is also what the corpus is waiting on: `trait` and `object` are the top
+   two things blocking the parser.
+
 ## Phases
 
 **0. Baseline.** Get the legacy interpreter building and running. Ant and Java 6

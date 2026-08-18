@@ -8,9 +8,10 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use fortress_types::{
-    ArithOp, CompareOp, Target, Type, TypedBlockItem, TypedComponent, TypedExpr, TypedExprKind,
-    TypedFn,
+    ArithOp, AssignTarget, CompareOp, Elem, Target, Type, TypedBlockItem, TypedComponent,
+    TypedExpr, TypedExprKind, TypedFn, ARRAY_ALLOC, ARRAY_LENGTH, ARRAY_SLOT,
 };
+use inkwell::attributes::AttributeLoc;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::{Linkage, Module};
@@ -18,7 +19,7 @@ use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target as LlvmTarget, TargetMachine,
 };
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
-use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue};
+use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, PointerValue};
 use inkwell::{AddressSpace, IntPredicate, OptimizationLevel};
 
 mod error;
@@ -27,28 +28,63 @@ pub use error::CodegenError;
 /// The Fortress entry point. `main` calls it and returns 0.
 const ENTRY: &str = "run";
 
-pub fn emit_object(component: &TypedComponent, object_path: &Path) -> Result<(), CodegenError> {
+/// Starts the collector. Emitted as the first instruction of `main`.
+const RUNTIME_INIT: &str = "fortress_runtime_init";
+
+/// The processor an object is built for. This is chosen, not detected: the
+/// machine that runs the compiler is a login node or a laptop, and the machine
+/// that runs the binary is a compute node. `x86-64-v3` is AVX2 era and every
+/// x86 part worth scheduling on has it; `skylake-avx512` is the Platinum 8160.
+pub const DEFAULT_CPU: &str = "x86-64-v3";
+
+/// LLVM answers an unrecognised processor with a warning and then builds for
+/// the baseline anyway, which is a wrong binary rather than a failed build. The
+/// name is checked against this list before it reaches LLVM.
+pub const SUPPORTED_CPUS: [&str; 6] = [
+    "x86-64",
+    "x86-64-v2",
+    "x86-64-v3",
+    "x86-64-v4",
+    "skylake-avx512",
+    "native",
+];
+
+pub fn emit_object(
+    component: &TypedComponent,
+    object_path: &Path,
+    cpu: &str,
+) -> Result<(), CodegenError> {
+    let machine = target_machine(cpu)?;
     let context = Context::create();
-    let module = build_module(&context, component)?;
-    write_object(&module, object_path)
+    let module = build_module(&context, component, &machine)?;
+    machine
+        .write_to_file(&module, FileType::Object, object_path)
+        .map_err(|e| CodegenError::ObjectWriteFailed {
+            detail: e.to_string(),
+        })
 }
 
-pub fn emit_ir(component: &TypedComponent) -> Result<String, CodegenError> {
+pub fn emit_ir(component: &TypedComponent, cpu: &str) -> Result<String, CodegenError> {
+    let machine = target_machine(cpu)?;
     let context = Context::create();
-    let module = build_module(&context, component)?;
+    let module = build_module(&context, component, &machine)?;
     Ok(module.print_to_string().to_string())
 }
 
 fn build_module<'ctx>(
     context: &'ctx Context,
     component: &TypedComponent,
+    machine: &TargetMachine,
 ) -> Result<Module<'ctx>, CodegenError> {
     let module = context.create_module(&component.name);
+    module.set_triple(&machine.get_triple());
+    module.set_data_layout(&machine.get_target_data().get_data_layout());
     let builder = context.create_builder();
     let mut lowering = Lowering {
         context,
         module,
         builder,
+        cpu: machine.get_cpu().to_string_lossy().into_owned(),
         functions: HashMap::new(),
         scopes: Vec::new(),
     };
@@ -75,9 +111,23 @@ struct Lowering<'ctx> {
     context: &'ctx Context,
     module: Module<'ctx>,
     builder: Builder<'ctx>,
+    /// Stamped onto every function this module defines, so the object records
+    /// what it was built for instead of leaving it to whoever reads it.
+    cpu: String,
     functions: HashMap<String, FunctionValue<'ctx>>,
-    /// M1 has no mutation, so bindings are plain SSA values; no `alloca`.
-    scopes: Vec<HashMap<String, BasicValueEnum<'ctx>>>,
+    scopes: Vec<HashMap<String, Slot<'ctx>>>,
+}
+
+/// An immutable binding is an SSA value and costs nothing. Only a binding that
+/// can be assigned to gets storage, which keeps generated code for the whole
+/// pre-M3b language byte for byte what it was.
+#[derive(Debug, Clone, Copy)]
+enum Slot<'ctx> {
+    Value(BasicValueEnum<'ctx>),
+    Cell {
+        pointer: PointerValue<'ctx>,
+        ty: BasicTypeEnum<'ctx>,
+    },
 }
 
 impl<'ctx> Lowering<'ctx> {
@@ -91,9 +141,46 @@ impl<'ctx> Lowering<'ctx> {
             Type::ZZ64 => Some(self.context.i64_type().into()),
             Type::RR64 => Some(self.context.f64_type().into()),
             Type::Boolean => Some(self.context.bool_type().into()),
-            Type::String => Some(self.ptr()),
+            Type::String | Type::Array(_) => Some(self.ptr()),
             Type::Void => None,
         }
+    }
+
+    /// How an element sits in an array's data block. `Boolean` is a byte there
+    /// and an `i1` in a register, so the two cross through a zext and a trunc.
+    fn element_type(&self, elem: Elem) -> BasicTypeEnum<'ctx> {
+        match elem {
+            Elem::ZZ32 => self.context.i32_type().into(),
+            Elem::ZZ64 => self.context.i64_type().into(),
+            Elem::RR64 => self.context.f64_type().into(),
+            Elem::Boolean => self.context.i8_type().into(),
+            Elem::String => self.ptr(),
+        }
+    }
+
+    /// An `alloca` belongs in the entry block, not where the declaration
+    /// happens to appear. A mutable declared inside a loop body would otherwise
+    /// allocate one stack slot per iteration and overflow the stack.
+    fn entry_alloca(
+        &self,
+        name: &str,
+        ty: BasicTypeEnum<'ctx>,
+    ) -> Result<PointerValue<'ctx>, CodegenError> {
+        let entry = self
+            .builder
+            .get_insert_block()
+            .and_then(inkwell::basic_block::BasicBlock::get_parent)
+            .and_then(FunctionValue::get_first_basic_block)
+            .ok_or_else(|| CodegenError::internal("no entry block for an alloca".to_owned()))?;
+
+        let builder = self.context.create_builder();
+        match entry.get_first_instruction() {
+            Some(first) => builder.position_before(&first),
+            None => builder.position_at_end(entry),
+        }
+        builder
+            .build_alloca(ty, name)
+            .map_err(CodegenError::from_builder)
     }
 
     /// The C shims. `Boolean` crosses as `int`, so those take `i32`.
@@ -134,6 +221,38 @@ impl<'ctx> Lowering<'ctx> {
         let concat = ptr.fn_type(&[ptr.into(), ptr.into()], false);
         self.module
             .add_function("concat_string_string", concat, Some(Linkage::External));
+
+        // The array runtime. Bounds checking and the pointer arithmetic live in
+        // C; what comes back is the address of a slot, and the load or store
+        // through it stays typed in IR.
+        self.module.add_function(
+            ARRAY_ALLOC,
+            ptr.fn_type(&[i64t.into(), i64t.into(), i32t.into()], false),
+            Some(Linkage::External),
+        );
+        self.module.add_function(
+            ARRAY_LENGTH,
+            i64t.fn_type(&[ptr.into()], false),
+            Some(Linkage::External),
+        );
+        self.module.add_function(
+            ARRAY_SLOT,
+            ptr.fn_type(&[ptr.into(), i64t.into()], false),
+            Some(Linkage::External),
+        );
+
+        self.module.add_function(
+            RUNTIME_INIT,
+            void.fn_type(&[], false),
+            Some(Linkage::External),
+        );
+    }
+
+    fn stamp_target(&self, function: FunctionValue<'ctx>) {
+        let attribute = self
+            .context
+            .create_string_attribute("target-cpu", &self.cpu);
+        function.add_attribute(AttributeLoc::Function, attribute);
     }
 
     /// The MPI shims, declared only for a component that calls one. A program
@@ -173,6 +292,7 @@ impl<'ctx> Lowering<'ctx> {
                 None => self.context.void_type().fn_type(&params, false),
             };
             let value = self.module.add_function(&f.name, fn_type, None);
+            self.stamp_target(value);
             self.functions.insert(f.name.clone(), value);
         }
         Ok(())
@@ -193,7 +313,7 @@ impl<'ctx> Lowering<'ctx> {
                 CodegenError::internal(format!("missing parameter {index} of `{}`", f.name))
             })?;
             value.set_name(&param.name);
-            scope.insert(param.name.clone(), value);
+            scope.insert(param.name.clone(), Slot::Value(value));
         }
         self.scopes.push(scope);
 
@@ -209,15 +329,21 @@ impl<'ctx> Lowering<'ctx> {
         Ok(())
     }
 
-    /// `main` exists so the ELF has a C entry point. It calls `run` and returns
-    /// 0; a Fortress program's exit status is not its return value.
+    /// `main` exists so the ELF has a C entry point. It starts the runtime,
+    /// calls `run` and returns 0; a Fortress program's exit status is not its
+    /// return value.
     fn emit_main(&mut self) -> Result<(), CodegenError> {
         let i32t = self.context.i32_type();
         let main = self
             .module
             .add_function("main", i32t.fn_type(&[], false), None);
+        self.stamp_target(main);
         let entry = self.context.append_basic_block(main, "entry");
         self.builder.position_at_end(entry);
+
+        // Before anything else, including the first allocation: the collector
+        // has to be up before the program can hand it work.
+        self.call_runtime(RUNTIME_INIT, &[], false)?;
 
         if let Some(run) = self.functions.get(ENTRY) {
             self.builder
@@ -232,8 +358,19 @@ impl<'ctx> Lowering<'ctx> {
 
     // ------------------------------------------------------------- values
 
-    fn lookup(&self, name: &str) -> Option<BasicValueEnum<'ctx>> {
+    fn lookup(&self, name: &str) -> Option<Slot<'ctx>> {
         self.scopes.iter().rev().find_map(|s| s.get(name).copied())
+    }
+
+    fn read(&self, name: &str) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+        match self.lookup(name) {
+            Some(Slot::Value(v)) => Ok(v),
+            Some(Slot::Cell { pointer, ty }) => self
+                .builder
+                .build_load(ty, pointer, name)
+                .map_err(CodegenError::from_builder),
+            None => Err(CodegenError::internal(format!("unbound name `{name}`"))),
+        }
     }
 
     fn expr(&mut self, e: &TypedExpr) -> Result<Option<BasicValueEnum<'ctx>>, CodegenError> {
@@ -262,10 +399,7 @@ impl<'ctx> Lowering<'ctx> {
                     .map_err(CodegenError::from_builder)?;
                 Ok(Some(global.as_pointer_value().into()))
             }
-            TypedExprKind::Var(name) => self
-                .lookup(name)
-                .map(Some)
-                .ok_or_else(|| CodegenError::internal(format!("unbound name `{name}`"))),
+            TypedExprKind::Var(name) => self.read(name).map(Some),
             TypedExprKind::Apply { target, args } => self.apply(target, args, e.ty),
             TypedExprKind::If {
                 cond,
@@ -273,7 +407,154 @@ impl<'ctx> Lowering<'ctx> {
                 else_branch,
             } => self.if_expr(cond, then_branch, else_branch.as_deref(), e.ty),
             TypedExprKind::Block { items, tail } => self.block(items, tail.as_deref()),
+            TypedExprKind::ArrayLit { elem, items } => self.array_literal(*elem, items).map(Some),
+            TypedExprKind::Index { base, index, elem } => {
+                let slot = self.slot(base, index)?;
+                self.load_element(*elem, slot).map(Some)
+            }
+            TypedExprKind::While { cond, body } => self.while_loop(cond, body).map(|()| None),
         }
+    }
+
+    fn array_alloc(
+        &mut self,
+        elem: Elem,
+        count: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+        let bytes = self.context.i64_type().const_int(elem.bytes(), false);
+        let holds_pointers = self
+            .context
+            .i32_type()
+            .const_int(u64::from(elem.is_pointer()), false);
+        self.call_runtime(
+            ARRAY_ALLOC,
+            &[count, bytes.into(), holds_pointers.into()],
+            true,
+        )?
+        .ok_or_else(|| CodegenError::internal("the allocator returned nothing".to_owned()))
+    }
+
+    fn array_literal(
+        &mut self,
+        elem: Elem,
+        items: &[TypedExpr],
+    ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+        let count = self
+            .context
+            .i64_type()
+            .const_int(items.len() as u64, false)
+            .into();
+        let array = self.array_alloc(elem, count)?;
+        for (index, item) in items.iter().enumerate() {
+            let value = self.operand(item)?;
+            let at = self
+                .context
+                .i64_type()
+                .const_int(index as u64, false)
+                .into();
+            let slot = self.slot_of(array, at)?;
+            self.store_element(elem, slot, value)?;
+        }
+        Ok(array)
+    }
+
+    /// The address of one element, bounds checked. Every read and every write
+    /// goes through this, so there is one place the check can be in.
+    fn slot(
+        &mut self,
+        base: &TypedExpr,
+        index: &TypedExpr,
+    ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+        let array = self.operand(base)?;
+        let at = self.operand(index)?;
+        self.slot_of(array, at)
+    }
+
+    fn slot_of(
+        &mut self,
+        array: BasicValueEnum<'ctx>,
+        index: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+        self.call_runtime(ARRAY_SLOT, &[array, index], true)?
+            .ok_or_else(|| CodegenError::internal("the slot shim returned nothing".to_owned()))
+    }
+
+    fn load_element(
+        &self,
+        elem: Elem,
+        slot: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+        let loaded = self
+            .builder
+            .build_load(self.element_type(elem), slot.into_pointer_value(), "elem")
+            .map_err(CodegenError::from_builder)?;
+        if elem != Elem::Boolean {
+            return Ok(loaded);
+        }
+        Ok(self
+            .builder
+            .build_int_truncate(
+                loaded.into_int_value(),
+                self.context.bool_type(),
+                "elem_bool",
+            )
+            .map_err(CodegenError::from_builder)?
+            .into())
+    }
+
+    fn store_element(
+        &self,
+        elem: Elem,
+        slot: BasicValueEnum<'ctx>,
+        value: BasicValueEnum<'ctx>,
+    ) -> Result<(), CodegenError> {
+        let value = if elem == Elem::Boolean {
+            self.builder
+                .build_int_z_extend(value.into_int_value(), self.context.i8_type(), "elem_byte")
+                .map_err(CodegenError::from_builder)?
+                .into()
+        } else {
+            value
+        };
+        self.builder
+            .build_store(slot.into_pointer_value(), value)
+            .map_err(CodegenError::from_builder)?;
+        Ok(())
+    }
+
+    /// `loop.cond` / `loop.body` / `loop.end`. The condition is re-evaluated at
+    /// the top of every iteration, which is what makes a mutable counter work.
+    fn while_loop(&mut self, cond: &TypedExpr, body: &TypedExpr) -> Result<(), CodegenError> {
+        let function = self
+            .builder
+            .get_insert_block()
+            .and_then(inkwell::basic_block::BasicBlock::get_parent)
+            .ok_or_else(|| CodegenError::internal("no enclosing function".to_owned()))?;
+
+        let cond_bb = self.context.append_basic_block(function, "loop.cond");
+        let body_bb = self.context.append_basic_block(function, "loop.body");
+        let end_bb = self.context.append_basic_block(function, "loop.end");
+
+        self.builder
+            .build_unconditional_branch(cond_bb)
+            .map_err(CodegenError::from_builder)?;
+
+        self.builder.position_at_end(cond_bb);
+        let condition = self.operand(cond)?.into_int_value();
+        self.builder
+            .build_conditional_branch(condition, body_bb, end_bb)
+            .map_err(CodegenError::from_builder)?;
+
+        self.builder.position_at_end(body_bb);
+        self.expr(body)?;
+        // Not `body_bb`: the body may have ended somewhere else entirely, in
+        // the merge block of an `if` for instance.
+        self.builder
+            .build_unconditional_branch(cond_bb)
+            .map_err(CodegenError::from_builder)?;
+
+        self.builder.position_at_end(end_bb);
+        Ok(())
     }
 
     fn operand(&mut self, e: &TypedExpr) -> Result<BasicValueEnum<'ctx>, CodegenError> {
@@ -337,6 +618,14 @@ impl<'ctx> Lowering<'ctx> {
                 self.call_runtime(&target.symbol(), &[value], false)
             }
             Target::Mpi(op) => self.call_runtime(&target.symbol(), &[], op.returns() != Type::Void),
+            Target::ArrayNew { elem } => {
+                let count = self.one(args)?;
+                self.array_alloc(*elem, count).map(Some)
+            }
+            Target::ArrayLength => {
+                let array = self.one(args)?;
+                self.call_runtime(ARRAY_LENGTH, &[array], true)
+            }
             Target::UserFn { name } => {
                 let function = *self
                     .functions
@@ -542,12 +831,36 @@ impl<'ctx> Lowering<'ctx> {
     ) -> Result<Option<BasicValueEnum<'ctx>>, CodegenError> {
         for item in items {
             match item {
-                TypedBlockItem::Binding { name, value, .. } => {
+                TypedBlockItem::Binding {
+                    name,
+                    ty,
+                    value,
+                    mutable,
+                    ..
+                } => {
                     let lowered = self.operand(value)?;
-                    lowered.set_name(name);
+                    let slot = if *mutable {
+                        let cell_ty = self.basic_type(*ty).ok_or_else(|| {
+                            CodegenError::internal(format!("`{name}` has no storage type"))
+                        })?;
+                        let pointer = self.entry_alloca(name, cell_ty)?;
+                        self.builder
+                            .build_store(pointer, lowered)
+                            .map_err(CodegenError::from_builder)?;
+                        Slot::Cell {
+                            pointer,
+                            ty: cell_ty,
+                        }
+                    } else {
+                        lowered.set_name(name);
+                        Slot::Value(lowered)
+                    };
                     if let Some(scope) = self.scopes.last_mut() {
-                        scope.insert(name.clone(), lowered);
+                        scope.insert(name.clone(), slot);
                     }
+                }
+                TypedBlockItem::Assign { target, value, .. } => {
+                    self.assign(target, value)?;
                 }
                 TypedBlockItem::Expr(e) => {
                     self.expr(e)?;
@@ -557,6 +870,27 @@ impl<'ctx> Lowering<'ctx> {
         match tail {
             Some(e) => self.expr(e),
             None => Ok(None),
+        }
+    }
+
+    fn assign(&mut self, target: &AssignTarget, value: &TypedExpr) -> Result<(), CodegenError> {
+        let lowered = self.operand(value)?;
+        match target {
+            AssignTarget::Var { name, .. } => {
+                let Some(Slot::Cell { pointer, .. }) = self.lookup(name) else {
+                    return Err(CodegenError::internal(format!(
+                        "`{name}` was assigned to but has no storage"
+                    )));
+                };
+                self.builder
+                    .build_store(pointer, lowered)
+                    .map_err(CodegenError::from_builder)?;
+                Ok(())
+            }
+            AssignTarget::Element { base, index, elem } => {
+                let slot = self.slot(base, index)?;
+                self.store_element(*elem, slot, lowered)
+            }
         }
     }
 
@@ -581,7 +915,7 @@ impl<'ctx> Lowering<'ctx> {
     }
 }
 
-fn write_object(module: &Module<'_>, path: &Path) -> Result<(), CodegenError> {
+fn target_machine(cpu: &str) -> Result<TargetMachine, CodegenError> {
     LlvmTarget::initialize_native(&InitializationConfig::default())
         .map_err(|detail| CodegenError::TargetUnavailable { detail })?;
 
@@ -590,25 +924,35 @@ fn write_object(module: &Module<'_>, path: &Path) -> Result<(), CodegenError> {
         detail: e.to_string(),
     })?;
 
-    let machine = target
+    // `native` is the only setting that reads the machine underneath, and it
+    // is opt in for exactly that reason.
+    let (name, features) = if cpu == "native" {
+        (
+            TargetMachine::get_host_cpu_name()
+                .to_string_lossy()
+                .into_owned(),
+            TargetMachine::get_host_cpu_features()
+                .to_string_lossy()
+                .into_owned(),
+        )
+    } else {
+        (cpu.to_owned(), String::new())
+    };
+
+    target
         .create_target_machine(
             &triple,
-            &TargetMachine::get_host_cpu_name().to_string_lossy(),
-            &TargetMachine::get_host_cpu_features().to_string_lossy(),
+            &name,
+            &features,
             OptimizationLevel::None,
             RelocMode::PIC,
             CodeModel::Default,
         )
         .ok_or_else(|| CodegenError::TargetUnavailable {
             detail: format!(
-                "no target machine for {}",
+                "no target machine for {} on {}",
+                name,
                 triple.as_str().to_string_lossy()
             ),
-        })?;
-
-    machine
-        .write_to_file(module, FileType::Object, path)
-        .map_err(|e| CodegenError::ObjectWriteFailed {
-            detail: e.to_string(),
         })
 }

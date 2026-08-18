@@ -3,6 +3,66 @@
 
 use fortress_ast::Span;
 
+/// What an array holds. A separate enum from [`Type`] so that [`Type`] stays
+/// `Copy` without boxing, and so that "array of array" is unrepresentable
+/// rather than merely rejected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Elem {
+    ZZ32,
+    ZZ64,
+    RR64,
+    Boolean,
+    String,
+}
+
+impl Elem {
+    #[must_use]
+    pub const fn as_type(self) -> Type {
+        match self {
+            Self::ZZ32 => Type::ZZ32,
+            Self::ZZ64 => Type::ZZ64,
+            Self::RR64 => Type::RR64,
+            Self::Boolean => Type::Boolean,
+            Self::String => Type::String,
+        }
+    }
+
+    #[must_use]
+    pub const fn of(ty: Type) -> Option<Self> {
+        match ty {
+            Type::ZZ32 => Some(Self::ZZ32),
+            Type::ZZ64 => Some(Self::ZZ64),
+            Type::RR64 => Some(Self::RR64),
+            Type::Boolean => Some(Self::Boolean),
+            Type::String => Some(Self::String),
+            Type::Void | Type::Array(_) => None,
+        }
+    }
+
+    /// Storage width in the array's data block. `Boolean` is stored as a byte;
+    /// everything else is its natural machine width.
+    #[must_use]
+    pub const fn bytes(self) -> u64 {
+        match self {
+            Self::ZZ32 => 4,
+            Self::Boolean => 1,
+            Self::ZZ64 | Self::RR64 | Self::String => 8,
+        }
+    }
+
+    /// Whether a slot holds a pointer. The runtime fills those with the empty
+    /// string rather than a null, so an unwritten element is still a String.
+    #[must_use]
+    pub const fn is_pointer(self) -> bool {
+        matches!(self, Self::String)
+    }
+
+    #[must_use]
+    pub const fn symbol(self) -> &'static str {
+        self.as_type().symbol()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Type {
     ZZ32,
@@ -11,6 +71,8 @@ pub enum Type {
     Boolean,
     String,
     Void,
+    /// One dimensional and homogeneous. Nesting arrives with generics.
+    Array(Elem),
 }
 
 impl Type {
@@ -23,6 +85,11 @@ impl Type {
             Self::Boolean => "Boolean",
             Self::String => "String",
             Self::Void => "()",
+            Self::Array(Elem::ZZ32) => "Array[\\ZZ32\\]",
+            Self::Array(Elem::ZZ64) => "Array[\\ZZ64\\]",
+            Self::Array(Elem::RR64) => "Array[\\RR64\\]",
+            Self::Array(Elem::Boolean) => "Array[\\Boolean\\]",
+            Self::Array(Elem::String) => "Array[\\String\\]",
         }
     }
 
@@ -36,6 +103,11 @@ impl Type {
             Self::Boolean => "boolean",
             Self::String => "string",
             Self::Void => "void",
+            Self::Array(Elem::ZZ32) => "array_zz32",
+            Self::Array(Elem::ZZ64) => "array_zz64",
+            Self::Array(Elem::RR64) => "array_rr64",
+            Self::Array(Elem::Boolean) => "array_boolean",
+            Self::Array(Elem::String) => "array_string",
         }
     }
 
@@ -156,6 +228,13 @@ impl MpiOp {
     }
 }
 
+/// The array runtime. Three entry points: one allocates, one reports the
+/// length, and one turns an index into the address of a slot after checking it.
+/// Everything else about an array is a typed load or store in generated code.
+pub const ARRAY_ALLOC: &str = "fortress_array_alloc";
+pub const ARRAY_LENGTH: &str = "fortress_array_length";
+pub const ARRAY_SLOT: &str = "fortress_array_slot";
+
 /// A statically chosen implementation. `symbol()` is the name codegen emits.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Target {
@@ -189,6 +268,13 @@ pub enum Target {
         name: String,
     },
     Mpi(MpiOp),
+    /// `array(n)`. The element type is not in the symbol: the runtime is told
+    /// the element width and whether it holds pointers, and that is all it
+    /// needs to know.
+    ArrayNew {
+        elem: Elem,
+    },
+    ArrayLength,
 }
 
 impl Target {
@@ -204,6 +290,8 @@ impl Target {
             Self::Println { ty } => format!("println_{}", ty.symbol()),
             Self::UserFn { name } => name.clone(),
             Self::Mpi(op) => op.symbol().to_owned(),
+            Self::ArrayNew { .. } => ARRAY_ALLOC.to_owned(),
+            Self::ArrayLength => ARRAY_LENGTH.to_owned(),
         }
     }
 }
@@ -263,6 +351,19 @@ pub enum TypedExprKind {
         items: Vec<TypedBlockItem>,
         tail: Option<Box<TypedExpr>>,
     },
+    ArrayLit {
+        elem: Elem,
+        items: Vec<TypedExpr>,
+    },
+    Index {
+        base: Box<TypedExpr>,
+        index: Box<TypedExpr>,
+        elem: Elem,
+    },
+    While {
+        cond: Box<TypedExpr>,
+        body: Box<TypedExpr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -271,7 +372,28 @@ pub enum TypedBlockItem {
         name: String,
         ty: Type,
         value: TypedExpr,
+        /// Only a mutable binding gets an `alloca`; everything else stays an
+        /// SSA value, which is what keeps M1's generated code unchanged.
+        mutable: bool,
+        span: Span,
+    },
+    Assign {
+        target: AssignTarget,
+        value: TypedExpr,
         span: Span,
     },
     Expr(TypedExpr),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum AssignTarget {
+    Var {
+        name: String,
+        ty: Type,
+    },
+    Element {
+        base: TypedExpr,
+        index: TypedExpr,
+        elem: Elem,
+    },
 }

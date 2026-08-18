@@ -128,13 +128,58 @@ file that includes `<mpi.h>`. The cluster's own `mpicc` compiles it at link
 time, which is what `--cc` selects. Run `tools/mpi-gate.sh` to check the whole
 path, including the ranks.
 
+M3a is done: memory is collected. Every heap allocation goes through
+`fortress_alloc` in `runtime/shims.c`, which now calls `GC_malloc_atomic`
+instead of `malloc`. A program doing a million string concatenations and one
+doing ten thousand use the same resident set:
+
+```
+$ ./tools/memory-gate.sh
+      10000 iterations, collected : 5768 KB
+      1000000 iterations, collected : 5760 KB
+      1000000 iterations, leaking   : 64076 KB
+```
+
+The third line is the negative control: the same object file linked against the
+allocator M1 shipped. Without it the flat number would prove nothing.
+
+Objects are also built for a chosen processor rather than for whatever ran the
+compiler. `--target-cpu` defaults to `x86-64-v3` and accepts `skylake-avx512`
+for the Platinum 8160s, or `native`.
+
+M3b is done: arrays and iteration.
+
+```
+component arraysum
+export Executable
+
+run() = do
+   n:ZZ64 = 100
+   squares:Array[\ZZ64\] = array(n)
+
+   i:ZZ64 := 0
+   while i < n do
+      squares[i] := i i
+      i := i + 1
+   end
+   ...
+```
+
+`Array[\T\]` is one dimensional and homogeneous, subscripts are `ZZ64` so an
+array can be longer than 2^31, and every subscript is bounds checked: out of
+range prints `fortress: array index out of bounds (5, 3)` and exits 1 rather
+than faulting. Array storage is allocated scannable, so the collector can see
+the strings an `Array[\String\]` holds; `tools/array-gate.sh` measures that
+rather than assuming it.
+
 The compiler lives in `fortressc/`: a six crate Rust workspace, lexer through
 LLVM codegen. See `docs/superpowers/specs/` for the M1 design, the lexer plan
 and the M2a MPI boundary, all of which record why the rules are what they are.
 
-What M1 does not do: traits, objects, generics, arrays, `for`, parallelism,
-`atomic`, or user definable syntax. It parses about 9% of the legacy corpus,
-which is the point rather than a shortfall.
+Still missing: traits, objects, generics, `for` and generators, parallelism,
+`atomic`, and user definable syntax. The lexer takes 939 of the 1956 corpus
+files (48%) and the parser 52 of those; what blocks the parser is `trait`,
+`object` and `api`, which is the next milestone.
 
 The legacy Sun implementation is kept as reference material:
 
@@ -155,15 +200,32 @@ compiler gets measured against.
 ```
 cd fortressc
 ./setup-llvm.sh                       # only if llvm-devel is not installed
-export LLVM_SYS_221_PREFIX=...        # the script prints the value
+./setup-gc.sh                         # only if gc-devel is not installed
+export LLVM_SYS_221_PREFIX=...        # each script prints the values
+export CPATH=... LIBRARY_PATH=...
 cargo build --workspace
 cargo test --workspace
 ```
 
-Needs LLVM 22 and a C compiler. `setup-llvm.sh` exists because Fedora splits
-LLVM across `llvm-libs` and `llvm-devel`, and the latter needs root; the script
-unpacks it into `~/.local` instead. With root, `dnf install llvm-devel` does the
-same job.
+Needs LLVM 22, a C compiler and the Boehm collector. The two setup scripts exist
+because Fedora splits both packages across a runtime half and a `-devel` half,
+and the `-devel` half needs root; the scripts unpack it into `~/.local` instead.
+With root, `dnf install llvm-devel gc-devel` does the same job.
+
+`gc.h` and `-lgc` are needed wherever a Fortress program is *linked*, not just
+where the compiler is built: `runtime/shims.c` is compiled by the linking C
+compiler so that it matches the target's C library.
+
+Gates that cargo cannot run:
+
+```
+./tools/array-gate.sh     arrays, bounds, the loop, and what the collector sees
+./tools/memory-gate.sh    the collector, and the leak it replaced
+./tools/mpi-gate.sh       the MPI link and four real ranks (needs the image)
+```
+
+Both take `--selftest`, which proves their assertions can refuse without needing
+anything built.
 
 The legacy interpreter builds with Ant against Java 6 era code. It has not been
 verified to still work.

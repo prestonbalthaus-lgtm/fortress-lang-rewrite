@@ -303,3 +303,117 @@ fn the_m1_acceptance_program_parses() {
     };
     assert_eq!(items.len(), 2, "a binding and a println: {items:?}");
 }
+
+// ------------------------------------------------ M3b: arrays and iteration
+
+fn block_items(src: &str) -> Vec<BlockItem> {
+    match expr(src) {
+        Expr::Block { items, .. } => items,
+        other => panic!("expected a block, got {other:?}"),
+    }
+}
+
+#[test]
+fn an_array_literal_keeps_its_elements_in_order() {
+    match expr("[1, 2, 3]") {
+        Expr::ArrayLit { items, .. } => assert_eq!(items.len(), 3),
+        other => panic!("expected an array literal, got {other:?}"),
+    }
+}
+
+#[test]
+fn an_empty_array_literal_parses() {
+    match expr("[]") {
+        Expr::ArrayLit { items, .. } => assert!(items.is_empty()),
+        other => panic!("expected an empty array literal, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_glued_bracket_is_a_subscript() {
+    match expr("a[0]") {
+        Expr::Index { .. } => {}
+        other => panic!("expected an index, got {other:?}"),
+    }
+}
+
+/// `f (x)` is already a juxtaposition rather than a call, and a bracket obeys
+/// the same rule: gluing is what makes it a subscript.
+#[test]
+fn a_spaced_bracket_is_a_juxtaposition_not_a_subscript() {
+    match expr("a [0]") {
+        Expr::Juxt { items, .. } => assert_eq!(items.len(), 2),
+        other => panic!("expected a juxtaposition, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_static_argument_is_parsed_as_the_type_it_names() {
+    let src = "component t\nf(a:Array[\\ZZ64\\]):ZZ64 = 0\nend\n";
+    let c = component(src);
+    let Some(Decl::Function(f)) = c.decls.into_iter().next() else {
+        panic!("no decl")
+    };
+    let param = f.params.into_iter().next().expect("a parameter");
+    assert_eq!(param.ty.name, "Array");
+    assert_eq!(
+        param.ty.argument.map(|t| t.name),
+        Some("ZZ64".to_owned()),
+        "the element type must survive parsing"
+    );
+}
+
+#[test]
+fn a_while_loop_parses_its_condition_and_body() {
+    match expr("do\n   while x < 3 do\n      println(x)\n   end\nend") {
+        Expr::Block { items, .. } => match items.into_iter().next() {
+            Some(BlockItem::Expr(Expr::While { .. })) => {}
+            other => panic!("expected a while, got {other:?}"),
+        },
+        other => panic!("expected a block, got {other:?}"),
+    }
+}
+
+#[test]
+fn colon_equals_declares_a_mutable_binding() {
+    match block_items("do\n   i:ZZ64 := 0\nend").into_iter().next() {
+        Some(BlockItem::Binding(b)) => {
+            assert!(b.mutable, "`:=` declares a mutable binding");
+            assert_eq!(b.name, "i");
+        }
+        other => panic!("expected a binding, got {other:?}"),
+    }
+}
+
+#[test]
+fn equals_still_declares_an_immutable_binding() {
+    match block_items("do\n   i:ZZ64 = 0\nend").into_iter().next() {
+        Some(BlockItem::Binding(b)) => assert!(!b.mutable),
+        other => panic!("expected a binding, got {other:?}"),
+    }
+}
+
+#[test]
+fn colon_equals_on_a_bare_name_is_an_assignment_not_a_declaration() {
+    match block_items("do\n   i:ZZ64 := 0\n   i := 1\nend")
+        .into_iter()
+        .nth(1)
+    {
+        Some(BlockItem::Assign(a)) => match a.target {
+            Expr::Var { name, .. } => assert_eq!(name, "i"),
+            other => panic!("expected a variable target, got {other:?}"),
+        },
+        other => panic!("expected an assignment, got {other:?}"),
+    }
+}
+
+#[test]
+fn an_element_can_be_assigned() {
+    match block_items("do\n   a[0] := 1\nend").into_iter().next() {
+        Some(BlockItem::Assign(a)) => match a.target {
+            Expr::Index { .. } => {}
+            other => panic!("expected an index target, got {other:?}"),
+        },
+        other => panic!("expected an assignment, got {other:?}"),
+    }
+}

@@ -1,7 +1,7 @@
 use fortress_ast::Span;
 
-/// The 90 reserved words of `Keyword.rats:21-49`. Eight are acted on by the M1
-/// parser, `true`/`false` become literals, and the remaining 80 are reserved so
+/// The 90 reserved words of `Keyword.rats:21-49`. Nine are acted on by the
+/// parser, `true`/`false` become literals, and the remaining 79 are reserved so
 /// the namespace stays closed: reserving late would be a breaking change.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Kind<'a> {
@@ -18,6 +18,7 @@ pub enum Kind<'a> {
     KwThen,
     KwElse,
     KwElif,
+    KwWhile,
 
     /// One of the other 80 reserved words. The parser rejects these with
     /// "not in the M1 subset".
@@ -43,6 +44,12 @@ pub enum Kind<'a> {
 
     LParen,
     RParen,
+    /// `[` and `]`: an array literal, or an index glued to what it indexes.
+    LBracket,
+    RBracket,
+    /// `[\` and `\]`, the static argument brackets of `Array[\ZZ64\]`.
+    LGeneric,
+    RGeneric,
     Comma,
     Semi,
     Colon,
@@ -83,8 +90,9 @@ impl<'a> Token<'a> {
     }
 }
 
-/// The 80 reserved words outside the M1 subset, sorted for binary search.
-pub(crate) const RESERVED: [&str; 80] = [
+/// The 79 reserved words outside the implemented subset, sorted for binary
+/// search.
+pub(crate) const RESERVED: [&str; 79] = [
     "BIG",
     "FORALL",
     "SI_unit",
@@ -161,7 +169,6 @@ pub(crate) const RESERVED: [&str; 80] = [
     "value",
     "var",
     "where",
-    "while",
     "widens",
     "with",
     "wrapped",
@@ -177,6 +184,7 @@ pub(crate) fn classify_word(word: &str) -> Kind<'_> {
         "then" => Kind::KwThen,
         "else" => Kind::KwElse,
         "elif" => Kind::KwElif,
+        "while" => Kind::KwWhile,
         "true" => Kind::True,
         "false" => Kind::False,
         _ if RESERVED.binary_search(&word).is_ok() => Kind::Reserved(word),
