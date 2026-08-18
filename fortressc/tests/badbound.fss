@@ -1,0 +1,16 @@
+component badbound
+export Executable
+
+(* The bound is recorded by monomorphization and discharged by the checker, once
+   the registry it needs exists. Plain does not extend Ink, so this is REFUSED. *)
+trait Ink end
+object Solid extends {Ink} end
+object Plain end
+object Pen[\T extends Ink\](tip: T) end
+
+run() = do
+   good: Pen[\Solid\] = Pen[\Solid\](Solid)
+   bad: Pen[\Plain\] = Pen[\Plain\](Plain)
+   println(1)
+end
+end

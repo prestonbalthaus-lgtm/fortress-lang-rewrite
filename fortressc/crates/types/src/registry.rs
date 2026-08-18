@@ -97,7 +97,7 @@ impl Registry {
     /// declared later in the file works.
     pub(crate) fn resolve(&self, t: &TypeRef) -> Result<Type, TypeError> {
         if t.name == "Array" {
-            let Some(argument) = &t.argument else {
+            let [argument] = t.args.as_slice() else {
                 return Err(TypeError::UnsupportedElementType {
                     span: t.span,
                     name: "Array".to_owned(),
@@ -111,7 +111,9 @@ impl Registry {
                 }
             });
         }
-        if t.argument.is_some() {
+        // Anything else carrying static arguments here means a generic survived
+        // expansion, which cannot happen: `check` runs `expand` first.
+        if !t.args.is_empty() {
             return Err(TypeError::UnknownType {
                 span: t.span,
                 name: t.name.clone(),

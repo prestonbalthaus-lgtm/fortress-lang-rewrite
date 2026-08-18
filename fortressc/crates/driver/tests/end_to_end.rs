@@ -653,3 +653,99 @@ fn a_dispatch_leaf_is_a_direct_call_so_callees_stay_inlinable() {
         "no leaf may become an indirect branch:\n{ir}"
     );
 }
+
+// ------------------------------------ M3d: generics by monomorphization
+
+#[test]
+fn a_generic_is_stamped_out_once_per_static_argument() {
+    let binary = compile_fixture("generics.fss", "generics");
+    let out = run(&binary);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "7\nhi\n2\n3\nno\nsecond\n"
+    );
+    assert_eq!(out.status.code(), Some(0));
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// The whole reason for monomorphization rather than erasure or boxing.
+#[test]
+fn a_zz64_instantiation_stores_an_i64_and_not_a_pointer() {
+    let ir = emit_ir("generics.fss");
+    assert!(
+        ir.contains(r#"%"Cell$ZZ64$e" = type { i32, i32, i64, i32 }"#),
+        "ZZ64 must be stored unboxed:\n{ir}"
+    );
+    assert!(
+        ir.contains(r#"%"Cell$String$e" = type { i32, i32, ptr, i32 }"#),
+        "String is genuinely a pointer:\n{ir}"
+    );
+    assert!(
+        ir.contains(r#"define i64 @"pick$ZZ64$e"(i64"#),
+        "the instantiation takes and returns raw i64:\n{ir}"
+    );
+}
+
+/// The M3c interaction: each instantiation is a concrete type under the trait,
+/// so each needs its own tag and its own switch arm. Without the phase split the
+/// table would have been built before these types existed.
+#[test]
+fn every_instantiation_under_a_trait_gets_a_dispatch_arm() {
+    let binary = compile_fixture("genericdispatch.fss", "genericdispatch");
+    let out = run(&binary);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "2\n3\n4\n");
+    assert_eq!(out.status.code(), Some(0));
+    let _ = std::fs::remove_file(&binary);
+
+    let ir = emit_ir("genericdispatch.fss");
+    assert!(ir.contains("switch i32 %tag"), "no dispatch emitted:\n{ir}");
+    for expected in [
+        r#"call i32 @"area$Box$ZZ64$e""#,
+        r#"call i32 @"area$Box$String$e""#,
+    ] {
+        assert!(ir.contains(expected), "missing {expected} in:\n{ir}");
+    }
+}
+
+#[test]
+fn polymorphic_recursion_is_refused_rather_than_compiled_or_hung_on() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture("polyrec.fss"))
+        .arg("--emit-ir")
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "a ceiling is a user diagnostic, not a compiler bug:\n{message}"
+    );
+    assert!(
+        message.contains("4096"),
+        "the limit must be named:\n{message}"
+    );
+}
+
+/// Tags are switch keys, and switch arms follow tag order. If instantiations
+/// were numbered as a worklist discovered them, the emitted module would depend
+/// on traversal order rather than on the source.
+#[test]
+fn two_builds_of_a_generic_program_are_byte_identical() {
+    let first = output_path("determinism-a").with_extension("o");
+    let second = output_path("determinism-b").with_extension("o");
+    for path in [&first, &second] {
+        let status = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+            .arg(fixture("genericdispatch.fss"))
+            .arg("--emit-obj")
+            .arg("-o")
+            .arg(path)
+            .status()
+            .expect("could not run fortressc");
+        assert!(status.success());
+    }
+    let a = std::fs::read(&first).expect("first object");
+    let b = std::fs::read(&second).expect("second object");
+    assert_eq!(a, b, "the emitted object is not reproducible");
+    let _ = std::fs::remove_file(&first);
+    let _ = std::fs::remove_file(&second);
+}

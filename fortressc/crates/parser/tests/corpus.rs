@@ -81,8 +81,10 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
                     fortress_parser::ParseError::ReservedWord { word, .. } => {
                         format!("reserved word `{word}`")
                     }
-                    fortress_parser::ParseError::StaticParametersUnsupported { .. } => {
-                        "static parameters on a declaration".to_owned()
+                    fortress_parser::ParseError::StaticParameterKindUnsupported {
+                        kind, ..
+                    } => {
+                        format!("`{kind}` static parameter")
                     }
                 };
                 *blockers.entry(label).or_default() += 1;
@@ -103,10 +105,11 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
         eprintln!("    {count:5}  {label}");
     }
 
-    // The same ratchet. M3d's lexer pass took this from 84 to 154 by adding
-    // `import`, the headerless-file production, and the tokens above it.
+    // The same ratchet. The lexer pass took this from 84 to 154 by adding
+    // `import`, the headerless-file production and the tokens above it; M3d's
+    // static parameters took it to 168.
     assert!(
-        parsed >= 154,
-        "parser corpus regressed: {parsed} files parse, floor is 154"
+        parsed >= 168,
+        "parser corpus regressed: {parsed} files parse, floor is 168"
     );
 }

@@ -177,6 +177,52 @@ pub enum TypeError {
         span: Span,
         found: Type,
     },
+
+    // ------------------------------------------------------------------ M3d
+    /// A generic named without its static arguments. They are written, never
+    /// inferred: that is what makes instantiation demand syntactic, which is
+    /// what lets expansion run before the checker.
+    StaticArgumentsRequired {
+        span: Span,
+        name: String,
+    },
+    NotGeneric {
+        span: Span,
+        name: String,
+    },
+    StaticArgumentCountMismatch {
+        span: Span,
+        name: String,
+        expected: usize,
+        found: usize,
+    },
+    /// The total ceiling. Depth and type size are both insufficient on their
+    /// own -- an acyclic graph of wrappers is exponential with every type small.
+    TooManyInstantiations {
+        span: Span,
+        name: String,
+        limit: usize,
+    },
+    /// Specification 1.0's static-parameter uniformity rule, enforced.
+    OverloadSetStaticParamsDiffer {
+        span: Span,
+        name: String,
+        first: Span,
+    },
+    /// Recorded by monomorphization, discharged here once the registry exists.
+    BoundNotSatisfied {
+        span: Span,
+        parameter: String,
+        subject: Type,
+        bound: Type,
+    },
+    /// `array(n)` cannot hand out a block of pointers nothing has written: the
+    /// runtime's fill is a one-byte empty string, and dispatch would read a tag
+    /// four bytes into it.
+    UninitialisedArrayOfReferences {
+        span: Span,
+        found: Type,
+    },
 }
 
 impl TypeError {
@@ -216,7 +262,14 @@ impl TypeError {
             | Self::AmbiguousDispatch { span, .. }
             | Self::ReturnTypeNotCovariant { span, .. }
             | Self::DispatchTableTooLarge { span, .. }
-            | Self::NotPrintable { span, .. } => *span,
+            | Self::NotPrintable { span, .. }
+            | Self::StaticArgumentsRequired { span, .. }
+            | Self::NotGeneric { span, .. }
+            | Self::StaticArgumentCountMismatch { span, .. }
+            | Self::TooManyInstantiations { span, .. }
+            | Self::OverloadSetStaticParamsDiffer { span, .. }
+            | Self::BoundNotSatisfied { span, .. }
+            | Self::UninitialisedArrayOfReferences { span, .. } => *span,
         }
     }
 }
@@ -380,6 +433,51 @@ impl core::fmt::Display for TypeError {
             Self::NotPrintable { found, .. } => {
                 write!(f, "`println` does not accept {}", found.name())
             }
+            Self::StaticArgumentsRequired { name, .. } => write!(
+                f,
+                "`{name}` is generic; write its static arguments, as in `{name}[\\ZZ64\\]`. \
+                 They are never inferred"
+            ),
+            Self::NotGeneric { name, .. } => {
+                write!(f, "`{name}` takes no static arguments")
+            }
+            Self::StaticArgumentCountMismatch {
+                name,
+                expected,
+                found,
+                ..
+            } => write!(
+                f,
+                "`{name}` takes {expected} static argument(s), found {found}"
+            ),
+            Self::TooManyInstantiations { name, limit, .. } => write!(
+                f,
+                "instantiating `{name}` would pass {limit} instantiations in one component; \
+                 this is what a generic that instantiates itself at a larger type looks like"
+            ),
+            Self::OverloadSetStaticParamsDiffer { name, first, .. } => write!(
+                f,
+                "declarations of `{name}` differ in their static parameters (the other is at \
+                 {}..{}); an overload set is uniformly generic or uniformly ground",
+                first.start, first.end
+            ),
+            Self::BoundNotSatisfied {
+                parameter,
+                subject,
+                bound,
+                ..
+            } => write!(
+                f,
+                "{} does not satisfy `{parameter} extends {}`",
+                subject.name(),
+                bound.name()
+            ),
+            Self::UninitialisedArrayOfReferences { found, .. } => write!(
+                f,
+                "`array(n)` cannot make an array of {}; every slot would start as a value \
+                 nothing wrote. Build it from a literal instead",
+                found.name()
+            ),
         }
     }
 }

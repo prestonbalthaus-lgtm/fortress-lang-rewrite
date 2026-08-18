@@ -1,0 +1,13 @@
+component polyrec
+export Executable
+
+(* Library/PureList.fss:137 in miniature. arrayToFingerTree[\E\] calls
+   arrayToFingerTree[\D23[\E\]\]; this calls deeper[\Wrap[\T\]\] from inside
+   deeper[\T\]. No monomorphizing compiler compiles either, at any limit, and
+   this must be REFUSED rather than compiled or hung on. *)
+object Wrap[\T\](held: T) end
+
+deeper[\T\](x: T): ZZ32 = deeper[\Wrap[\T\]\](Wrap[\T\](x))
+
+run() = println(deeper[\ZZ64\](1))
+end

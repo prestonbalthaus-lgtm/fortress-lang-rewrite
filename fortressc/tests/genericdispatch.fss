@@ -1,0 +1,30 @@
+component genericdispatch
+export Executable
+
+(* The M3c interaction. Each instantiation of Box is a distinct concrete type
+   under Shape, so each needs its own tag and its own arm in the dispatch table.
+   Without the phase split, the table would be built before these types existed
+   and the missing tag would reach fortress_dispatch_failed at run time. *)
+trait Shape end
+
+object Box[\T\](held: T) extends {Shape} end
+object Dot extends {Shape} end
+
+area(s: Shape): ZZ32 = 1
+area(s: Dot): ZZ32 = 2
+area(s: Box[\ZZ64\]): ZZ32 = 3
+area(s: Box[\String\]): ZZ32 = 4
+
+pickShape(n: ZZ32): Shape =
+   if n === 0 then Dot
+   elif n === 1 then Box[\ZZ64\](1)
+   else Box[\String\]("x") end
+
+run() = do
+   i: ZZ32 := 0
+   while i < 3 do
+      println(area(pickShape(i)))
+      i := i + 1
+   end
+end
+end
