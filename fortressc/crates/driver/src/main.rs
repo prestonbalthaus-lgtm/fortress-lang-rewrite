@@ -8,15 +8,10 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-use fortress_ast::ConstantProgram;
-
 /// A diagnostic against the user's source.
 const EXIT_USER_ERROR: u8 = 1;
 /// A compiler bug: malformed IR, a failed linker, an internal invariant broken.
 const EXIT_INTERNAL_ERROR: u8 = 70;
-
-/// The constant the skeleton compiles every program to.
-const SKELETON_EXIT_CODE: i32 = 42;
 
 struct Options {
     source: PathBuf,
@@ -77,29 +72,27 @@ fn compile(options: &Options) -> Result<(), Failure> {
     let source = std::fs::read_to_string(&options.source)
         .map_err(|e| Failure::User(format!("cannot read source: {e}")))?;
 
-    // The lexer is the one real stage. Its diagnostics are user errors.
+    // Lexing and parsing are real stages and their diagnostics are user errors.
+    // Codegen is still the placeholder: it accepts the AST and discards it.
     let tokens = fortress_lexer::lex(&source).map_err(|e| Failure::User(e.to_string()))?;
+    let component = fortress_parser::parse(&tokens).map_err(|e| Failure::User(e.to_string()))?;
 
-    // Everything downstream is the placeholder. The tokens are counted so the
-    // stage cannot be optimized away, then discarded.
-    let program = ConstantProgram {
-        exit_code: SKELETON_EXIT_CODE,
-    };
     eprintln!(
-        "fortressc: lexed {} tokens, emitting the skeleton constant {}",
+        "fortressc: lexed {} tokens, parsed component `{}` with {} declaration(s)",
         tokens.len(),
-        program.exit_code
+        component.name,
+        component.decls.len()
     );
 
     if options.emit_ir {
         let ir =
-            fortress_codegen::emit_ir(program).map_err(|e| Failure::Internal(e.to_string()))?;
+            fortress_codegen::emit_ir(&component).map_err(|e| Failure::Internal(e.to_string()))?;
         print!("{ir}");
         return Ok(());
     }
 
     let object = options.output.with_extension("o");
-    fortress_codegen::emit_object(program, &object)
+    fortress_codegen::emit_object(&component, &object)
         .map_err(|e| Failure::Internal(e.to_string()))?;
     link(&object, &options.output)?;
     let _ = std::fs::remove_file(&object);

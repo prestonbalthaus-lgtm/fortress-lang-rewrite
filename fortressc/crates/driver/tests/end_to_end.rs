@@ -10,10 +10,11 @@ use std::process::Command;
 
 const SKELETON_EXIT_CODE: i32 = 42;
 
-fn repo_fortressc() -> PathBuf {
+fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
-        .join("tests/skeleton.fss")
+        .join("tests")
+        .join(name)
 }
 
 fn output_path(tag: &str) -> PathBuf {
@@ -22,10 +23,10 @@ fn output_path(tag: &str) -> PathBuf {
     p
 }
 
-fn compile(tag: &str) -> PathBuf {
+fn compile_fixture(name: &str, tag: &str) -> PathBuf {
     let out = output_path(tag);
     let status = Command::new(env!("CARGO_BIN_EXE_fortressc"))
-        .arg(repo_fortressc())
+        .arg(fixture(name))
         .arg("-o")
         .arg(&out)
         .status()
@@ -41,7 +42,7 @@ fn compile(tag: &str) -> PathBuf {
 
 #[test]
 fn a_fortress_source_file_becomes_a_running_native_binary() {
-    let binary = compile("run");
+    let binary = compile_fixture("skeleton.fss", "run");
     let status = Command::new(&binary)
         .status()
         .expect("could not run the produced binary");
@@ -55,7 +56,7 @@ fn a_fortress_source_file_becomes_a_running_native_binary() {
 
 #[test]
 fn the_produced_binary_links_nothing_but_libc() {
-    let binary = compile("ldd");
+    let binary = compile_fixture("skeleton.fss", "ldd");
     let out = Command::new("ldd")
         .arg(&binary)
         .output()
@@ -77,7 +78,7 @@ fn the_produced_binary_links_nothing_but_libc() {
 #[test]
 fn the_emitted_ir_returns_the_constant() {
     let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
-        .arg(repo_fortressc())
+        .arg(fixture("skeleton.fss"))
         .arg("--emit-ir")
         .output()
         .expect("could not run fortressc");
@@ -107,6 +108,58 @@ fn a_lex_error_is_a_user_diagnostic_not_a_compiler_bug() {
     assert!(
         stderr.to_lowercase().contains("tab characters"),
         "expected the tab diagnostic:\n{stderr}"
+    );
+    let _ = std::fs::remove_file(&bad);
+}
+
+#[test]
+fn the_m1_acceptance_program_survives_the_whole_pipeline() {
+    // Lexer and parser are real here; only codegen is still a placeholder.
+    let binary = compile_fixture("fact.fss", "fact");
+    let status = Command::new(&binary)
+        .status()
+        .expect("could not run the produced binary");
+    assert_eq!(status.code(), Some(SKELETON_EXIT_CODE));
+    let _ = std::fs::remove_file(&binary);
+}
+
+#[test]
+fn the_driver_reports_what_it_parsed() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture("fact.fss"))
+        .arg("--emit-ir")
+        .output()
+        .expect("could not run fortressc");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("parsed component `fact` with 2 declaration(s)"),
+        "the AST must actually reach the driver:\n{stderr}"
+    );
+}
+
+#[test]
+fn a_parse_error_is_a_user_diagnostic_not_a_compiler_bug() {
+    let bad = output_path("badparse").with_extension("fss");
+    // `x- 1` is a postfix operator followed by a juxtaposition: real Fortress,
+    // outside M1, and a user error rather than an internal one.
+    std::fs::write(&bad, "component a\nf() = x- 1\nend\n").expect("could not write fixture");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(&bad)
+        .arg("-o")
+        .arg(output_path("badparse-out"))
+        .output()
+        .expect("could not run fortressc");
+
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "a parse error is exit 1, not 70"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.to_lowercase().contains("postfix"),
+        "expected the postfix diagnostic:\n{stderr}"
     );
     let _ = std::fs::remove_file(&bad);
 }

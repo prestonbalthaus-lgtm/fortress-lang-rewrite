@@ -33,7 +33,9 @@ fn collect_sources(dir: &Path, out: &mut Vec<PathBuf>) {
         if path.is_dir() {
             if path
                 .file_name()
-                .is_some_and(|n| n == ".git" || n == "target")
+                // `fortressc` holds our own fixtures; this metric is about the
+                // legacy tree only.
+                .is_some_and(|n| n == ".git" || n == "target" || n == "fortressc")
             {
                 continue;
             }

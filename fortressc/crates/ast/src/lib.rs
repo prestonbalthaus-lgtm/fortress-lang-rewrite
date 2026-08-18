@@ -1,6 +1,12 @@
 //! Shared vocabulary. Types only, no logic, so that `parser` and `codegen`
 //! never need to depend on each other.
 
+mod nodes;
+
+pub use nodes::{
+    BinOp, Binding, BlockItem, Component, Decl, Expr, Fixity, FnDecl, Param, TypeRef, UnOp,
+};
+
 /// Byte offsets into the source. Line and column are derived on demand by the
 /// diagnostic renderer rather than carried on every token.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,12 +30,4 @@ impl Span {
     pub const fn is_empty(&self) -> bool {
         self.start >= self.end
     }
-}
-
-/// The walking skeleton's entire language: a program that exits with a
-/// constant. This is deliberately trivial. It exists to prove the pipeline from
-/// source to ELF exists at all, and the parser replaces it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ConstantProgram {
-    pub exit_code: i32,
 }

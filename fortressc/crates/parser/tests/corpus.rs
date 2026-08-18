@@ -1,0 +1,102 @@
+//! How much of the legacy corpus the M1 parser can consume.
+//!
+//! Failure is expected and is not a gate: the M1 subset excludes traits,
+//! objects, generics, arrays, `for`, and most of the language. The number is
+//! tracked so the next milestone can be aimed at whatever actually blocks it.
+
+// clippy.toml's allow-*-in-tests only reaches `#[cfg(test)]` modules.
+#![allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
+
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(3)
+        .map(Path::to_path_buf)
+        .unwrap_or_default()
+}
+
+fn collect_sources(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if path
+                .file_name()
+                // `fortressc` holds our own fixtures; this metric is about the
+                // legacy tree only.
+                .is_some_and(|n| n == ".git" || n == "target" || n == "fortressc")
+            {
+                continue;
+            }
+            collect_sources(&path, out);
+        } else if path.extension().is_some_and(|e| e == "fss" || e == "fsi") {
+            out.push(path);
+        }
+    }
+}
+
+#[test]
+fn parses_what_it_can_of_the_corpus_without_panicking() {
+    let mut files = Vec::new();
+    collect_sources(&repo_root(), &mut files);
+    files.sort();
+    assert!(
+        files.len() > 1800,
+        "expected the legacy corpus, found {}",
+        files.len()
+    );
+
+    let mut lexed = 0usize;
+    let mut parsed = 0usize;
+    let mut blockers: BTreeMap<String, usize> = BTreeMap::new();
+
+    for path in &files {
+        let Ok(bytes) = fs::read(path) else { continue };
+        let Ok(source) = String::from_utf8(bytes) else {
+            continue;
+        };
+        let Ok(tokens) = fortress_lexer::lex(&source) else {
+            continue;
+        };
+        lexed += 1;
+        match fortress_parser::parse(&tokens) {
+            Ok(_) => parsed += 1,
+            Err(e) => {
+                let label = match &e {
+                    fortress_parser::ParseError::UnexpectedToken { expected, .. } => {
+                        format!("expected {expected}")
+                    }
+                    fortress_parser::ParseError::UnexpectedEndOfInput { expected } => {
+                        format!("eof, expected {expected}")
+                    }
+                    fortress_parser::ParseError::PostfixOperatorUnsupported { .. } => {
+                        "postfix operator".to_owned()
+                    }
+                    fortress_parser::ParseError::ReservedWord { word, .. } => {
+                        format!("reserved word `{word}`")
+                    }
+                };
+                *blockers.entry(label).or_default() += 1;
+            }
+        }
+    }
+
+    eprintln!("\ncorpus: {} files, {lexed} lex cleanly", files.len());
+    eprintln!(
+        "  parsed {parsed} ({:.1}% of those that lex)",
+        (parsed as f64 / lexed as f64) * 100.0
+    );
+
+    let mut ranked: Vec<(String, usize)> = blockers.into_iter().collect();
+    ranked.sort_by_key(|&(_, count)| core::cmp::Reverse(count));
+    eprintln!("\n  what blocks the parser first, top 10:");
+    for (label, count) in ranked.iter().take(10) {
+        eprintln!("    {count:5}  {label}");
+    }
+}

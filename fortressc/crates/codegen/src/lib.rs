@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use fortress_ast::ConstantProgram;
+use fortress_ast::Component;
 use inkwell::context::Context;
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
@@ -39,12 +39,21 @@ impl core::fmt::Display for CodegenError {
 
 impl std::error::Error for CodegenError {}
 
-/// Lowers `program` to a native object file at `object_path`.
+/// The constant every program currently compiles to. Lowering the AST is the
+/// next milestone; until then this is the placeholder that keeps the pipeline
+/// end to end.
+const PLACEHOLDER_EXIT_CODE: u64 = 42;
+
+/// Lowers `component` to a native object file at `object_path`.
+///
+/// The component is accepted and discarded: the parser produces a real AST and
+/// hands it across this boundary, but nothing here reads it yet.
 ///
 /// `Module::verify` runs unconditionally: catching malformed IR here rather
 /// than as a cryptic link failure several steps later is worth the cost while
 /// the compiler is young.
-pub fn emit_object(program: ConstantProgram, object_path: &Path) -> Result<(), CodegenError> {
+pub fn emit_object(component: &Component, object_path: &Path) -> Result<(), CodegenError> {
+    let _ = component;
     let context = Context::create();
     let module = context.create_module("fortress");
     let builder = context.create_builder();
@@ -55,7 +64,7 @@ pub fn emit_object(program: ConstantProgram, object_path: &Path) -> Result<(), C
     let entry = context.append_basic_block(main, "entry");
     builder.position_at_end(entry);
 
-    let exit_code = i32_type.const_int(program.exit_code as u64, false);
+    let exit_code = i32_type.const_int(PLACEHOLDER_EXIT_CODE, false);
     builder
         .build_return(Some(&exit_code))
         .map_err(|e| CodegenError::ModuleVerificationFailed {
@@ -104,7 +113,8 @@ fn write_object(module: &inkwell::module::Module<'_>, path: &Path) -> Result<(),
 }
 
 /// Emits the LLVM IR as text. Used by tests and `--emit-ir`.
-pub fn emit_ir(program: ConstantProgram) -> Result<String, CodegenError> {
+pub fn emit_ir(component: &Component) -> Result<String, CodegenError> {
+    let _ = component;
     let context = Context::create();
     let module = context.create_module("fortress");
     let builder = context.create_builder();
@@ -114,7 +124,7 @@ pub fn emit_ir(program: ConstantProgram) -> Result<String, CodegenError> {
     let entry = context.append_basic_block(main, "entry");
     builder.position_at_end(entry);
     builder
-        .build_return(Some(&i32_type.const_int(program.exit_code as u64, false)))
+        .build_return(Some(&i32_type.const_int(PLACEHOLDER_EXIT_CODE, false)))
         .map_err(|e| CodegenError::ModuleVerificationFailed {
             detail: e.to_string(),
         })?;

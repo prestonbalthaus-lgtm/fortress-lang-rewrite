@@ -1,0 +1,10 @@
+component fact
+export Executable
+
+f(x:ZZ64):ZZ64 = if x < 2 then 1 else x f(x-1) end
+
+run() = do
+   j:ZZ64 = widen(20)
+   println("fact(20) = " f(j))
+end
+end
