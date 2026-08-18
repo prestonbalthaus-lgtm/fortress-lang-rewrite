@@ -42,14 +42,30 @@ under rustc 1.97.1.
 * Exit codes are fixed now because the test harness depends on them: `1` for a
   user diagnostic, `70` for a compiler bug.
 
-### Outstanding gate, blocks codegen not the lexer
+### LLVM gate: CLEARED
 
-Fedora 44 ships LLVM 22.1.8. `inkwell` binds specific LLVM versions by feature
-flag and lags upstream, so the system LLVM is almost certainly unusable. The box
-has `llvm11-devel` through `llvm21-devel` available as side installs. Before any
-codegen work: determine inkwell's supported range, install the matching
-`llvmNN-devel`, and pin `LLVM_SYS_NNN_PREFIX`. The `codegen` crate deliberately
-declares no dependencies until that is settled.
+Recorded because the earlier reading in this file was wrong. `inkwell 0.10.0`
+declares `llvm12-0` through `llvm22-1`, so it has caught up with upstream and
+Fedora 44's own LLVM 22.1.8 is supported. No side install of an older
+`llvmNN-devel` is needed and no version pivot was required.
+
+The only real obstacle was packaging, not versions. Fedora splits LLVM: the
+installed `llvm-libs` ships `libLLVM-22.so`, while `llvm-config` and the headers
+live in `llvm-devel`, which is not installed and needs root. `setup-llvm.sh`
+works around that without root by unpacking the `llvm-devel` rpm into
+`~/.local/opt` and symlinking the already-installed runtime libraries into the
+private prefix. `llvm-config` is relocatable and computes its prefix from its own
+path, so it works from there unchanged.
+
+Two extra symlinks are needed for reasons unrelated to LLVM: `libffi.so` and
+`libstdc++.so` are unversioned names that only `-devel` packages provide, and
+rustc needs them to link `fortressc` itself.
+
+Build with:
+
+    export LLVM_SYS_221_PREFIX=$HOME/.local/opt/llvm22-root/usr/lib64/llvm22
+
+With root the whole script reduces to `dnf install llvm-devel`.
 
 ## Step 2: token set
 

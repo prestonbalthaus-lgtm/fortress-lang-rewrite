@@ -1,0 +1,7 @@
+component skeleton
+export Executable
+
+run() = do
+   println("the pipe exists")
+end
+end

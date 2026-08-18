@@ -25,6 +25,9 @@ pub enum LexErrorKind {
     OperatorFollowedByPlus,
     /// `=` immediately followed by an operator character that formed no known token.
     MalformedEquals,
+    /// `=>`, which is real Fortress syntax (case arms, grammar productions) but
+    /// outside the M1 subset.
+    FatArrowUnsupported,
     NonAsciiCharacter,
     CharacterLiteralUnsupported,
     RadixNumeralUnsupported,
@@ -56,6 +59,7 @@ impl LexErrorKind {
             Self::DoubleStar => "`**` is not a valid operator in Fortress",
             Self::OperatorFollowedByPlus => "an operator may not be immediately followed by `+`",
             Self::MalformedEquals => "`=` is followed by an operator character",
+            Self::FatArrowUnsupported => "`=>` is not in the M1 subset",
             Self::NonAsciiCharacter => {
                 "non-ASCII characters are not in the M1 subset outside comments and strings"
             }

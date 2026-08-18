@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 fortress-ast.workspace = true
 fortress-types.workspace = true
+inkwell = { version = "0.10.0", default-features = false, features = ["llvm22-1"] }
 
 [lints]
 workspace = true

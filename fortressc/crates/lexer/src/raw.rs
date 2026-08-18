@@ -282,7 +282,8 @@ always_error!(err_non_ascii, NonAsciiCharacter);
 fn op_equals(lex: &mut Lexer<Raw>) -> Skip {
     match lex.remainder().chars().next() {
         Some('+') => FilterResult::Error(LexErrorKind::OperatorFollowedByPlus),
-        Some('-' | '*' | '/' | '<' | '>' | '=' | ':' | '!') => {
+        Some('>') => FilterResult::Error(LexErrorKind::FatArrowUnsupported),
+        Some('-' | '*' | '/' | '<' | '=' | ':' | '!') => {
             FilterResult::Error(LexErrorKind::MalformedEquals)
         }
         _ => FilterResult::Emit(()),

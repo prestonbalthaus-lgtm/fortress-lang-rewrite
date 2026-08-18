@@ -25,3 +25,11 @@ impl Span {
         self.start >= self.end
     }
 }
+
+/// The walking skeleton's entire language: a program that exits with a
+/// constant. This is deliberately trivial. It exists to prove the pipeline from
+/// source to ELF exists at all, and the parser replaces it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConstantProgram {
+    pub exit_code: i32,
+}

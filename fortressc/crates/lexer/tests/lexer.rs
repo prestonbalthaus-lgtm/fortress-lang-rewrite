@@ -461,3 +461,10 @@ fn the_m1_acceptance_program_lexes() {
     // No Newline may lead or trail.
     assert_ne!(tokens.first().map(|t| &t.kind), Some(&Kind::Newline));
 }
+
+#[test]
+fn fat_arrow_is_named_rather_than_reported_as_a_malformed_equals() {
+    assert_eq!(err("x => y"), LexErrorKind::FatArrowUnsupported);
+    // A genuinely malformed `=` still reports as one.
+    assert_eq!(err("x =: y"), LexErrorKind::MalformedEquals);
+}
