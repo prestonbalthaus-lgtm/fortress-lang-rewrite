@@ -32,11 +32,13 @@ pub struct Param {
     pub span: Span,
 }
 
-/// M1 types are bare names (`ZZ32`, `ZZ64`, `RR64`). Resolution happens in the
-/// types crate; the parser only records what was written.
+/// Types are bare names (`ZZ32`, `ZZ64`, `RR64`) or a name with one static
+/// argument (`Array[\ZZ64\]`). Resolution happens in the types crate; the
+/// parser only records what was written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeRef {
     pub name: String,
+    pub argument: Option<Box<TypeRef>>,
     pub span: Span,
 }
 
@@ -133,12 +135,40 @@ pub enum Expr {
         items: Vec<BlockItem>,
         span: Span,
     },
+    /// `[1, 2, 3]`. Homogeneous and one dimensional; the element type comes
+    /// from the elements, or from context when the literal is empty.
+    ArrayLit {
+        items: Vec<Expr>,
+        span: Span,
+    },
+    /// `a[i]`, a tight subscript. Spaced, `a [i]` is a juxtaposition, exactly
+    /// as `f (x)` is.
+    Index {
+        base: Box<Expr>,
+        index: Box<Expr>,
+        span: Span,
+    },
+    While {
+        cond: Box<Expr>,
+        body: Box<Expr>,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BlockItem {
     Binding(Binding),
+    Assign(Assign),
     Expr(Expr),
+}
+
+/// `x := e` or `a[i] := e`. The target is checked in the types crate, which is
+/// where a good diagnostic can be written for `f(x) := 1`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Assign {
+    pub target: Expr,
+    pub value: Expr,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -146,6 +176,9 @@ pub struct Binding {
     pub name: String,
     pub ty: Option<TypeRef>,
     pub value: Expr,
+    /// `:=` rather than `=`. A mutable binding is the only thing assignment can
+    /// target, and the only thing codegen puts in an `alloca`.
+    pub mutable: bool,
     pub span: Span,
 }
 
@@ -163,7 +196,10 @@ impl Expr {
             | Self::Prefix { span, .. }
             | Self::Call { span, .. }
             | Self::If { span, .. }
-            | Self::Block { span, .. } => *span,
+            | Self::Block { span, .. }
+            | Self::ArrayLit { span, .. }
+            | Self::Index { span, .. }
+            | Self::While { span, .. } => *span,
         }
     }
 }

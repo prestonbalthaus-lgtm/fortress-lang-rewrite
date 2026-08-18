@@ -16,13 +16,20 @@ mod types;
 
 pub use error::TypeError;
 pub use types::{
-    ArithOp, CompareOp, MpiOp, Target, Type, TypedBlockItem, TypedComponent, TypedExpr,
-    TypedExprKind, TypedFn, TypedParam,
+    ArithOp, AssignTarget, CompareOp, Elem, MpiOp, Target, Type, TypedBlockItem, TypedComponent,
+    TypedExpr, TypedExprKind, TypedFn, TypedParam, ARRAY_ALLOC, ARRAY_LENGTH, ARRAY_SLOT,
 };
 
 use std::collections::HashMap;
 
-use fortress_ast::{BinOp, BlockItem, Component, Decl, Expr, FnDecl, Span, TypeRef, UnOp};
+use fortress_ast::{Assign, BinOp, BlockItem, Component, Decl, Expr, FnDecl, Span, TypeRef, UnOp};
+
+/// What a name in scope is: its type, and whether it can be assigned to.
+#[derive(Debug, Clone, Copy)]
+struct Local {
+    ty: Type,
+    mutable: bool,
+}
 
 type Checked<T> = Result<T, TypeError>;
 
@@ -37,7 +44,7 @@ struct Signature {
 
 struct Checker {
     functions: HashMap<String, Signature>,
-    scopes: Vec<HashMap<String, Type>>,
+    scopes: Vec<HashMap<String, Local>>,
     uses_mpi: bool,
 }
 
@@ -95,7 +102,7 @@ impl Checker {
         let mut scope = HashMap::new();
         for p in &f.params {
             let ty = resolve_type(&p.ty)?;
-            scope.insert(p.name.clone(), ty);
+            scope.insert(p.name.clone(), Local { ty, mutable: false });
             params.push(TypedParam {
                 name: p.name.clone(),
                 ty,
@@ -123,13 +130,13 @@ impl Checker {
 
     // -------------------------------------------------------------- scopes
 
-    fn lookup(&self, name: &str) -> Option<Type> {
+    fn lookup(&self, name: &str) -> Option<Local> {
         self.scopes.iter().rev().find_map(|s| s.get(name).copied())
     }
 
-    fn declare(&mut self, name: String, ty: Type) {
+    fn declare(&mut self, name: String, ty: Type, mutable: bool) {
         if let Some(scope) = self.scopes.last_mut() {
-            scope.insert(name, ty);
+            scope.insert(name, Local { ty, mutable });
         }
     }
 
@@ -172,10 +179,13 @@ impl Checker {
                 })
             }
             Expr::Var { name, span } => {
-                let ty = self.lookup(name).ok_or_else(|| TypeError::UnknownName {
-                    span: *span,
-                    name: name.clone(),
-                })?;
+                let ty = self
+                    .lookup(name)
+                    .ok_or_else(|| TypeError::UnknownName {
+                        span: *span,
+                        name: name.clone(),
+                    })?
+                    .ty;
                 require(ty, expected, *span)?;
                 Ok(TypedExpr {
                     kind: TypedExprKind::Var(name.clone()),
@@ -196,6 +206,162 @@ impl Checker {
                 span,
             } => self.if_expr(cond, then_branch, else_branch.as_deref(), *span, expected),
             Expr::Block { items, span } => self.block(items, *span, expected),
+            Expr::ArrayLit { items, span } => self.array_literal(items, *span, expected),
+            Expr::Index { base, index, span } => self.index(base, index, *span, expected),
+            Expr::While { cond, body, span } => self.while_expr(cond, body, *span, expected),
+        }
+    }
+
+    /// The element type comes from the first element that can supply one, or
+    /// from the slot the literal lands in. A literal of bare integers with
+    /// neither defaults to ZZ32, exactly as a bare integer literal does.
+    fn array_literal(
+        &mut self,
+        items: &[Expr],
+        span: Span,
+        expected: Option<Type>,
+    ) -> Checked<TypedExpr> {
+        let mut elem = match expected {
+            Some(Type::Array(e)) => Some(e),
+            _ => None,
+        };
+        if elem.is_none() {
+            for item in items {
+                if is_int_literal(item) {
+                    continue;
+                }
+                let probe = self.expr(item, None)?;
+                elem = Elem::of(probe.ty);
+                if elem.is_none() {
+                    return Err(TypeError::UnsupportedElementType {
+                        span,
+                        name: probe.ty.name().to_owned(),
+                    });
+                }
+                break;
+            }
+        }
+        let elem = match elem {
+            Some(e) => e,
+            None if items.is_empty() => return Err(TypeError::ElementTypeUnknown { span }),
+            // Nothing but literals: the same default a bare literal takes.
+            None => Elem::ZZ32,
+        };
+
+        let mut typed = Vec::with_capacity(items.len());
+        for item in items {
+            typed.push(self.expr(item, Some(elem.as_type()))?);
+        }
+        let ty = Type::Array(elem);
+        require(ty, expected, span)?;
+        Ok(TypedExpr {
+            kind: TypedExprKind::ArrayLit { elem, items: typed },
+            ty,
+            span,
+        })
+    }
+
+    fn index(
+        &mut self,
+        base: &Expr,
+        index: &Expr,
+        span: Span,
+        expected: Option<Type>,
+    ) -> Checked<TypedExpr> {
+        let base = self.expr(base, None)?;
+        let Type::Array(elem) = base.ty else {
+            return Err(TypeError::NotAnArray {
+                span,
+                found: base.ty,
+            });
+        };
+        // Subscripts are ZZ64 so that an array can be longer than 2^31, which
+        // is the ceiling the JVM implementation could never get past.
+        let index = self.expr(index, Some(Type::ZZ64))?;
+        let ty = elem.as_type();
+        require(ty, expected, span)?;
+        Ok(TypedExpr {
+            kind: TypedExprKind::Index {
+                base: Box::new(base),
+                index: Box::new(index),
+                elem,
+            },
+            ty,
+            span,
+        })
+    }
+
+    fn while_expr(
+        &mut self,
+        cond: &Expr,
+        body: &Expr,
+        span: Span,
+        expected: Option<Type>,
+    ) -> Checked<TypedExpr> {
+        let cond_typed = self.expr(cond, Some(Type::Boolean)).map_err(|e| match e {
+            TypeError::Mismatch { span, found, .. }
+            | TypeError::LiteralNotApplicable {
+                span,
+                required: found,
+            } => TypeError::ConditionNotBoolean { span, found },
+            other => other,
+        })?;
+        let body_typed = self.expr(body, None)?;
+        require(Type::Void, expected, span)?;
+        Ok(TypedExpr {
+            kind: TypedExprKind::While {
+                cond: Box::new(cond_typed),
+                body: Box::new(body_typed),
+            },
+            ty: Type::Void,
+            span,
+        })
+    }
+
+    fn assign(&mut self, a: &Assign) -> Checked<TypedBlockItem> {
+        match &a.target {
+            Expr::Var { name, span } => {
+                let local = self
+                    .lookup(name)
+                    .ok_or_else(|| TypeError::AssignToUndeclared {
+                        span: *span,
+                        name: name.clone(),
+                    })?;
+                if !local.mutable {
+                    return Err(TypeError::AssignToImmutable {
+                        span: *span,
+                        name: name.clone(),
+                    });
+                }
+                let value = self.expr(&a.value, Some(local.ty))?;
+                Ok(TypedBlockItem::Assign {
+                    target: AssignTarget::Var {
+                        name: name.clone(),
+                        ty: local.ty,
+                    },
+                    value,
+                    span: a.span,
+                })
+            }
+            // The binding is immutable, the container is not: `a` cannot be
+            // rebound, but its elements are storage.
+            Expr::Index { base, index, span } => {
+                let base = self.expr(base, None)?;
+                let Type::Array(elem) = base.ty else {
+                    return Err(TypeError::NotAnArray {
+                        span: *span,
+                        found: base.ty,
+                    });
+                };
+                let index = self.expr(index, Some(Type::ZZ64))?;
+                let value = self.expr(&a.value, Some(elem.as_type()))?;
+                Ok(TypedBlockItem::Assign {
+                    target: AssignTarget::Element { base, index, elem },
+                    value,
+                    span: a.span,
+                })
+            }
+            other => Err(TypeError::InvalidAssignTarget { span: other.span() }),
         }
     }
 
@@ -549,6 +715,8 @@ impl Checker {
         match name.as_str() {
             "widen" => self.widen(args, span, expected),
             "println" => self.println(args, span, expected),
+            "array" => self.array_new(args, span, expected),
+            "length" => self.array_length(args, span, expected),
             _ => {
                 let Some(sig) = self.functions.get(name) else {
                     return Err(TypeError::UnknownName {
@@ -609,6 +777,69 @@ impl Checker {
                 args: Vec::new(),
             },
             ty,
+            span,
+        })
+    }
+
+    /// `array(n)`. There is nothing in the call to say what it holds, so the
+    /// element type comes from the slot and its absence is a diagnostic rather
+    /// than a guess.
+    fn array_new(
+        &mut self,
+        args: &[Expr],
+        span: Span,
+        expected: Option<Type>,
+    ) -> Checked<TypedExpr> {
+        let [count] = args else {
+            return Err(TypeError::ArityMismatch {
+                span,
+                name: "array".to_owned(),
+                expected: 1,
+                found: args.len(),
+            });
+        };
+        let Some(Type::Array(elem)) = expected else {
+            return Err(TypeError::ElementTypeUnknown { span });
+        };
+        let count = self.expr(count, Some(Type::ZZ64))?;
+        Ok(TypedExpr {
+            kind: TypedExprKind::Apply {
+                target: Target::ArrayNew { elem },
+                args: vec![count],
+            },
+            ty: Type::Array(elem),
+            span,
+        })
+    }
+
+    fn array_length(
+        &mut self,
+        args: &[Expr],
+        span: Span,
+        expected: Option<Type>,
+    ) -> Checked<TypedExpr> {
+        let [array] = args else {
+            return Err(TypeError::ArityMismatch {
+                span,
+                name: "length".to_owned(),
+                expected: 1,
+                found: args.len(),
+            });
+        };
+        let array = self.expr(array, None)?;
+        if !matches!(array.ty, Type::Array(_)) {
+            return Err(TypeError::NotAnArray {
+                span,
+                found: array.ty,
+            });
+        }
+        require(Type::ZZ64, expected, span)?;
+        Ok(TypedExpr {
+            kind: TypedExprKind::Apply {
+                target: Target::ArrayLength,
+                args: vec![array],
+            },
+            ty: Type::ZZ64,
             span,
         })
     }
@@ -738,14 +969,16 @@ impl Checker {
                     let declared = b.ty.as_ref().map(resolve_type).transpose()?;
                     let value = self.expr(&b.value, declared)?;
                     let ty = declared.unwrap_or(value.ty);
-                    self.declare(b.name.clone(), ty);
+                    self.declare(b.name.clone(), ty, b.mutable);
                     typed.push(TypedBlockItem::Binding {
                         name: b.name.clone(),
                         ty,
                         value,
+                        mutable: b.mutable,
                         span: b.span,
                     });
                 }
+                BlockItem::Assign(a) => typed.push(self.assign(a)?),
                 BlockItem::Expr(e) => {
                     // Only the final expression is in value position.
                     let want = if index == last { expected } else { None };
@@ -802,6 +1035,21 @@ const fn is_int_literal(e: &Expr) -> bool {
 }
 
 fn resolve_type(t: &TypeRef) -> Checked<Type> {
+    if t.name == "Array" {
+        let Some(argument) = &t.argument else {
+            return Err(TypeError::UnsupportedElementType {
+                span: t.span,
+                name: "Array".to_owned(),
+            });
+        };
+        let inner = resolve_type(argument)?;
+        return Elem::of(inner)
+            .map(Type::Array)
+            .ok_or_else(|| TypeError::UnsupportedElementType {
+                span: argument.span,
+                name: inner.name().to_owned(),
+            });
+    }
     match t.name.as_str() {
         "ZZ32" => Ok(Type::ZZ32),
         "ZZ64" => Ok(Type::ZZ64),

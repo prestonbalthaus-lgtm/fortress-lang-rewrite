@@ -70,6 +70,30 @@ pub enum TypeError {
         span: Span,
         name: String,
     },
+    NotAnArray {
+        span: Span,
+        found: Type,
+    },
+    /// `array(8)` or `[]` with nothing to say what it holds.
+    ElementTypeUnknown {
+        span: Span,
+    },
+    /// `Array[\Array[\ZZ64\]\]`, or `Array` with no argument at all.
+    UnsupportedElementType {
+        span: Span,
+        name: String,
+    },
+    AssignToImmutable {
+        span: Span,
+        name: String,
+    },
+    AssignToUndeclared {
+        span: Span,
+        name: String,
+    },
+    InvalidAssignTarget {
+        span: Span,
+    },
 }
 
 impl TypeError {
@@ -88,7 +112,13 @@ impl TypeError {
             | Self::ConditionNotBoolean { span, .. }
             | Self::BranchTypeMismatch { span, .. }
             | Self::MissingElseBranch { span }
-            | Self::DuplicateDefinition { span, .. } => *span,
+            | Self::DuplicateDefinition { span, .. }
+            | Self::NotAnArray { span, .. }
+            | Self::ElementTypeUnknown { span }
+            | Self::UnsupportedElementType { span, .. }
+            | Self::AssignToImmutable { span, .. }
+            | Self::AssignToUndeclared { span, .. }
+            | Self::InvalidAssignTarget { span } => *span,
         }
     }
 }
@@ -158,6 +188,28 @@ impl core::fmt::Display for TypeError {
                 write!(f, "an `if` used as a value needs an `else` branch")
             }
             Self::DuplicateDefinition { name, .. } => write!(f, "`{name}` is defined twice"),
+            Self::NotAnArray { found, .. } => {
+                write!(f, "expected an array, found {}", found.name())
+            }
+            Self::ElementTypeUnknown { .. } => write!(
+                f,
+                "nothing here says what this array holds; annotate the binding, as in `a:Array[\\ZZ64\\] = ...`"
+            ),
+            Self::UnsupportedElementType { name, .. } => write!(
+                f,
+                "`{name}` is not a supported array element type; arrays are one dimensional and hold a scalar"
+            ),
+            Self::AssignToImmutable { name, .. } => write!(
+                f,
+                "`{name}` is immutable; declare it with `:=` to assign to it"
+            ),
+            Self::AssignToUndeclared { name, .. } => write!(
+                f,
+                "`{name}` is not declared; write `{name}:T := ...` to declare it"
+            ),
+            Self::InvalidAssignTarget { .. } => {
+                write!(f, "only a variable or an array element can be assigned to")
+            }
         }
     }
 }

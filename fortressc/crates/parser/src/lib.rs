@@ -15,7 +15,8 @@ mod error;
 pub use error::ParseError;
 
 use fortress_ast::{
-    BinOp, Binding, BlockItem, Component, Decl, Expr, Fixity, FnDecl, Param, Span, TypeRef, UnOp,
+    Assign, BinOp, Binding, BlockItem, Component, Decl, Expr, Fixity, FnDecl, Param, Span, TypeRef,
+    UnOp,
 };
 use fortress_lexer::{Kind, Token};
 
@@ -263,7 +264,23 @@ impl<'t, 'a> Parser<'t, 'a> {
 
     fn type_ref(&mut self) -> Parsed<TypeRef> {
         let (name, span) = self.identifier("a type name")?;
-        Ok(TypeRef { name, span })
+        if !self.at(&Kind::LGeneric) {
+            return Ok(TypeRef {
+                name,
+                argument: None,
+                span,
+            });
+        }
+        // One static argument, which is all `Array[\T\]` needs. Generics
+        // proper arrive with traits.
+        self.pos += 1;
+        let argument = self.type_ref()?;
+        let close = self.expect(&Kind::RGeneric, "`\\]`")?.span;
+        Ok(TypeRef {
+            name,
+            argument: Some(Box::new(argument)),
+            span: Span::new(span.start, close.end),
+        })
     }
 
     // --------------------------------------------------------- expressions
@@ -370,7 +387,8 @@ impl<'t, 'a> Parser<'t, 'a> {
                 | Kind::True
                 | Kind::False
                 | Kind::Ident(_)
-                | Kind::LParen,
+                | Kind::LParen
+                | Kind::LBracket,
             ) => true,
             // A minus that is spaced on the left and glued on the right is a
             // prefix operator on the next operand, not subtraction.
@@ -405,16 +423,36 @@ impl<'t, 'a> Parser<'t, 'a> {
         let mut expr = self.primary()?;
         // Only a glued `(` is an application. A spaced one is a juxtaposed
         // parenthesized expression, which the juxtaposition layer handles.
-        while self.at(&Kind::LParen) && self.glued_left(self.pos) {
-            self.pos += 1;
-            let args = self.args()?;
-            let close = self.expect(&Kind::RParen, "`)`")?.span;
-            let span = Span::new(expr.span().start, close.end);
-            expr = Expr::Call {
-                callee: Box::new(expr),
-                args,
-                span,
-            };
+        loop {
+            if self.at(&Kind::LParen) && self.glued_left(self.pos) {
+                self.pos += 1;
+                let args = self.args()?;
+                let close = self.expect(&Kind::RParen, "`)`")?.span;
+                let span = Span::new(expr.span().start, close.end);
+                expr = Expr::Call {
+                    callee: Box::new(expr),
+                    args,
+                    span,
+                };
+                continue;
+            }
+            // A glued `[` subscripts; a spaced one opens an array literal that
+            // the juxtaposition layer will pick up.
+            if self.at(&Kind::LBracket) && self.glued_left(self.pos) {
+                self.pos += 1;
+                self.skip_newlines();
+                let index = self.expr()?;
+                self.skip_newlines();
+                let close = self.expect(&Kind::RBracket, "`]`")?.span;
+                let span = Span::new(expr.span().start, close.end);
+                expr = Expr::Index {
+                    base: Box::new(expr),
+                    index: Box::new(index),
+                    span,
+                };
+                continue;
+            }
+            break;
         }
         Ok(expr)
     }
@@ -494,12 +532,54 @@ impl<'t, 'a> Parser<'t, 'a> {
             }
             Kind::KwIf => self.if_expr(),
             Kind::KwDo => self.block(),
+            Kind::KwWhile => self.while_expr(),
+            Kind::LBracket => self.array_literal(),
             Kind::Reserved(word) => Err(ParseError::ReservedWord {
                 span,
                 word: (*word).to_owned(),
             }),
             _ => Err(self.error("an expression")),
         }
+    }
+
+    fn array_literal(&mut self) -> Parsed<Expr> {
+        let start = self.expect(&Kind::LBracket, "`[`")?.span;
+        let mut items = Vec::new();
+        self.skip_newlines();
+        if !self.at(&Kind::RBracket) {
+            loop {
+                items.push(self.expr()?);
+                self.skip_newlines();
+                if !self.at(&Kind::Comma) {
+                    break;
+                }
+                self.pos += 1;
+                self.skip_newlines();
+            }
+        }
+        let close = self.expect(&Kind::RBracket, "`]`")?.span;
+        Ok(Expr::ArrayLit {
+            items,
+            span: Span::new(start.start, close.end),
+        })
+    }
+
+    /// `while cond do ... end`. The only loop in the language until generators
+    /// arrive, and deliberately so: `for` is parallel by default in Fortress
+    /// and cannot be faked with a counter.
+    fn while_expr(&mut self) -> Parsed<Expr> {
+        let start = self.expect(&Kind::KwWhile, "`while`")?.span;
+        self.skip_newlines();
+        let cond = self.expr()?;
+        self.skip_newlines();
+        self.expect(&Kind::KwDo, "`do`")?;
+        let body = self.block_body(&[Kind::KwEnd])?;
+        let end = self.expect(&Kind::KwEnd, "`end`")?.span;
+        Ok(Expr::While {
+            cond: Box::new(cond),
+            body: Box::new(body),
+            span: Span::new(start.start, end.end),
+        })
     }
 
     fn if_expr(&mut self) -> Parsed<Expr> {
@@ -612,7 +692,19 @@ impl<'t, 'a> Parser<'t, 'a> {
             return Ok(BlockItem::Binding(binding));
         }
         self.pos = save;
-        Ok(BlockItem::Expr(self.expr()?))
+        let target = self.expr()?;
+        if !self.at(&Kind::ColonEq) {
+            return Ok(BlockItem::Expr(target));
+        }
+        self.pos += 1;
+        self.skip_newlines();
+        let value = self.expr()?;
+        let span = Span::new(target.span().start, value.span().end);
+        Ok(BlockItem::Assign(Assign {
+            target,
+            value,
+            span,
+        }))
     }
 
     fn try_binding(&mut self) -> Parsed<Option<Binding>> {
@@ -642,10 +734,17 @@ impl<'t, 'a> Parser<'t, 'a> {
         };
 
         // No `skip_newlines` here on purpose: the `=` must be on this line.
-        if !self.at(&Kind::Eq) {
-            self.pos = save;
-            return Ok(None);
-        }
+        // `:=` declares a mutable binding, but only with a type annotation:
+        // without one `i := 0` would be a declaration in some scopes and an
+        // assignment in others, which is how a typo silently shadows.
+        let mutable = match self.peek_kind() {
+            Some(Kind::Eq) => false,
+            Some(Kind::ColonEq) if ty.is_some() => true,
+            _ => {
+                self.pos = save;
+                return Ok(None);
+            }
+        };
         self.pos += 1;
         self.skip_newlines(); // `w` after the `=` does permit one
 
@@ -655,6 +754,7 @@ impl<'t, 'a> Parser<'t, 'a> {
             name,
             ty,
             value,
+            mutable,
             span,
         }))
     }
