@@ -47,11 +47,11 @@ checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
 
 [[package]]
 name = "fortress-ast"
-version = "0.0.0"
+version = "0.1.0"
 
 [[package]]
 name = "fortress-codegen"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "fortress-ast",
  "fortress-types",
@@ -60,7 +60,7 @@ dependencies = [
 
 [[package]]
 name = "fortress-driver"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "fortress-ast",
  "fortress-codegen",
@@ -71,7 +71,7 @@ dependencies = [
 
 [[package]]
 name = "fortress-lexer"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "fortress-ast",
  "logos",
@@ -79,7 +79,7 @@ dependencies = [
 
 [[package]]
 name = "fortress-parser"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "fortress-ast",
  "fortress-lexer",
@@ -87,7 +87,7 @@ dependencies = [
 
 [[package]]
 name = "fortress-types"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "fortress-ast",
  "fortress-lexer",
