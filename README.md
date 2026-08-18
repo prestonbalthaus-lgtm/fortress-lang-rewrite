@@ -172,14 +172,74 @@ than faulting. Array storage is allocated scannable, so the collector can see
 the strings an `Array[\String\]` holds; `tools/array-gate.sh` measures that
 rather than assuming it.
 
-The compiler lives in `fortressc/`: a six crate Rust workspace, lexer through
-LLVM codegen. See `docs/superpowers/specs/` for the M1 design, the lexer plan
-and the M2a MPI boundary, all of which record why the rules are what they are.
+M3c is done: traits, objects and symmetric multiple dispatch.
 
-Still missing: traits, objects, generics, `for` and generators, parallelism,
-`atomic`, and user definable syntax. The lexer takes 939 of the 1956 corpus
-files (48%) and the parser 52 of those; what blocks the parser is `trait`,
-`object` and `api`, which is the next milestone.
+```
+trait Ink end
+object Solid extends {Ink} end
+object Dotted(width: ZZ32) extends {Ink} end
+
+draw(i: Ink, f: Face): ZZ32 = 1000
+draw(i: Solid, f: Face): ZZ32 = 2000
+draw(i: Solid, f: Round): ZZ32 = 3000
+```
+
+Dispatch is symmetric: which declaration runs depends on the run-time types of
+*all* the arguments, not just a receiver. Being a whole-program compiler makes
+that cheap. Rather than implement specification 1.0's modular Subtype,
+Incompatibility and Meet rules, the compiler enumerates every tuple of concrete
+types that can reach an overload set and requires exactly one most-specific
+winner per cell. That single computation is the ambiguity check, the dispatch
+table, and the proof that no case is missing.
+
+An object is one heap block with a 32-bit type tag at offset 0. Traits have no
+run-time representation at all. The table is flattened into a nested switch on
+those tags, every leaf a direct call, and a row whose winners agree collapses --
+so almost every call in a program stays an ordinary direct call and only a
+trait-typed argument costs a tag load.
+
+Two deliberate departures from 1.0, both signed off: an ambiguous call is a
+compile error naming the tuple and both declarations, where 1.0 would pick one
+arbitrarily; and trait exclusion is closed-world.
+
+M3d is done: generics, by monomorphization.
+
+```
+object Cell[\T\](held: T) end
+pick[\T\](a: T, b: T, first: Boolean): T = if first then a else b end
+```
+
+```llvm
+%"Cell$ZZ64$e"   = type { i32, i32, i64 }
+%"Cell$String$e" = type { i32, i32, ptr }
+define i64 @"pick$ZZ64$e"(i64 %a, i64 %b, i1 %first)
+```
+
+Concrete copies are stamped out at compile time, so a `ZZ64` cell holds an
+`i64` rather than a pointer to a box. No erasure, no boxing: that is what keeps
+`Array[\ZZ64\]` a block of integers.
+
+Expansion is an AST-to-AST pass that runs to a fixpoint **before** the type
+checker exists, which is what protects the dispatch tables -- an instantiation
+creates a concrete type, and a table built before that type existed would have
+no arm for it. Static arguments are written rather than inferred, which is what
+makes instantiation demand syntactic and lets the pass run that early.
+
+Monomorphization cannot compile polymorphic recursion, and the corpus contains
+some: `Library/PureList.fss:137` calls `arrayToFingerTree[\D23[\E\]\]` from
+inside `arrayToFingerTree[\E\]`. There is a hard ceiling of 4096 instantiations
+per component and it refuses with a diagnostic rather than running out of memory.
+
+The compiler lives in `fortressc/`: a six crate Rust workspace, lexer through
+LLVM codegen. See `docs/superpowers/specs/` for the design of every milestone,
+each of which records why the rules are what they are -- including where a
+design turned out to be wrong.
+
+Still missing: `for` and generators, parallelism, `atomic`, dimensions and
+units, coercion, enclosing operators, and user definable syntax. The lexer takes
+1780 of the 1956 corpus files (91%) and the parser 168 of those. What blocks the
+parser now is tuple and arrow types, `getter`/`setter`, and `opr` declarations --
+not generics, which was measured before it was built.
 
 The legacy Sun implementation is kept as reference material:
 
