@@ -174,8 +174,29 @@ dispatching() {
     fi
 }
 
+# The ordering contract, which is what determinism rests on: instantiations are
+# emitted at their template's position, sorted by mangled name. A build can be
+# perfectly reproducible and still have the wrong tags, so this is checked
+# separately from the two-build comparison.
+ordering() {
+    printf '== instantiations are emitted in source-then-name order ==\n'
+    local ir order
+    ir=$("$fortressc" "$repo/fortressc/tests/genericdispatch.fss" --emit-ir 2>/dev/null)
+    order=$(printf '%s' "$ir" | grep -oE '^%"?[A-Za-z$0-9]+"? = type' | sed 's/ = type//; s/"//g; s/^%//' | tr '\n' ' ')
+    # Box is declared before Dot, and Box's two instantiations sort by name.
+    if [[ $order == 'Box$String$e Box$ZZ64$e Dot '* ]]; then
+        ok "emission order is a pure function of the source: $order"
+    else
+        bad 'instantiations are emitted at their template position, sorted by name' \
+            "got: $order"
+    fi
+}
+
 # Tags are switch keys and switch arms follow tag order, so a nondeterministic
-# instantiation order is a nondeterministic binary.
+# instantiation order is a nondeterministic binary. This guards against genuine
+# nondeterminism; `ordering` above guards against being deterministically wrong,
+# and it is the one the mutation proves, because introducing real nondeterminism
+# on demand is itself unreliable.
 determinism() {
     printf '== the build is reproducible ==\n'
     local a b
@@ -217,7 +238,7 @@ refusals() {
 # --------------------------------------------------------------- mutations
 
 MUTATIONS=(
-  'crates/types/src/mono.rs|type Instances = BTreeMap<String, Instance>;|type Instances = std::collections::HashMap<String, Instance>;|emit instantiations in hash order instead of sorted'
+  'crates/types/src/mono.rs|for instance in self.instances.values() {|for instance in self.instances.values().rev() {|emit instantiations in reverse name order'
   'crates/types/src/mono.rs|check_uniformity(component)?;|let _ = check_uniformity(component);|stop enforcing the uniformity rule'
   'crates/types/src/lib.rs|self.discharge_bounds(component)?;|let _ = self.discharge_bounds(component);|stop discharging bound obligations'
 )
@@ -256,6 +277,7 @@ PY
             passed=0; failed=0
             compile >/dev/null 2>&1
             stamping >/dev/null 2>&1
+            ordering
             determinism
             refusals
             if [[ $failed -gt 0 ]]; then
@@ -293,6 +315,7 @@ case "${1:-}" in
         stamping
         unboxing
         dispatching
+        ordering
         determinism
         refusals
         ;;
