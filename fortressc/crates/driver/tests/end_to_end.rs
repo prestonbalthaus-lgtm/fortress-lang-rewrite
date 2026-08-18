@@ -202,3 +202,151 @@ fn a_type_error_is_a_user_diagnostic_and_names_the_fix() {
     );
     let _ = std::fs::remove_file(&bad);
 }
+
+// ------------------------------------------------------------ M2a: the MPI
+// boundary. Nothing here needs an MPI installation: these gate the compiler's
+// half of the contract, which is that generated code names only the
+// `fortress_mpi_` shims and that the driver links the shim exactly when the
+// program uses one. Linking and running against a real OpenMPI is
+// `tools/mpi-gate.sh`, which needs the Apptainer image.
+
+fn emit_ir(fixture_name: &str) -> String {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture(fixture_name))
+        .arg("--emit-ir")
+        .output()
+        .expect("could not run fortressc");
+    assert!(out.status.success(), "fortressc failed on {fixture_name}");
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+#[test]
+fn an_mpi_program_calls_the_prefixed_shims_and_nothing_else() {
+    let ir = emit_ir("mpi_hello.fss");
+    for expected in [
+        "declare void @fortress_mpi_init()",
+        "declare i32 @fortress_mpi_comm_rank()",
+        "declare i32 @fortress_mpi_comm_size()",
+        "declare void @fortress_mpi_finalize()",
+        "call void @fortress_mpi_init()",
+        "call i32 @fortress_mpi_comm_rank()",
+        "call i32 @fortress_mpi_comm_size()",
+        "call void @fortress_mpi_finalize()",
+    ] {
+        assert!(ir.contains(expected), "missing {expected} in:\n{ir}");
+    }
+}
+
+/// The reason the shim exists. `MPI_COMM_WORLD` is a macro, and its expansion
+/// differs between OpenMPI and MPICH, so it must never be baked into IR.
+#[test]
+fn no_mpi_implementation_detail_reaches_the_ir() {
+    let ir = emit_ir("mpi_hello.fss");
+    for forbidden in [
+        "MPI_COMM_WORLD",
+        "ompi_mpi_comm_world",
+        "@MPI_Init",
+        "@MPI_Comm_rank",
+    ] {
+        assert!(
+            !ir.contains(forbidden),
+            "{forbidden} leaked into the IR:\n{ir}"
+        );
+    }
+}
+
+#[test]
+fn a_program_that_does_not_use_mpi_declares_no_mpi_symbol() {
+    let ir = emit_ir("fact.fss");
+    assert!(
+        !ir.contains("fortress_mpi"),
+        "a non-MPI program must not reference the MPI runtime:\n{ir}"
+    );
+}
+
+#[test]
+fn emit_obj_writes_a_relocatable_object_at_the_output_path() {
+    let out = output_path("emitobj");
+    let status = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture("mpi_hello.fss"))
+        .arg("--emit-obj")
+        .arg("-o")
+        .arg(&out)
+        .status()
+        .expect("could not run fortressc");
+    assert!(status.success(), "fortressc --emit-obj failed: {status:?}");
+
+    let bytes = std::fs::read(&out).expect("no object at the output path");
+    assert_eq!(
+        bytes.get(..4),
+        Some(&[0x7f, b'E', b'L', b'F'][..]),
+        "--emit-obj must write an ELF object at exactly -o, not a linked binary"
+    );
+    let _ = std::fs::remove_file(&out);
+}
+
+/// A stand-in link driver that records its arguments. This is how `--cc` and
+/// the conditional shim injection are gated without an MPI installation.
+fn link_arguments(fixture_name: &str, tag: &str) -> String {
+    let log = output_path(tag).with_extension("log");
+    let fake_cc = output_path(tag).with_extension("cc");
+    std::fs::write(
+        &fake_cc,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" >> {}\nexit 0\n",
+            log.display()
+        ),
+    )
+    .expect("could not write the stand-in cc");
+    let mut perms = std::fs::metadata(&fake_cc).expect("stat").permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
+    std::fs::set_permissions(&fake_cc, perms).expect("chmod");
+    let _ = std::fs::remove_file(&log);
+
+    let status = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture(fixture_name))
+        .arg("-o")
+        .arg(output_path(tag))
+        .arg("--cc")
+        .arg(&fake_cc)
+        .status()
+        .expect("could not run fortressc");
+    assert!(status.success(), "fortressc failed with --cc: {status:?}");
+
+    let recorded = std::fs::read_to_string(&log).expect("--cc was not invoked");
+    let _ = std::fs::remove_file(&log);
+    let _ = std::fs::remove_file(&fake_cc);
+    let _ = std::fs::remove_file(output_path(tag));
+    recorded
+}
+
+/// One argument per line, so `.shims.c` and `.mpi_shims.c` are distinguishable.
+fn linked_a(args: &str, suffix: &str) -> bool {
+    args.lines().any(|line| line.ends_with(suffix))
+}
+
+#[test]
+fn the_mpi_shim_is_linked_into_a_program_that_uses_mpi() {
+    let args = link_arguments("mpi_hello.fss", "cc-mpi");
+    assert!(
+        linked_a(&args, ".mpi_shims.c"),
+        "the MPI shim was not linked:\n{args}"
+    );
+    assert!(
+        linked_a(&args, ".shims.c"),
+        "the base runtime was not linked:\n{args}"
+    );
+}
+
+#[test]
+fn the_mpi_shim_stays_out_of_a_program_that_does_not_use_mpi() {
+    let args = link_arguments("fact.fss", "cc-plain");
+    assert!(
+        !linked_a(&args, ".mpi_shims.c"),
+        "a non-MPI program must not drag in the MPI runtime:\n{args}"
+    );
+    assert!(
+        linked_a(&args, ".shims.c"),
+        "the base runtime was not linked:\n{args}"
+    );
+}

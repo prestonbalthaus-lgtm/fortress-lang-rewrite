@@ -16,8 +16,8 @@ mod types;
 
 pub use error::TypeError;
 pub use types::{
-    ArithOp, CompareOp, Target, Type, TypedBlockItem, TypedComponent, TypedExpr, TypedExprKind,
-    TypedFn, TypedParam,
+    ArithOp, CompareOp, MpiOp, Target, Type, TypedBlockItem, TypedComponent, TypedExpr,
+    TypedExprKind, TypedFn, TypedParam,
 };
 
 use std::collections::HashMap;
@@ -38,6 +38,7 @@ struct Signature {
 struct Checker {
     functions: HashMap<String, Signature>,
     scopes: Vec<HashMap<String, Type>>,
+    uses_mpi: bool,
 }
 
 impl Checker {
@@ -69,6 +70,7 @@ impl Checker {
         Ok(Self {
             functions,
             scopes: Vec::new(),
+            uses_mpi: false,
         })
     }
 
@@ -82,6 +84,7 @@ impl Checker {
             name: component.name.clone(),
             exports: component.exports.clone(),
             functions,
+            uses_mpi: self.uses_mpi,
         })
     }
 
@@ -540,6 +543,9 @@ impl Checker {
             });
         };
 
+        if let Some(op) = MpiOp::from_name(name) {
+            return self.mpi(op, args, span, expected);
+        }
         match name.as_str() {
             "widen" => self.widen(args, span, expected),
             "println" => self.println(args, span, expected),
@@ -574,6 +580,37 @@ impl Checker {
                 })
             }
         }
+    }
+
+    /// The MPI builtins. All four take no arguments: the communicator is fixed
+    /// to `MPI_COMM_WORLD` inside the shim, because its expansion is
+    /// implementation specific and must not reach generated code.
+    fn mpi(
+        &mut self,
+        op: MpiOp,
+        args: &[Expr],
+        span: Span,
+        expected: Option<Type>,
+    ) -> Checked<TypedExpr> {
+        if !args.is_empty() {
+            return Err(TypeError::ArityMismatch {
+                span,
+                name: op.name().to_owned(),
+                expected: 0,
+                found: args.len(),
+            });
+        }
+        let ty = op.returns();
+        require(ty, expected, span)?;
+        self.uses_mpi = true;
+        Ok(TypedExpr {
+            kind: TypedExprKind::Apply {
+                target: Target::Mpi(op),
+                args: Vec::new(),
+            },
+            ty,
+            span,
+        })
     }
 
     /// The only numeric conversion in M1, and the only way to get one.

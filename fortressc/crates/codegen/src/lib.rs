@@ -53,6 +53,9 @@ fn build_module<'ctx>(
         scopes: Vec::new(),
     };
     lowering.declare_runtime();
+    if component.uses_mpi {
+        lowering.declare_mpi();
+    }
     lowering.declare_functions(component)?;
     for f in &component.functions {
         lowering.define_function(f)?;
@@ -131,6 +134,28 @@ impl<'ctx> Lowering<'ctx> {
         let concat = ptr.fn_type(&[ptr.into(), ptr.into()], false);
         self.module
             .add_function("concat_string_string", concat, Some(Linkage::External));
+    }
+
+    /// The MPI shims, declared only for a component that calls one. A program
+    /// that never touches MPI must not name an MPI symbol at all, so that it
+    /// keeps linking without `libmpi`.
+    fn declare_mpi(&mut self) {
+        let i32t = self.context.i32_type();
+        let void = self.context.void_type();
+        let shims = [
+            ("fortress_mpi_init", false),
+            ("fortress_mpi_comm_rank", true),
+            ("fortress_mpi_comm_size", true),
+            ("fortress_mpi_finalize", false),
+        ];
+        for (name, returns_rank) in shims {
+            let ty = if returns_rank {
+                i32t.fn_type(&[], false)
+            } else {
+                void.fn_type(&[], false)
+            };
+            self.module.add_function(name, ty, Some(Linkage::External));
+        }
     }
 
     /// Declared before any body is defined, so recursion and forward calls
@@ -311,6 +336,7 @@ impl<'ctx> Lowering<'ctx> {
                 let value = self.widen_boolean_for_c(*ty, value)?;
                 self.call_runtime(&target.symbol(), &[value], false)
             }
+            Target::Mpi(op) => self.call_runtime(&target.symbol(), &[], op.returns() != Type::Void),
             Target::UserFn { name } => {
                 let function = *self
                     .functions

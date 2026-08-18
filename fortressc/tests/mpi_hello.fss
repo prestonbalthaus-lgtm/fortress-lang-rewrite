@@ -1,0 +1,11 @@
+component mpi_hello
+export Executable
+
+run() = do
+   mpiInit()
+   rank:ZZ32 = mpiCommRank()
+   size:ZZ32 = mpiCommSize()
+   println("rank " rank " of " size)
+   mpiFinalize()
+end
+end
