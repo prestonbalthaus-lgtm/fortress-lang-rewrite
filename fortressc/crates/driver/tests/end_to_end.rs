@@ -132,7 +132,7 @@ fn the_driver_reports_what_it_parsed() {
         .expect("could not run fortressc");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("parsed component `fact` with 2 declaration(s)"),
+        stderr.contains("parsed and typechecked `fact` with 2 function(s)"),
         "the AST must actually reach the driver:\n{stderr}"
     );
 }
@@ -162,4 +162,40 @@ fn a_parse_error_is_a_user_diagnostic_not_a_compiler_bug() {
         "expected the postfix diagnostic:\n{stderr}"
     );
     let _ = std::fs::remove_file(&bad);
+}
+
+#[test]
+fn a_type_error_is_a_user_diagnostic_and_names_the_fix() {
+    let bad = output_path("badtype").with_extension("fss");
+    // A ZZ32 value in a ZZ64 slot: the locked rule, end to end.
+    std::fs::write(&bad, "component a\nf(x:ZZ32):ZZ64 = x\nend\n").expect("write fixture");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(&bad)
+        .arg("-o")
+        .arg(output_path("badtype-out"))
+        .output()
+        .expect("could not run fortressc");
+
+    assert_eq!(out.status.code(), Some(1), "a type error is exit 1, not 70");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("not implicitly converted") && stderr.contains("widen"),
+        "the diagnostic should name the fix:\n{stderr}"
+    );
+    let _ = std::fs::remove_file(&bad);
+}
+
+#[test]
+fn the_driver_reports_that_it_typechecked() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture("fact.fss"))
+        .arg("--emit-ir")
+        .output()
+        .expect("could not run fortressc");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("typechecked `fact` with 2 function(s)"),
+        "the typed AST must reach the driver:\n{stderr}"
+    );
 }

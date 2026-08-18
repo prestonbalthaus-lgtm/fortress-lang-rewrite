@@ -72,28 +72,28 @@ fn compile(options: &Options) -> Result<(), Failure> {
     let source = std::fs::read_to_string(&options.source)
         .map_err(|e| Failure::User(format!("cannot read source: {e}")))?;
 
-    // Lexing and parsing are real stages and their diagnostics are user errors.
-    // Codegen is still the placeholder: it accepts the AST and discards it.
+    // Lexing, parsing and type checking are real stages and their diagnostics
+    // are user errors. Codegen is still the placeholder: it accepts the typed
+    // AST and discards it.
     let tokens = fortress_lexer::lex(&source).map_err(|e| Failure::User(e.to_string()))?;
     let component = fortress_parser::parse(&tokens).map_err(|e| Failure::User(e.to_string()))?;
+    let typed = fortress_types::check(&component).map_err(|e| Failure::User(e.to_string()))?;
 
     eprintln!(
-        "fortressc: lexed {} tokens, parsed component `{}` with {} declaration(s)",
+        "fortressc: lexed {} tokens, parsed and typechecked `{}` with {} function(s)",
         tokens.len(),
-        component.name,
-        component.decls.len()
+        typed.name,
+        typed.functions.len()
     );
 
     if options.emit_ir {
-        let ir =
-            fortress_codegen::emit_ir(&component).map_err(|e| Failure::Internal(e.to_string()))?;
+        let ir = fortress_codegen::emit_ir(&typed).map_err(|e| Failure::Internal(e.to_string()))?;
         print!("{ir}");
         return Ok(());
     }
 
     let object = options.output.with_extension("o");
-    fortress_codegen::emit_object(&component, &object)
-        .map_err(|e| Failure::Internal(e.to_string()))?;
+    fortress_codegen::emit_object(&typed, &object).map_err(|e| Failure::Internal(e.to_string()))?;
     link(&object, &options.output)?;
     let _ = std::fs::remove_file(&object);
     Ok(())

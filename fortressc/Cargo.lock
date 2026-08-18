@@ -90,6 +90,8 @@ name = "fortress-types"
 version = "0.0.0"
 dependencies = [
  "fortress-ast",
+ "fortress-lexer",
+ "fortress-parser",
 ]
 
 [[package]]

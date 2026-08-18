@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use fortress_ast::Component;
+use fortress_types::TypedComponent;
 use inkwell::context::Context;
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
@@ -46,13 +46,14 @@ const PLACEHOLDER_EXIT_CODE: u64 = 42;
 
 /// Lowers `component` to a native object file at `object_path`.
 ///
-/// The component is accepted and discarded: the parser produces a real AST and
-/// hands it across this boundary, but nothing here reads it yet.
+/// The typed component is accepted and discarded. Every operator and call in it
+/// already names one concrete target, so when lowering lands nothing here will
+/// need to ask a type question; it will only have to emit what it is told.
 ///
 /// `Module::verify` runs unconditionally: catching malformed IR here rather
 /// than as a cryptic link failure several steps later is worth the cost while
 /// the compiler is young.
-pub fn emit_object(component: &Component, object_path: &Path) -> Result<(), CodegenError> {
+pub fn emit_object(component: &TypedComponent, object_path: &Path) -> Result<(), CodegenError> {
     let _ = component;
     let context = Context::create();
     let module = context.create_module("fortress");
@@ -113,7 +114,7 @@ fn write_object(module: &inkwell::module::Module<'_>, path: &Path) -> Result<(),
 }
 
 /// Emits the LLVM IR as text. Used by tests and `--emit-ir`.
-pub fn emit_ir(component: &Component) -> Result<String, CodegenError> {
+pub fn emit_ir(component: &TypedComponent) -> Result<String, CodegenError> {
     let _ = component;
     let context = Context::create();
     let module = context.create_module("fortress");

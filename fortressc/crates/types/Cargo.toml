@@ -9,5 +9,9 @@ publish = false
 [dependencies]
 fortress-ast.workspace = true
 
+[dev-dependencies]
+fortress-lexer.workspace = true
+fortress-parser.workspace = true
+
 [lints]
 workspace = true
