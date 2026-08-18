@@ -484,3 +484,88 @@ fn the_soak_program_runs_to_completion() {
     assert_eq!(out.status.code(), Some(0));
     let _ = std::fs::remove_file(&binary);
 }
+
+// ------------------------------------------------ M3b: arrays and iteration
+
+/// The milestone: allocate, populate with a loop, read back, and sum.
+/// 0^2 + ... + 99^2 is 99*100*199/6.
+#[test]
+fn an_array_program_populates_itself_and_computes_the_right_sum() {
+    let binary = compile_fixture("arraysum.fss", "arraysum");
+    let out = run(&binary);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "length = 100\nsum = 328350\n"
+    );
+    assert_eq!(out.status.code(), Some(0));
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// Out of bounds is a fact about the program and should read like one. A
+/// segmentation fault is not a diagnostic.
+#[test]
+fn an_out_of_bounds_subscript_halts_cleanly_rather_than_faulting() {
+    let binary = compile_fixture("oob.fss", "oob");
+    let out = run(&binary);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "expected a clean exit; a `None` code means it was killed by a signal"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("out of bounds") && stderr.contains("(5, 3)"),
+        "the diagnostic should name the index and the length:\n{stderr}"
+    );
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// A mutable declared inside a loop body gets one stack slot, not one per
+/// iteration. Without an entry-block `alloca` this overflows the stack.
+#[test]
+fn a_mutable_declared_in_a_loop_body_does_not_grow_the_stack() {
+    let binary = compile_fixture("loopalloca.fss", "loopalloca");
+    let out = run(&binary);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "1000000\n");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "a signal here is a stack overflow"
+    );
+    let _ = std::fs::remove_file(&binary);
+}
+
+#[test]
+fn a_while_loop_lowers_to_the_three_expected_blocks() {
+    let ir = emit_ir("loopalloca.fss");
+    for expected in ["loop.cond:", "loop.body:", "loop.end:"] {
+        assert!(ir.contains(expected), "missing {expected} in:\n{ir}");
+    }
+}
+
+#[test]
+fn every_alloca_sits_in_the_entry_block() {
+    let ir = emit_ir("loopalloca.fss");
+    let last_alloca = ir
+        .rfind("alloca")
+        .unwrap_or_else(|| panic!("no alloca in:\n{ir}"));
+    let first_loop = ir
+        .find("loop.cond:")
+        .unwrap_or_else(|| panic!("no loop in:\n{ir}"));
+    assert!(
+        last_alloca < first_loop,
+        "an alloca after the first loop label means one per iteration:\n{ir}"
+    );
+}
+
+#[test]
+fn a_subscript_goes_through_the_bounds_checked_slot_shim() {
+    let ir = emit_ir("arraysum.fss");
+    for expected in [
+        "call ptr @fortress_array_alloc(",
+        "call ptr @fortress_array_slot(",
+        "call i64 @fortress_array_length(",
+    ] {
+        assert!(ir.contains(expected), "missing {expected} in:\n{ir}");
+    }
+}

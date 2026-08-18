@@ -249,6 +249,9 @@ fn collect_targets(e: &TypedExpr, out: &mut Vec<String>) {
                     fortress_types::TypedBlockItem::Binding { value, .. } => {
                         collect_targets(value, out);
                     }
+                    fortress_types::TypedBlockItem::Assign { value, .. } => {
+                        collect_targets(value, out);
+                    }
                     fortress_types::TypedBlockItem::Expr(e) => collect_targets(e, out),
                 }
             }
@@ -437,5 +440,171 @@ fn one_mpi_call_anywhere_marks_the_whole_component() {
     assert!(
         c.uses_mpi,
         "uses_mpi drives whether the driver links the MPI shim"
+    );
+}
+
+// ------------------------------------------------ M3b: arrays and iteration
+
+#[test]
+fn an_array_literal_takes_its_element_type_from_its_slot() {
+    let e = body("f():Array[\\ZZ64\\] = [1, 2, 3]");
+    assert_eq!(e.ty, Type::Array(fortress_types::Elem::ZZ64));
+}
+
+#[test]
+fn an_unpinned_array_literal_defaults_to_zz32_like_a_bare_literal() {
+    let c = typed("component t\nf() = do\n   a = [1, 2]\n   println(a[0])\nend\nend\n");
+    let f = c.functions.first().expect("f");
+    let TypedExprKind::Block { items, .. } = &f.body.kind else {
+        panic!("expected a block")
+    };
+    let Some(fortress_types::TypedBlockItem::Binding { ty, .. }) = items.first() else {
+        panic!("expected the a binding")
+    };
+    assert_eq!(*ty, Type::Array(fortress_types::Elem::ZZ32));
+}
+
+#[test]
+fn indexing_an_array_yields_its_element_type() {
+    let e = body("f(a:Array[\\ZZ64\\]):ZZ64 = a[0]");
+    assert_eq!(e.ty, Type::ZZ64);
+}
+
+#[test]
+fn length_of_an_array_is_a_zz64() {
+    let e = body("f(a:Array[\\ZZ32\\]):ZZ64 = length(a)");
+    assert_eq!(e.ty, Type::ZZ64);
+    assert_eq!(target_of(&e).as_deref(), Some("fortress_array_length"));
+}
+
+#[test]
+fn length_of_something_that_is_not_an_array_is_rejected() {
+    let e = body_error("f(x:ZZ64):ZZ64 = length(x)");
+    assert!(
+        matches!(e, TypeError::NotAnArray { .. }),
+        "expected a not-an-array error, got {e}"
+    );
+}
+
+#[test]
+fn indexing_something_that_is_not_an_array_is_rejected() {
+    let e = body_error("f(x:ZZ64):ZZ64 = x[0]");
+    assert!(
+        matches!(e, TypeError::NotAnArray { .. }),
+        "expected a not-an-array error, got {e}"
+    );
+}
+
+/// The no-implicit-conversion rule holds at the new boundary too: subscripts
+/// are ZZ64, and a ZZ32 variable in that slot needs `widen`.
+#[test]
+fn a_zz32_subscript_is_not_implicitly_widened() {
+    let e = body_error("f(a:Array[\\ZZ64\\], i:ZZ32):ZZ64 = a[i]");
+    assert!(
+        matches!(e, TypeError::ImplicitWideningRejected { .. }),
+        "expected the widening diagnostic, got {e}"
+    );
+}
+
+#[test]
+fn a_sized_array_takes_its_element_type_from_the_binding() {
+    let c = typed(
+        "component t\nf() = do\n   a:Array[\\ZZ64\\] = array(8)\n   println(a[0])\nend\nend\n",
+    );
+    let f = c.functions.first().expect("f");
+    let TypedExprKind::Block { items, .. } = &f.body.kind else {
+        panic!("expected a block")
+    };
+    let Some(fortress_types::TypedBlockItem::Binding { ty, .. }) = items.first() else {
+        panic!("expected the a binding")
+    };
+    assert_eq!(*ty, Type::Array(fortress_types::Elem::ZZ64));
+}
+
+#[test]
+fn a_sized_array_with_no_context_cannot_pick_an_element_type() {
+    let e = body_error("f() = do\n   a = array(8)\n   println(length(a))\nend");
+    assert!(
+        matches!(e, TypeError::ElementTypeUnknown { .. }),
+        "expected an unknown-element-type error, got {e}"
+    );
+}
+
+#[test]
+fn an_array_of_arrays_is_refused_rather_than_half_supported() {
+    let e = body_error("f(a:Array[\\Array[\\ZZ64\\]\\]):ZZ64 = 0");
+    assert!(
+        matches!(e, TypeError::UnsupportedElementType { .. }),
+        "expected an unsupported-element error, got {e}"
+    );
+}
+
+#[test]
+fn assigning_to_an_immutable_binding_is_rejected() {
+    let e = body_error("f() = do\n   i:ZZ64 = 0\n   i := 1\nend");
+    assert!(
+        matches!(e, TypeError::AssignToImmutable { .. }),
+        "expected an immutability error, got {e}"
+    );
+}
+
+#[test]
+fn assigning_to_an_undeclared_name_names_the_fix() {
+    let e = body_error("f() = do\n   i := 1\nend");
+    assert!(
+        matches!(e, TypeError::AssignToUndeclared { .. }),
+        "expected an undeclared-name error, got {e}"
+    );
+    assert!(
+        e.to_string().contains(":="),
+        "the diagnostic should show the declaration form:\n{e}"
+    );
+}
+
+#[test]
+fn a_mutable_binding_can_be_assigned() {
+    let c = typed("component t\nf() = do\n   i:ZZ64 := 0\n   i := 1\nend\nend\n");
+    assert_eq!(c.functions.len(), 1);
+}
+
+/// The binding is immutable, the container is not. `a` cannot be rebound; its
+/// elements can be written.
+#[test]
+fn elements_of_an_immutable_array_binding_can_still_be_assigned() {
+    let c =
+        typed("component t\nf() = do\n   a:Array[\\ZZ64\\] = array(4)\n   a[0] := 7\nend\nend\n");
+    assert_eq!(c.functions.len(), 1);
+}
+
+#[test]
+fn assigning_the_wrong_type_to_an_element_is_rejected() {
+    let e = body_error("f() = do\n   a:Array[\\ZZ64\\] = array(4)\n   a[0] := true\nend");
+    assert!(
+        matches!(e, TypeError::Mismatch { .. }),
+        "expected a mismatch, got {e}"
+    );
+}
+
+#[test]
+fn a_while_condition_must_be_boolean() {
+    let e = body_error("f() = do\n   while 1 do\n      println(\"x\")\n   end\nend");
+    assert!(
+        matches!(e, TypeError::ConditionNotBoolean { .. }),
+        "expected a condition error, got {e}"
+    );
+}
+
+#[test]
+fn a_while_loop_is_void() {
+    let e = body("f() = do\n   i:ZZ64 := 0\n   while i < 3 do\n      i := i + 1\n   end\nend");
+    assert_eq!(e.ty, Type::Void);
+}
+
+#[test]
+fn a_function_call_is_not_an_assignment_target() {
+    let e = body_error("f() = do\n   println(1) := 2\nend");
+    assert!(
+        matches!(e, TypeError::InvalidAssignTarget { .. }),
+        "expected an invalid-target error, got {e}"
     );
 }

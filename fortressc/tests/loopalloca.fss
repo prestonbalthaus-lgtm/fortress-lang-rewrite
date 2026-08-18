@@ -1,0 +1,15 @@
+component loopalloca
+export Executable
+
+run() = do
+   i:ZZ64 := 0
+   while i < 1000000 do
+      a:ZZ64 := i
+      b:ZZ64 := a + 1
+      c:ZZ64 := b
+      d:ZZ64 := c
+      i := d
+   end
+   println(i)
+end
+end

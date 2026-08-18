@@ -1,0 +1,8 @@
+component oob
+export Executable
+
+run() = do
+   a:Array[\ZZ64\] = array(3)
+   println(a[5])
+end
+end

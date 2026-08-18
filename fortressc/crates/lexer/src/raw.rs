@@ -328,6 +328,16 @@ pub(crate) enum Raw {
     LParen,
     #[token(")")]
     RParen,
+    // `[\` and `\]` are listed first so logos prefers them over the bare
+    // bracket followed by a backslash.
+    #[token("[\\")]
+    LGeneric,
+    #[token("\\]")]
+    RGeneric,
+    #[token("[")]
+    LBracket,
+    #[token("]")]
+    RBracket,
     #[token(",")]
     Comma,
     #[token(";")]

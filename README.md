@@ -147,13 +147,39 @@ Objects are also built for a chosen processor rather than for whatever ran the
 compiler. `--target-cpu` defaults to `x86-64-v3` and accepts `skylake-avx512`
 for the Platinum 8160s, or `native`.
 
+M3b is done: arrays and iteration.
+
+```
+component arraysum
+export Executable
+
+run() = do
+   n:ZZ64 = 100
+   squares:Array[\ZZ64\] = array(n)
+
+   i:ZZ64 := 0
+   while i < n do
+      squares[i] := i i
+      i := i + 1
+   end
+   ...
+```
+
+`Array[\T\]` is one dimensional and homogeneous, subscripts are `ZZ64` so an
+array can be longer than 2^31, and every subscript is bounds checked: out of
+range prints `fortress: array index out of bounds (5, 3)` and exits 1 rather
+than faulting. Array storage is allocated scannable, so the collector can see
+the strings an `Array[\String\]` holds; `tools/array-gate.sh` measures that
+rather than assuming it.
+
 The compiler lives in `fortressc/`: a six crate Rust workspace, lexer through
 LLVM codegen. See `docs/superpowers/specs/` for the M1 design, the lexer plan
 and the M2a MPI boundary, all of which record why the rules are what they are.
 
-What M1 does not do: traits, objects, generics, arrays, `for`, parallelism,
-`atomic`, or user definable syntax. It parses about 9% of the legacy corpus,
-which is the point rather than a shortfall.
+Still missing: traits, objects, generics, `for` and generators, parallelism,
+`atomic`, and user definable syntax. The lexer takes 939 of the 1956 corpus
+files (48%) and the parser 52 of those; what blocks the parser is `trait`,
+`object` and `api`, which is the next milestone.
 
 The legacy Sun implementation is kept as reference material:
 
@@ -193,6 +219,7 @@ compiler so that it matches the target's C library.
 Gates that cargo cannot run:
 
 ```
+./tools/array-gate.sh     arrays, bounds, the loop, and what the collector sees
 ./tools/memory-gate.sh    the collector, and the leak it replaced
 ./tools/mpi-gate.sh       the MPI link and four real ranks (needs the image)
 ```

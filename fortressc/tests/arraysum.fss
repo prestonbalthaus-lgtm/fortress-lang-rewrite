@@ -1,0 +1,24 @@
+component arraysum
+export Executable
+
+run() = do
+   n:ZZ64 = 100
+   squares:Array[\ZZ64\] = array(n)
+
+   i:ZZ64 := 0
+   while i < n do
+      squares[i] := i i
+      i := i + 1
+   end
+
+   total:ZZ64 := 0
+   j:ZZ64 := 0
+   while j < n do
+      total := total + squares[j]
+      j := j + 1
+   end
+
+   println("length = " length(squares))
+   println("sum = " total)
+end
+end

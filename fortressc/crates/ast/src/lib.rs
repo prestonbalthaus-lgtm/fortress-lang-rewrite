@@ -4,7 +4,7 @@
 mod nodes;
 
 pub use nodes::{
-    BinOp, Binding, BlockItem, Component, Decl, Expr, Fixity, FnDecl, Param, TypeRef, UnOp,
+    Assign, BinOp, Binding, BlockItem, Component, Decl, Expr, Fixity, FnDecl, Param, TypeRef, UnOp,
 };
 
 /// Byte offsets into the source. Line and column are derived on demand by the

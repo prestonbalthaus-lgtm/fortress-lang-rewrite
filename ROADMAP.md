@@ -21,11 +21,16 @@ multi-node runs and the InfiniBand fabric wait until the compiler is finished.
 What is in front instead is language completion, in this order and no other:
 
 1. **Memory.** Done. Boehm collector, `docs/superpowers/specs/2026-08-18-m3a-memory.md`.
-2. **Arrays and iteration.** Next. `for`, generators, indexing, `ZZ64` indexing
-   past 2^31. This is also what forces a scannable allocator, since an array
-   holds pointers and the string allocator deliberately does not scan.
-3. **Traits and dispatch.** Last, because it is the largest and because arrays
-   in the standard library are written in terms of it.
+2. **Arrays and iteration.** Done, primitively.
+   `docs/superpowers/specs/2026-08-18-m3b-arrays.md`. `Array[\T\]`, `ZZ64`
+   subscripts, bounds checking, `while`, and mutable bindings. It forced the
+   scannable allocator, as expected. `for`, generators and comprehensions are
+   held back with traits: `for` is parallel by default and cannot be faked with
+   a counter.
+3. **Traits and dispatch.** Next, and last of the three, because it is the
+   largest and because the standard library's arrays are written in terms of it.
+   It is also what the corpus is waiting on: `trait` and `object` are the top
+   two things blocking the parser.
 
 ## Phases
 

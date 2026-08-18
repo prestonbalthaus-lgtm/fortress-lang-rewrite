@@ -237,7 +237,7 @@ fn the_acceptance_programs_vocabulary_is_not_reserved() {
 #[test]
 fn the_other_reserved_words_are_reserved_not_identifiers() {
     for word in [
-        "atomic", "trait", "object", "opr", "grammar", "where", "for", "while",
+        "atomic", "trait", "object", "opr", "grammar", "where", "for", "var",
     ] {
         assert_eq!(
             kinds(word),
@@ -467,4 +467,58 @@ fn fat_arrow_is_named_rather_than_reported_as_a_malformed_equals() {
     assert_eq!(err("x => y"), LexErrorKind::FatArrowUnsupported);
     // A genuinely malformed `=` still reports as one.
     assert_eq!(err("x =: y"), LexErrorKind::MalformedEquals);
+}
+
+// ------------------------------------------------------- M3b: brackets
+
+#[test]
+fn square_brackets_are_their_own_tokens() {
+    assert_eq!(
+        kinds("a[0]"),
+        vec![
+            Kind::Ident("a"),
+            Kind::LBracket,
+            int("0", "0"),
+            Kind::RBracket,
+            Kind::Eof
+        ]
+    );
+}
+
+/// `[\` and `\]` are one token each, not a bracket glued to a backslash. They
+/// have to win the longest match or `Array[\ZZ64\]` lexes as garbage.
+#[test]
+fn the_static_argument_brackets_are_single_tokens() {
+    assert_eq!(
+        kinds("Array[\\ZZ64\\]"),
+        vec![
+            Kind::Ident("Array"),
+            Kind::LGeneric,
+            Kind::Ident("ZZ64"),
+            Kind::RGeneric,
+            Kind::Eof
+        ]
+    );
+}
+
+#[test]
+fn an_array_literal_lexes_as_brackets_and_commas() {
+    assert_eq!(
+        kinds("[1, 2]"),
+        vec![
+            Kind::LBracket,
+            int("1", "1"),
+            Kind::Comma,
+            int("2", "2"),
+            Kind::RBracket,
+            Kind::Eof
+        ]
+    );
+}
+
+#[test]
+fn while_is_a_keyword_now_that_the_loop_exists() {
+    assert_eq!(kinds("while"), vec![Kind::KwWhile, Kind::Eof]);
+    // And still not a prefix of an identifier.
+    assert_eq!(kinds("whiled"), vec![Kind::Ident("whiled"), Kind::Eof]);
 }
