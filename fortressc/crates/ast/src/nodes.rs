@@ -11,6 +11,8 @@ pub struct Component {
     /// compilation, so there is nothing for an import to resolve against yet.
     pub imports: Vec<ImportDecl>,
     pub decls: Vec<Decl>,
+    /// Empty until monomorphization has run.
+    pub bounds: Vec<BoundObligation>,
     /// `api Foo ... end` rather than `component Foo ... end`. Parsed so the
     /// corpus metric can move; an api has no bodies and is not executable, so
     /// the type checker refuses it rather than pretending to compile one.
@@ -39,6 +41,7 @@ pub enum Decl {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FnDecl {
     pub name: String,
+    pub static_params: Vec<StaticParam>,
     pub params: Vec<Param>,
     pub return_type: Option<TypeRef>,
     /// `None` only inside an `api`, where a declaration is a signature.
@@ -52,6 +55,7 @@ pub struct FnDecl {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TraitDecl {
     pub name: String,
+    pub static_params: Vec<StaticParam>,
     pub extends: Vec<TypeRef>,
     pub comprises: Vec<TypeRef>,
     pub excludes: Vec<TypeRef>,
@@ -64,6 +68,7 @@ pub struct TraitDecl {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectDecl {
     pub name: String,
+    pub static_params: Vec<StaticParam>,
     /// `None` is a singleton. `Some(vec![])` is `object O() ... end`.
     pub params: Option<Vec<Param>>,
     pub extends: Vec<TypeRef>,
@@ -92,6 +97,7 @@ pub struct FieldDecl {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MethodDecl {
     pub name: String,
+    pub static_params: Vec<StaticParam>,
     pub params: Vec<Param>,
     pub return_type: Option<TypeRef>,
     pub body: Option<Expr>,
@@ -105,13 +111,37 @@ pub struct Param {
     pub span: Span,
 }
 
-/// Types are bare names (`ZZ32`, `ZZ64`, `RR64`) or a name with one static
-/// argument (`Array[\ZZ64\]`). Resolution happens in the types crate; the
-/// parser only records what was written.
+/// Types are bare names (`ZZ32`) or a name applied to static arguments
+/// (`Map[\ZZ64, List[\String\]\]`). Resolution happens in the types crate; the
+/// parser only records what was written. After monomorphization no `TypeRef` in
+/// a component has arguments -- expansion rewrites every one to a ground name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeRef {
     pub name: String,
-    pub argument: Option<Box<TypeRef>>,
+    pub args: Vec<TypeRef>,
+    pub span: Span,
+}
+
+/// `[\T extends {Foo, Bar}\]`. Type parameters only: `nat`, `int`, `bool`,
+/// `opr`, `unit` and `dim` are refused by the parser, because mixing static
+/// integers with type parameters is a dependent type system and this is not one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StaticParam {
+    pub name: String,
+    pub bounds: Vec<TypeRef>,
+    pub span: Span,
+}
+
+/// Recorded by monomorphization, discharged by the type checker. A bound cannot
+/// be checked while it is being substituted -- subtyping needs the registry, and
+/// the registry is built from the ground component expansion produces -- so the
+/// obligation is carried across the phase boundary instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoundObligation {
+    pub subject: TypeRef,
+    pub bound: TypeRef,
+    /// The static parameter this came from, for the diagnostic.
+    pub parameter: String,
     pub span: Span,
 }
 
@@ -233,6 +263,13 @@ pub enum Expr {
         name: String,
         span: Span,
     },
+    /// `f[\ZZ64\]` in expression position. Monomorphization rewrites this to a
+    /// plain `Var` naming the instantiation, so nothing downstream sees it.
+    Instantiate {
+        callee: Box<Expr>,
+        args: Vec<TypeRef>,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -280,7 +317,8 @@ impl Expr {
             | Self::ArrayLit { span, .. }
             | Self::Index { span, .. }
             | Self::While { span, .. }
-            | Self::Field { span, .. } => *span,
+            | Self::Field { span, .. }
+            | Self::Instantiate { span, .. } => *span,
         }
     }
 }

@@ -919,3 +919,186 @@ fn a_lone_declaration_is_never_sized_or_enumerated() {
     assert_eq!(last_target(&src), "f");
     assert!(typed(&src).dispatches.is_empty());
 }
+
+// ------------------------------------ M3d: generics by monomorphization
+
+#[test]
+fn an_instantiation_is_a_distinct_concrete_type_per_argument() {
+    let c = typed(
+        "component t\n\
+         object Cell[\\T\\](held: T) end\n\
+         run() = do\n\
+           a: Cell[\\ZZ64\\] = Cell[\\ZZ64\\](1)\n\
+           b: Cell[\\String\\] = Cell[\\String\\](\"x\")\n\
+           println(a.held)\n\
+         end\n\
+         end\n",
+    );
+    let names: Vec<&str> = c.objects.iter().map(|o| o.name).collect();
+    assert_eq!(names, vec!["Cell$String$e", "Cell$ZZ64$e"]);
+    // Distinct tags: they are different types, not one erased type.
+    let tags: Vec<u32> = c.objects.iter().map(|o| o.tag).collect();
+    assert_eq!(tags, vec![1, 2]);
+}
+
+#[test]
+fn the_stored_field_keeps_its_own_type_rather_than_being_boxed() {
+    let c = typed(
+        "component t\n\
+         object Cell[\\T\\](held: T) end\n\
+         run() = do\n\
+           a: Cell[\\ZZ64\\] = Cell[\\ZZ64\\](1)\n\
+           println(a.held)\n\
+         end\n\
+         end\n",
+    );
+    let cell = c.objects.first().expect("an instantiation");
+    assert_eq!(cell.fields.first().map(|f| f.ty), Some(Type::ZZ64));
+}
+
+#[test]
+fn a_generic_named_without_static_arguments_is_refused() {
+    let e = body_error("object Cell[\\T\\](held: T) end\nrun(): ZZ32 = do Cell\n 1 end");
+    assert!(
+        matches!(e, TypeError::StaticArgumentsRequired { .. }),
+        "got {e}"
+    );
+}
+
+#[test]
+fn static_arguments_are_counted() {
+    let e = body_error(
+        "object Pair[\\A, B\\](a: A, b: B) end\n\
+         run(): ZZ32 = do Pair[\\ZZ32\\](1, 2)\n 1 end",
+    );
+    assert!(
+        matches!(e, TypeError::StaticArgumentCountMismatch { .. }),
+        "got {e}"
+    );
+}
+
+/// Specification 1.0's uniformity rule, enforced. It is what makes an overload
+/// set uniformly generic or uniformly ground, and therefore what makes
+/// monomorphizing one produce a fresh disjoint set instead of adding a member
+/// to an existing one.
+#[test]
+fn an_overload_set_may_not_mix_generic_and_ground_declarations() {
+    let e = body_error("size[\\T\\](x: T): ZZ32 = 1\nsize(x: ZZ32): ZZ32 = 2\nrun(): ZZ32 = 0");
+    assert!(
+        matches!(e, TypeError::OverloadSetStaticParamsDiffer { .. }),
+        "got {e}"
+    );
+}
+
+#[test]
+fn a_bound_is_discharged_after_the_registry_exists() {
+    let ok = typed(
+        "component t\n\
+         trait Ink end\n\
+         object Solid extends {Ink} end\n\
+         object Pen[\\T extends Ink\\](tip: T) end\n\
+         run() = do p: Pen[\\Solid\\] = Pen[\\Solid\\](Solid)\n println(1) end\n\
+         end\n",
+    );
+    assert!(ok.objects.iter().any(|o| o.name == "Pen$Solid$e"));
+
+    let e = body_error(
+        "trait Ink end\n\
+         object Plain end\n\
+         object Pen[\\T extends Ink\\](tip: T) end\n\
+         run() = do p: Pen[\\Plain\\] = Pen[\\Plain\\](Plain)\n println(1) end",
+    );
+    assert!(matches!(e, TypeError::BoundNotSatisfied { .. }), "got {e}");
+}
+
+/// The named casualty. No monomorphizing compiler compiles this at any limit,
+/// so it has to be refused rather than hung on.
+#[test]
+fn polymorphic_recursion_stops_at_the_ceiling() {
+    let e = body_error(
+        "object Wrap[\\T\\](held: T) end\n\
+         deeper[\\T\\](x: T): ZZ32 = deeper[\\Wrap[\\T\\]\\](Wrap[\\T\\](x))\n\
+         run(): ZZ32 = deeper[\\ZZ64\\](1)",
+    );
+    match e {
+        TypeError::TooManyInstantiations { limit, .. } => {
+            assert_eq!(limit, fortress_types::MAX_INSTANTIATIONS);
+        }
+        other => panic!("got {other}"),
+    }
+}
+
+/// An F-bound is not polymorphic recursion and must not be caught by the same
+/// net: `Equality`, `Integral` and `List` are all F-bounded, and rejecting them
+/// would reject the prelude.
+#[test]
+fn an_f_bound_converges_in_one_step() {
+    let c = typed(
+        "component t\n\
+         trait Same[\\T\\] end\n\
+         object Num extends {Same[\\Num\\]} end\n\
+         object Holder[\\T extends Same[\\T\\]\\](x: T) end\n\
+         run() = do h: Holder[\\Num\\] = Holder[\\Num\\](Num)\n println(1) end\n\
+         end\n",
+    );
+    assert!(c.objects.iter().any(|o| o.name == "Holder$Num$e"));
+}
+
+#[test]
+fn a_generic_instantiation_reaches_the_dispatch_table() {
+    let c = typed(
+        "component t\n\
+         trait Shape end\n\
+         object Box[\\T\\](held: T) extends {Shape} end\n\
+         object Dot extends {Shape} end\n\
+         area(s: Shape): ZZ32 = 1\n\
+         area(s: Box[\\ZZ64\\]): ZZ32 = 3\n\
+         pick(n: ZZ32): Shape = if n === 0 then Dot else Box[\\ZZ64\\](1) end\n\
+         run(): ZZ32 = area(pick(0))\n\
+         end\n",
+    );
+    let d = c
+        .dispatches
+        .first()
+        .expect("the trait-typed call must dispatch");
+    match &d.tree {
+        fortress_types::DispatchNode::Switch { arms, .. } => assert_eq!(
+            arms.len(),
+            2,
+            "an arm for Dot and one for the instantiation of Box"
+        ),
+        other => panic!("expected a switch, got {other:?}"),
+    }
+}
+
+/// `array(n)` hands back slots nothing wrote, and the runtime's fill is a
+/// one-byte empty string. A reference element would give dispatch a tag load
+/// four bytes into it.
+#[test]
+fn an_array_of_objects_cannot_be_made_uninitialised() {
+    let e = body_error("object Node(k: ZZ32) end\nrun() = do a:Array[\\Node\\] = array(4)\n end");
+    assert!(
+        matches!(e, TypeError::UnsupportedElementType { .. }),
+        "got {e}"
+    );
+}
+
+#[test]
+fn mangling_distinguishes_nesting_from_arity() {
+    use fortress_ast::{Span, TypeRef};
+    let bare = |n: &str| TypeRef {
+        name: n.to_owned(),
+        args: Vec::new(),
+        span: Span::new(0, 0),
+    };
+    let nested = TypeRef {
+        name: "List".to_owned(),
+        args: vec![bare("B")],
+        span: Span::new(0, 0),
+    };
+    // Foo[\List[\B\]\] and Foo[\List, B\] must not collide.
+    assert_ne!(
+        fortress_types::mangle_static("Foo", &[nested]),
+        fortress_types::mangle_static("Foo", &[bare("List"), bare("B")])
+    );
+}

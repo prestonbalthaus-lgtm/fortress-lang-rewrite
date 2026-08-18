@@ -357,7 +357,7 @@ fn a_static_argument_is_parsed_as_the_type_it_names() {
     let param = f.params.into_iter().next().expect("a parameter");
     assert_eq!(param.ty.name, "Array");
     assert_eq!(
-        param.ty.argument.map(|t| t.name),
+        param.ty.args.first().map(|t| t.name.clone()),
         Some("ZZ64".to_owned()),
         "the element type must survive parsing"
     );

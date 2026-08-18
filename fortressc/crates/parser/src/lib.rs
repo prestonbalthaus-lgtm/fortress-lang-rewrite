@@ -16,7 +16,7 @@ pub use error::ParseError;
 
 use fortress_ast::{
     Assign, BinOp, Binding, BlockItem, Component, Decl, Expr, FieldDecl, Fixity, FnDecl,
-    ImportDecl, Member, MethodDecl, ObjectDecl, Param, Span, TraitDecl, TypeRef, UnOp,
+    ImportDecl, Member, MethodDecl, ObjectDecl, Param, Span, StaticParam, TraitDecl, TypeRef, UnOp,
 };
 use fortress_lexer::{Kind, Token};
 
@@ -198,6 +198,7 @@ impl<'t, 'a> Parser<'t, 'a> {
             exports,
             imports,
             decls,
+            bounds: Vec::new(),
             is_api,
             span: Span::new(start.start, end.end),
         })
@@ -278,7 +279,7 @@ impl<'t, 'a> Parser<'t, 'a> {
     fn trait_decl(&mut self) -> Parsed<TraitDecl> {
         let start = self.expect(&Kind::KwTrait, "`trait`")?.span;
         let (name, _) = self.identifier("a trait name")?;
-        self.reject_static_parameters()?;
+        let static_params = self.static_params()?;
         let extends = self.extends_clause()?;
         let comprises = self.type_set_after(&Kind::KwComprises)?;
         let excludes = self.type_set_after(&Kind::KwExcludes)?;
@@ -287,6 +288,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         let end = self.expect(&Kind::KwEnd, "`end`")?.span;
         Ok(TraitDecl {
             name,
+            static_params,
             extends,
             comprises,
             excludes,
@@ -300,7 +302,7 @@ impl<'t, 'a> Parser<'t, 'a> {
     fn object_decl(&mut self) -> Parsed<ObjectDecl> {
         let start = self.expect(&Kind::KwObject, "`object`")?.span;
         let (name, _) = self.identifier("an object name")?;
-        self.reject_static_parameters()?;
+        let static_params = self.static_params()?;
         let params = if self.at(&Kind::LParen) {
             self.pos += 1;
             let params = self.params()?;
@@ -315,20 +317,12 @@ impl<'t, 'a> Parser<'t, 'a> {
         let end = self.expect(&Kind::KwEnd, "`end`")?.span;
         Ok(ObjectDecl {
             name,
+            static_params,
             params,
             extends,
             members,
             span: Span::new(start.start, end.end),
         })
-    }
-
-    fn reject_static_parameters(&self) -> Parsed<()> {
-        if self.at(&Kind::LGeneric) {
-            return Err(ParseError::StaticParametersUnsupported {
-                span: self.span_here(),
-            });
-        }
-        Ok(())
     }
 
     fn extends_clause(&mut self) -> Parsed<Vec<TypeRef>> {
@@ -411,6 +405,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         };
         let (name, name_span) = self.identifier("a field or method name")?;
 
+        let static_params = self.static_params()?;
         if self.at(&Kind::LParen) {
             if mutable {
                 return Err(self.error("a field name after `var`"));
@@ -429,6 +424,7 @@ impl<'t, 'a> Parser<'t, 'a> {
             let end = body.as_ref().map_or(rparen, Expr::span);
             return Ok(Member::Method(MethodDecl {
                 name,
+                static_params,
                 params,
                 return_type,
                 body,
@@ -509,6 +505,7 @@ impl<'t, 'a> Parser<'t, 'a> {
 
     fn fn_decl(&mut self, signature_only: bool) -> Parsed<FnDecl> {
         let (name, name_span) = self.identifier("a function name")?;
+        let static_params = self.static_params()?;
         self.expect(&Kind::LParen, "`(`")?;
         let params = self.params()?;
         let rparen = self.expect(&Kind::RParen, "`)`")?.span;
@@ -535,6 +532,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         let span = Span::new(name_span.start, end.end);
         Ok(FnDecl {
             name,
+            static_params,
             params,
             return_type,
             body,
@@ -569,20 +567,71 @@ impl<'t, 'a> Parser<'t, 'a> {
         if !self.at(&Kind::LGeneric) {
             return Ok(TypeRef {
                 name,
-                argument: None,
+                args: Vec::new(),
                 span,
             });
         }
-        // One static argument, which is all `Array[\T\]` needs. Generics
-        // proper arrive with traits.
         self.pos += 1;
-        let argument = self.type_ref()?;
+        let args = self.type_args()?;
         let close = self.expect(&Kind::RGeneric, "`\\]`")?.span;
         Ok(TypeRef {
             name,
-            argument: Some(Box::new(argument)),
+            args,
             span: Span::new(span.start, close.end),
         })
+    }
+
+    /// The inside of a `[\ ... \]`, with the opening bracket already consumed.
+    fn type_args(&mut self) -> Parsed<Vec<TypeRef>> {
+        let mut args = Vec::new();
+        self.skip_newlines();
+        loop {
+            args.push(self.type_ref()?);
+            self.skip_newlines();
+            if !self.at(&Kind::Comma) {
+                break;
+            }
+            self.pos += 1;
+            self.skip_newlines();
+        }
+        Ok(args)
+    }
+
+    /// A declaration's static parameter list. Type parameters only: the other
+    /// six kinds are reserved words, and each is refused by name rather than
+    /// falling out as "expected a static parameter name".
+    fn static_params(&mut self) -> Parsed<Vec<StaticParam>> {
+        if !self.at(&Kind::LGeneric) {
+            return Ok(Vec::new());
+        }
+        self.pos += 1;
+        self.skip_newlines();
+        let mut out = Vec::new();
+        loop {
+            out.push(self.static_param()?);
+            self.skip_newlines();
+            if !self.at(&Kind::Comma) {
+                break;
+            }
+            self.pos += 1;
+            self.skip_newlines();
+        }
+        self.expect(&Kind::RGeneric, "`\\]`")?;
+        Ok(out)
+    }
+
+    fn static_param(&mut self) -> Parsed<StaticParam> {
+        if let Some(Kind::Reserved(word)) = self.peek_kind() {
+            if matches!(*word, "nat" | "int" | "bool" | "unit" | "dim" | "opr") {
+                return Err(ParseError::StaticParameterKindUnsupported {
+                    span: self.span_here(),
+                    kind: (*word).to_owned(),
+                });
+            }
+        }
+        let (name, span) = self.identifier("a static parameter name")?;
+        let bounds = self.extends_clause()?;
+        Ok(StaticParam { name, bounds, span })
     }
 
     // --------------------------------------------------------- expressions
@@ -735,6 +784,20 @@ impl<'t, 'a> Parser<'t, 'a> {
                     callee: Box::new(expr),
                     args,
                     span,
+                };
+                continue;
+            }
+            // `f[\ZZ64\]`, glued, in expression position. A spaced `[\` cannot
+            // start anything, so gluing is what distinguishes this from noise.
+            if self.at(&Kind::LGeneric) && self.glued_left(self.pos) {
+                let start = expr.span().start;
+                self.pos += 1;
+                let args = self.type_args()?;
+                let close = self.expect(&Kind::RGeneric, "`\\]`")?.span;
+                expr = Expr::Instantiate {
+                    callee: Box::new(expr),
+                    args,
+                    span: Span::new(start, close.end),
                 };
                 continue;
             }

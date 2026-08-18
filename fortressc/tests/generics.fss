@@ -1,0 +1,24 @@
+component generics
+export Executable
+
+(* Monomorphization, not erasure: Cell[\ZZ64\] stores an i64 in the object and
+   Cell[\String\] stores a pointer. Two instantiations, two layouts, no boxing. *)
+object Cell[\T\](held: T)
+   twice: ZZ32 = 2
+end
+
+pick[\T\](a: T, b: T, first: Boolean): T = if first then a else b end
+
+swap[\A, B\](x: A, y: B): B = y
+
+run() = do
+   i: Cell[\ZZ64\] = Cell[\ZZ64\](7)
+   s: Cell[\String\] = Cell[\String\]("hi")
+   println(i.held)
+   println(s.held)
+   println(i.twice)
+   println(pick[\ZZ64\](3, 9, true))
+   println(pick[\String\]("yes", "no", false))
+   println(swap[\ZZ32, String\](1, "second"))
+end
+end

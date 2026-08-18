@@ -20,10 +20,11 @@ pub enum ParseError {
         span: Span,
         word: String,
     },
-    /// `trait Foo[\T\]`. Generics are M3d; refusing here is better than
-    /// parsing a static parameter list the rest of the compiler ignores.
-    StaticParametersUnsupported {
+    /// `[\nat n\]`. M3d is type parameters only: mixing static integers with
+    /// type parameters is a dependent type system, and this is not one.
+    StaticParameterKindUnsupported {
         span: Span,
+        kind: String,
     },
 }
 
@@ -34,7 +35,7 @@ impl ParseError {
             Self::UnexpectedToken { span, .. }
             | Self::PostfixOperatorUnsupported { span }
             | Self::ReservedWord { span, .. }
-            | Self::StaticParametersUnsupported { span } => Some(*span),
+            | Self::StaticParameterKindUnsupported { span, .. } => Some(*span),
             Self::UnexpectedEndOfInput { .. } => None,
         }
     }
@@ -69,9 +70,10 @@ impl core::fmt::Display for ParseError {
                     span.start, span.end
                 )
             }
-            Self::StaticParametersUnsupported { span } => write!(
+            Self::StaticParameterKindUnsupported { span, kind } => write!(
                 f,
-                "{}..{}: static parameters `[\\...\\]` on a declaration are not implemented; generics are M3d",
+                "{}..{}: `{kind}` static parameters are not implemented; \
+                 M3d is type parameters only",
                 span.start, span.end
             ),
         }

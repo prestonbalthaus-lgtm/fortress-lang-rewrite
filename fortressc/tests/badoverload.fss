@@ -1,0 +1,10 @@
+component badoverload
+export Executable
+
+(* Specification 1.0 basic/overloading.tex:100-108: an overload set is uniformly
+   generic or uniformly ground. This must be REFUSED, naming both declarations. *)
+size[\T\](x: T): ZZ32 = 1
+size(x: ZZ32): ZZ32 = 2
+
+run() = println(size[\ZZ64\](1))
+end

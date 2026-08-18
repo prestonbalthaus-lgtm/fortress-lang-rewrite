@@ -12,8 +12,11 @@
 //! asks a type question.
 
 mod error;
+mod mono;
 mod registry;
 mod types;
+
+pub use mono::{expand, mangle_static, MAX_INSTANTIATIONS};
 
 pub use error::TypeError;
 pub use types::{
@@ -40,8 +43,13 @@ struct Local {
 
 type Checked<T> = Result<T, TypeError>;
 
+/// Expansion, then checking, in that order and never interleaved. The phase
+/// split is what keeps M3c's dispatch tables correct: `registry.concrete` and
+/// every 32-bit tag freeze in `Checker::new`, so the set of concrete types has
+/// to be closed before that happens.
 pub fn check(component: &Component) -> Checked<TypedComponent> {
-    Checker::new(component)?.run(component)
+    let ground = mono::expand(component)?;
+    Checker::new(&ground)?.run(&ground)
 }
 
 /// One declaration in an overload set.
@@ -336,6 +344,7 @@ impl Checker {
                 span: component.span,
             });
         }
+        self.discharge_bounds(component)?;
 
         let mut objects = Vec::new();
         for decl in &component.decls {
@@ -361,6 +370,26 @@ impl Checker {
             dispatches: self.dispatches.into_values().collect(),
             uses_mpi: self.uses_mpi,
         })
+    }
+
+    /// The obligations monomorphization recorded. They could not be settled
+    /// there -- subtyping needs the registry, and the registry is built from the
+    /// component expansion produced -- so they are settled here, before a single
+    /// body is checked.
+    fn discharge_bounds(&self, component: &Component) -> Checked<()> {
+        for obligation in &component.bounds {
+            let subject = self.registry.resolve(&obligation.subject)?;
+            let bound = self.registry.resolve(&obligation.bound)?;
+            if !self.registry.is_subtype(subject, bound) {
+                return Err(TypeError::BoundNotSatisfied {
+                    span: obligation.span,
+                    parameter: obligation.parameter.clone(),
+                    subject,
+                    bound,
+                });
+            }
+        }
+        Ok(())
     }
 
     fn object(&mut self, o: &ObjectDecl) -> Checked<TypedObject> {
@@ -555,6 +584,15 @@ impl Checker {
             Expr::Index { base, index, span } => self.index(base, index, *span, expected),
             Expr::While { cond, body, span } => self.while_expr(cond, body, *span, expected),
             Expr::Field { base, name, span } => self.field(base, name, *span, expected),
+            // Unreachable: expansion rewrites every instantiation to a plain
+            // name before the checker is constructed.
+            Expr::Instantiate { callee, span, .. } => Err(TypeError::NotGeneric {
+                span: *span,
+                name: match callee.as_ref() {
+                    Expr::Var { name, .. } => name.clone(),
+                    _ => "<expression>".to_owned(),
+                },
+            }),
         }
     }
 
@@ -1544,6 +1582,19 @@ impl Checker {
         let Some(Type::Array(elem)) = expected else {
             return Err(TypeError::ElementTypeUnknown { span });
         };
+        // `array(n)` hands back slots nothing has written, so every element type
+        // it accepts needs a value the runtime can legitimately put there.
+        // `fortress_array_alloc` writes a one-byte static "" into pointer slots,
+        // which is a valid String and nothing else -- an object slot read before
+        // it is written would give dispatch a tag load four bytes into that
+        // one-byte object. This is an allowlist on purpose: widening `Elem` to
+        // reference types has to come back through here.
+        if elem.is_pointer() && elem != Elem::String {
+            return Err(TypeError::UninitialisedArrayOfReferences {
+                span,
+                found: elem.as_type(),
+            });
+        }
         let count = self.expr(count, Some(Type::ZZ64))?;
         Ok(TypedExpr {
             kind: TypedExprKind::Apply {
