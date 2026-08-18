@@ -276,13 +276,12 @@ always_error!(err_char_literal, CharacterLiteralUnsupported);
 always_error!(err_curly_quote, CurlyQuoteStringUnsupported);
 always_error!(err_non_ascii, NonAsciiCharacter);
 
-/// `equals = "=" (!op)` (`Symbol.rats:201`). `===`, `=/=`, `<=` and `>=` are
-/// matched as longer tokens first, so a bare `=` glued to an operator character
-/// is malformed rather than two tokens.
+/// `equals = "=" (!op)` (`Symbol.rats:201`). `===`, `=/=`, `=>`, `<=` and `>=`
+/// are matched as longer tokens first, so a bare `=` glued to an operator
+/// character is malformed rather than two tokens.
 fn op_equals(lex: &mut Lexer<Raw>) -> Skip {
     match lex.remainder().chars().next() {
         Some('+') => FilterResult::Error(LexErrorKind::OperatorFollowedByPlus),
-        Some('>') => FilterResult::Error(LexErrorKind::FatArrowUnsupported),
         Some('-' | '*' | '/' | '<' | '=' | ':' | '!') => {
             FilterResult::Error(LexErrorKind::MalformedEquals)
         }
@@ -354,6 +353,26 @@ pub(crate) enum Raw {
     Colon,
     #[token(".")]
     Dot,
+
+    // `=>` is one token and must be listed before `=`; logos prefers the longer
+    // match, which is what stops it lexing as `=` followed by `>`.
+    #[token("=>")]
+    FatArrow,
+    // The enclosing-operator characters. Tokenising them is not the same as
+    // implementing enclosing operators: `<| ... |>` and `|x|` still have no
+    // parse. What this buys is that a file using them reaches the parser at all.
+    #[token("<|")]
+    LeftBar,
+    #[token("|>")]
+    RightBar,
+    #[token("||")]
+    BarBar,
+    #[token("|")]
+    Bar,
+    #[token("^")]
+    Caret,
+    #[token("#")]
+    Hash,
 
     #[token("===")]
     EqEqEq,

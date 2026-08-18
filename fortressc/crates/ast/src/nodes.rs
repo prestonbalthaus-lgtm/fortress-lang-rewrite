@@ -7,10 +7,24 @@ use crate::Span;
 pub struct Component {
     pub name: String,
     pub exports: Vec<String>,
+    /// Recorded and not read. Whole-program monomorphization has no separate
+    /// compilation, so there is nothing for an import to resolve against yet.
+    pub imports: Vec<ImportDecl>,
     pub decls: Vec<Decl>,
     /// `api Foo ... end` rather than `component Foo ... end`. Parsed so the
     /// corpus metric can move; an api has no bodies and is not executable, so
     /// the type checker refuses it rather than pretending to compile one.
+    pub is_api: bool,
+    pub span: Span,
+}
+
+/// `import Foo.Bar.{...}`. The name is kept; the brace group and any `except`
+/// clause are consumed without being interpreted, because aliasing an operator
+/// (`opr OPLUS => MYPLUS`) needs a precedence map that does not exist yet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportDecl {
+    pub api_name: String,
+    /// `import api Foo` rather than `import Foo.{...}`.
     pub is_api: bool,
     pub span: Span,
 }

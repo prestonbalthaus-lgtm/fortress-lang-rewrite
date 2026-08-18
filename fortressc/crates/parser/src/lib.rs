@@ -15,8 +15,8 @@ mod error;
 pub use error::ParseError;
 
 use fortress_ast::{
-    Assign, BinOp, Binding, BlockItem, Component, Decl, Expr, FieldDecl, Fixity, FnDecl, Member,
-    MethodDecl, ObjectDecl, Param, Span, TraitDecl, TypeRef, UnOp,
+    Assign, BinOp, Binding, BlockItem, Component, Decl, Expr, FieldDecl, Fixity, FnDecl,
+    ImportDecl, Member, MethodDecl, ObjectDecl, Param, Span, TraitDecl, TypeRef, UnOp,
 };
 use fortress_lexer::{Kind, Token};
 
@@ -147,43 +147,119 @@ impl<'t, 'a> Parser<'t, 'a> {
     fn component(&mut self) -> Parsed<Component> {
         self.skip_newlines();
         let start = self.span_here();
-        // An `api` is the same shape with no bodies. It parses so the corpus
-        // metric can move; `check` refuses it, because a declaration without a
-        // body is not something to emit code for.
-        let is_api = if self.at(&Kind::KwApi) {
+        // Three shapes. `component Foo ... end`; `api Foo ... end`, which parses
+        // so the corpus metric can move and which `check` refuses because a
+        // declaration without a body is not something to emit code for; and a
+        // headerless file, which `Compilation.rats:14-19` gives four productions
+        // for -- exports, imports and declarations straight to end of file with
+        // no wrapper and no `end`.
+        let headerless = !self.at(&Kind::KwComponent) && !self.at(&Kind::KwApi);
+        let mut is_api = false;
+        let mut name = String::new();
+        if !headerless {
+            is_api = self.at(&Kind::KwApi);
             self.pos += 1;
-            true
-        } else {
-            self.expect(&Kind::KwComponent, "`component` or `api`")?;
-            false
-        };
-        let name = self.dotted_name()?;
-        self.expect_separator()?;
+            name = self.dotted_name()?;
+            self.expect_separator()?;
+        }
 
+        // The reference grammar puts imports before exports and has an error
+        // production for the other order, so accept either, interleaved.
         let mut exports = Vec::new();
-        while self.at(&Kind::KwExport) {
-            self.pos += 1;
-            exports.push(self.identifier("an export name")?.0);
+        let mut imports = Vec::new();
+        loop {
+            if self.at(&Kind::KwExport) {
+                self.pos += 1;
+                exports.push(self.identifier("an export name")?.0);
+            } else if self.at(&Kind::KwImport) {
+                imports.push(self.import_decl()?);
+            } else {
+                break;
+            }
             self.expect_separator()?;
         }
 
         let mut decls = Vec::new();
         while !self.at(&Kind::KwEnd) && !self.at_eof() {
             decls.push(self.decl(is_api)?);
-            if self.at(&Kind::KwEnd) {
+            if self.at(&Kind::KwEnd) || self.at_eof() {
                 break;
             }
             self.expect_separator()?;
         }
 
-        let end = self.expect(&Kind::KwEnd, "`end`")?.span;
+        let end = if headerless {
+            self.span_here()
+        } else {
+            self.expect(&Kind::KwEnd, "`end`")?.span
+        };
         Ok(Component {
             name,
             exports,
+            imports,
             decls,
             is_api,
             span: Span::new(start.start, end.end),
         })
+    }
+
+    /// `import Foo.Bar.{...}`, `import api Foo`, `import Foo.{X as Y} except {Z}`.
+    /// The dotted name is parsed for real; the brace group and the `except`
+    /// clause are consumed as balanced token runs. Aliasing an operator needs a
+    /// precedence map, and recording a name we cannot resolve yet would be
+    /// pretending.
+    fn import_decl(&mut self) -> Parsed<ImportDecl> {
+        let start = self.expect(&Kind::KwImport, "`import`")?.span;
+        let is_api = self.at(&Kind::KwApi);
+        if is_api {
+            self.pos += 1;
+        }
+        // `import api {A, B}` names a set with no leading dotted name.
+        let api_name = if self.at(&Kind::LBrace) {
+            String::new()
+        } else {
+            self.dotted_name()?
+        };
+        let mut end = self.span_here();
+        if self.at(&Kind::LBrace) {
+            end = self.skip_braces()?;
+        }
+        if self.at(&Kind::KwExcept) {
+            self.pos += 1;
+            self.skip_newlines();
+            end = if self.at(&Kind::LBrace) {
+                self.skip_braces()?
+            } else {
+                self.identifier("a name after `except`")?.1
+            };
+        }
+        Ok(ImportDecl {
+            api_name,
+            is_api,
+            span: Span::new(start.start, end.end),
+        })
+    }
+
+    /// Consumes a balanced `{ ... }` and answers with the closing brace's span.
+    fn skip_braces(&mut self) -> Parsed<Span> {
+        self.expect(&Kind::LBrace, "`{`")?;
+        let mut depth = 1usize;
+        loop {
+            let span = self.span_here();
+            match self.peek_kind() {
+                Some(Kind::LBrace) => depth += 1,
+                Some(Kind::RBrace) => {
+                    depth -= 1;
+                    if depth == 0 {
+                        self.pos += 1;
+                        return Ok(span);
+                    }
+                }
+                None | Some(Kind::Eof) => return Err(self.error("`}`")),
+                _ => {}
+            }
+            self.pos += 1;
+        }
     }
 
     fn decl(&mut self, signature_only: bool) -> Parsed<Decl> {
@@ -391,13 +467,22 @@ impl<'t, 'a> Parser<'t, 'a> {
     /// separate `Ident` and `Dot` tokens.
     fn dotted_name(&mut self) -> Parsed<String> {
         let (mut name, _) = self.identifier("a component name")?;
-        while self.at(&Kind::Dot) {
+        // A `.` followed by `{` opens an import's brace group and is not part
+        // of the name.
+        while self.at(&Kind::Dot) && !matches!(self.peek_ahead(1), Some(Kind::LBrace)) {
             self.pos += 1;
             let (part, _) = self.identifier("a component name")?;
             name.push('.');
             name.push_str(&part);
         }
+        if self.at(&Kind::Dot) {
+            self.pos += 1;
+        }
         Ok(name)
+    }
+
+    fn peek_ahead(&self, n: usize) -> Option<&'t Kind<'a>> {
+        self.tokens.get(self.pos + n).map(|t| &t.kind)
     }
 
     fn identifier(&mut self, expected: &'static str) -> Parsed<(String, Span)> {

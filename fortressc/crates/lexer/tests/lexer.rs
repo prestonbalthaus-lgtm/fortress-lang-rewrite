@@ -237,7 +237,7 @@ fn the_acceptance_programs_vocabulary_is_not_reserved() {
 #[test]
 fn the_other_reserved_words_are_reserved_not_identifiers() {
     for word in [
-        "atomic", "opr", "grammar", "for", "import", "syntax", "value",
+        "atomic", "opr", "grammar", "for", "getter", "syntax", "value",
     ] {
         assert_eq!(
             kinds(word),
@@ -262,6 +262,8 @@ fn the_declaration_vocabulary_is_a_keyword_rather_than_a_reserved_word() {
         ("where", Kind::KwWhere),
         ("var", Kind::KwVar),
         ("self", Kind::KwSelf),
+        ("import", Kind::KwImport),
+        ("except", Kind::KwExcept),
     ] {
         assert_eq!(
             kinds(word),
@@ -502,10 +504,61 @@ fn the_m1_acceptance_program_lexes() {
 }
 
 #[test]
-fn fat_arrow_is_named_rather_than_reported_as_a_malformed_equals() {
-    assert_eq!(err("x => y"), LexErrorKind::FatArrowUnsupported);
+fn fat_arrow_is_one_token_rather_than_a_malformed_equals() {
+    assert_eq!(
+        kinds("x => y"),
+        vec![
+            Kind::Ident("x"),
+            Kind::FatArrow,
+            Kind::Ident("y"),
+            Kind::Eof
+        ]
+    );
     // A genuinely malformed `=` still reports as one.
     assert_eq!(err("x =: y"), LexErrorKind::MalformedEquals);
+}
+
+/// The characters that were sending 319 of the 737 bracket files to a lexer
+/// death. Tokenising them is not implementing them: `<| ... |>` and `|x|` still
+/// have no parse, and that is deliberate.
+#[test]
+fn the_enclosing_operator_characters_lex() {
+    assert_eq!(
+        kinds("<|a|>"),
+        vec![Kind::LeftBar, Kind::Ident("a"), Kind::RightBar, Kind::Eof]
+    );
+    // Longest match: `||` is one token, and `|>` beats `|` followed by `>`.
+    assert_eq!(kinds("||"), vec![Kind::BarBar, Kind::Eof]);
+    assert_eq!(
+        kinds("|self|"),
+        vec![Kind::Bar, Kind::KwSelf, Kind::Bar, Kind::Eof]
+    );
+    assert_eq!(
+        kinds("10^(2) 0#1"),
+        vec![
+            Kind::IntLit {
+                text: "10",
+                digits: "10".to_owned()
+            },
+            Kind::Caret,
+            Kind::LParen,
+            Kind::IntLit {
+                text: "2",
+                digits: "2".to_owned()
+            },
+            Kind::RParen,
+            Kind::IntLit {
+                text: "0",
+                digits: "0".to_owned()
+            },
+            Kind::Hash,
+            Kind::IntLit {
+                text: "1",
+                digits: "1".to_owned()
+            },
+            Kind::Eof
+        ]
+    );
 }
 
 // ------------------------------------------------------- M3b: brackets
