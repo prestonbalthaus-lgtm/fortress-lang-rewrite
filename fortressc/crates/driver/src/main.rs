@@ -23,6 +23,7 @@ struct Options {
     emit_ir: bool,
     emit_obj: bool,
     cc: String,
+    cpu: String,
 }
 
 fn parse_args(args: &[String]) -> Option<Options> {
@@ -31,6 +32,7 @@ fn parse_args(args: &[String]) -> Option<Options> {
     let mut emit_ir = false;
     let mut emit_obj = false;
     let mut cc = DEFAULT_CC.to_owned();
+    let mut cpu = fortress_codegen::DEFAULT_CPU.to_owned();
     let mut rest = args.iter();
 
     while let Some(arg) = rest.next() {
@@ -39,6 +41,7 @@ fn parse_args(args: &[String]) -> Option<Options> {
             "--emit-ir" => emit_ir = true,
             "--emit-obj" => emit_obj = true,
             "--cc" => cc = rest.next()?.clone(),
+            "--target-cpu" => cpu = rest.next()?.clone(),
             flag if flag.starts_with('-') => return None,
             path => source = Some(PathBuf::from(path)),
         }
@@ -52,6 +55,7 @@ fn parse_args(args: &[String]) -> Option<Options> {
         emit_ir,
         emit_obj,
         cc,
+        cpu,
     })
 }
 
@@ -59,7 +63,9 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Some(options) = parse_args(&args) else {
         eprintln!(
-            "usage: fortressc <source.fss> [-o <output>] [--emit-ir] [--emit-obj] [--cc <driver>]"
+            "usage: fortressc <source.fss> [-o <output>] [--emit-ir] [--emit-obj] \
+                  [--cc <driver>] [--target-cpu <{}>]",
+            fortress_codegen::SUPPORTED_CPUS.join("|")
         );
         return ExitCode::from(EXIT_USER_ERROR);
     };
@@ -83,6 +89,14 @@ enum Failure {
 }
 
 fn compile(options: &Options) -> Result<(), Failure> {
+    if !fortress_codegen::SUPPORTED_CPUS.contains(&options.cpu.as_str()) {
+        return Err(Failure::User(format!(
+            "unknown target CPU `{}`; accepted: {}",
+            options.cpu,
+            fortress_codegen::SUPPORTED_CPUS.join(", ")
+        )));
+    }
+
     let source = std::fs::read_to_string(&options.source)
         .map_err(|e| Failure::User(format!("cannot read source: {e}")))?;
 
@@ -98,7 +112,8 @@ fn compile(options: &Options) -> Result<(), Failure> {
     );
 
     if options.emit_ir {
-        let ir = fortress_codegen::emit_ir(&typed).map_err(|e| Failure::Internal(e.to_string()))?;
+        let ir = fortress_codegen::emit_ir(&typed, &options.cpu)
+            .map_err(|e| Failure::Internal(e.to_string()))?;
         print!("{ir}");
         return Ok(());
     }
@@ -107,12 +122,13 @@ fn compile(options: &Options) -> Result<(), Failure> {
     // splits compiling from linking, and the link half runs elsewhere, under a
     // different C library, against the local MPI.
     if options.emit_obj {
-        return fortress_codegen::emit_object(&typed, &options.output)
+        return fortress_codegen::emit_object(&typed, &options.output, &options.cpu)
             .map_err(|e| Failure::Internal(e.to_string()));
     }
 
     let object = options.output.with_extension("o");
-    fortress_codegen::emit_object(&typed, &object).map_err(|e| Failure::Internal(e.to_string()))?;
+    fortress_codegen::emit_object(&typed, &object, &options.cpu)
+        .map_err(|e| Failure::Internal(e.to_string()))?;
     link(options, &object, typed.uses_mpi)?;
     let _ = std::fs::remove_file(&object);
     Ok(())
@@ -166,9 +182,11 @@ fn link(options: &Options, object: &Path, uses_mpi: bool) -> Result<(), Failure>
     for source in &sources {
         command.arg(&source.path);
     }
+    // The collector, last: a library has to follow the objects that need it.
     let result = command
         .arg("-o")
         .arg(&options.output)
+        .arg("-lgc")
         .output()
         .map_err(|e| Failure::Internal(format!("could not run `{}`: {e}", options.cc)))?;
 

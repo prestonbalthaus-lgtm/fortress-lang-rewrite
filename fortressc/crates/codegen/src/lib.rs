@@ -11,6 +11,7 @@ use fortress_types::{
     ArithOp, CompareOp, Target, Type, TypedBlockItem, TypedComponent, TypedExpr, TypedExprKind,
     TypedFn,
 };
+use inkwell::attributes::AttributeLoc;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::{Linkage, Module};
@@ -27,28 +28,63 @@ pub use error::CodegenError;
 /// The Fortress entry point. `main` calls it and returns 0.
 const ENTRY: &str = "run";
 
-pub fn emit_object(component: &TypedComponent, object_path: &Path) -> Result<(), CodegenError> {
+/// Starts the collector. Emitted as the first instruction of `main`.
+const RUNTIME_INIT: &str = "fortress_runtime_init";
+
+/// The processor an object is built for. This is chosen, not detected: the
+/// machine that runs the compiler is a login node or a laptop, and the machine
+/// that runs the binary is a compute node. `x86-64-v3` is AVX2 era and every
+/// x86 part worth scheduling on has it; `skylake-avx512` is the Platinum 8160.
+pub const DEFAULT_CPU: &str = "x86-64-v3";
+
+/// LLVM answers an unrecognised processor with a warning and then builds for
+/// the baseline anyway, which is a wrong binary rather than a failed build. The
+/// name is checked against this list before it reaches LLVM.
+pub const SUPPORTED_CPUS: [&str; 6] = [
+    "x86-64",
+    "x86-64-v2",
+    "x86-64-v3",
+    "x86-64-v4",
+    "skylake-avx512",
+    "native",
+];
+
+pub fn emit_object(
+    component: &TypedComponent,
+    object_path: &Path,
+    cpu: &str,
+) -> Result<(), CodegenError> {
+    let machine = target_machine(cpu)?;
     let context = Context::create();
-    let module = build_module(&context, component)?;
-    write_object(&module, object_path)
+    let module = build_module(&context, component, &machine)?;
+    machine
+        .write_to_file(&module, FileType::Object, object_path)
+        .map_err(|e| CodegenError::ObjectWriteFailed {
+            detail: e.to_string(),
+        })
 }
 
-pub fn emit_ir(component: &TypedComponent) -> Result<String, CodegenError> {
+pub fn emit_ir(component: &TypedComponent, cpu: &str) -> Result<String, CodegenError> {
+    let machine = target_machine(cpu)?;
     let context = Context::create();
-    let module = build_module(&context, component)?;
+    let module = build_module(&context, component, &machine)?;
     Ok(module.print_to_string().to_string())
 }
 
 fn build_module<'ctx>(
     context: &'ctx Context,
     component: &TypedComponent,
+    machine: &TargetMachine,
 ) -> Result<Module<'ctx>, CodegenError> {
     let module = context.create_module(&component.name);
+    module.set_triple(&machine.get_triple());
+    module.set_data_layout(&machine.get_target_data().get_data_layout());
     let builder = context.create_builder();
     let mut lowering = Lowering {
         context,
         module,
         builder,
+        cpu: machine.get_cpu().to_string_lossy().into_owned(),
         functions: HashMap::new(),
         scopes: Vec::new(),
     };
@@ -75,6 +111,9 @@ struct Lowering<'ctx> {
     context: &'ctx Context,
     module: Module<'ctx>,
     builder: Builder<'ctx>,
+    /// Stamped onto every function this module defines, so the object records
+    /// what it was built for instead of leaving it to whoever reads it.
+    cpu: String,
     functions: HashMap<String, FunctionValue<'ctx>>,
     /// M1 has no mutation, so bindings are plain SSA values; no `alloca`.
     scopes: Vec<HashMap<String, BasicValueEnum<'ctx>>>,
@@ -134,6 +173,19 @@ impl<'ctx> Lowering<'ctx> {
         let concat = ptr.fn_type(&[ptr.into(), ptr.into()], false);
         self.module
             .add_function("concat_string_string", concat, Some(Linkage::External));
+
+        self.module.add_function(
+            RUNTIME_INIT,
+            void.fn_type(&[], false),
+            Some(Linkage::External),
+        );
+    }
+
+    fn stamp_target(&self, function: FunctionValue<'ctx>) {
+        let attribute = self
+            .context
+            .create_string_attribute("target-cpu", &self.cpu);
+        function.add_attribute(AttributeLoc::Function, attribute);
     }
 
     /// The MPI shims, declared only for a component that calls one. A program
@@ -173,6 +225,7 @@ impl<'ctx> Lowering<'ctx> {
                 None => self.context.void_type().fn_type(&params, false),
             };
             let value = self.module.add_function(&f.name, fn_type, None);
+            self.stamp_target(value);
             self.functions.insert(f.name.clone(), value);
         }
         Ok(())
@@ -209,15 +262,21 @@ impl<'ctx> Lowering<'ctx> {
         Ok(())
     }
 
-    /// `main` exists so the ELF has a C entry point. It calls `run` and returns
-    /// 0; a Fortress program's exit status is not its return value.
+    /// `main` exists so the ELF has a C entry point. It starts the runtime,
+    /// calls `run` and returns 0; a Fortress program's exit status is not its
+    /// return value.
     fn emit_main(&mut self) -> Result<(), CodegenError> {
         let i32t = self.context.i32_type();
         let main = self
             .module
             .add_function("main", i32t.fn_type(&[], false), None);
+        self.stamp_target(main);
         let entry = self.context.append_basic_block(main, "entry");
         self.builder.position_at_end(entry);
+
+        // Before anything else, including the first allocation: the collector
+        // has to be up before the program can hand it work.
+        self.call_runtime(RUNTIME_INIT, &[], false)?;
 
         if let Some(run) = self.functions.get(ENTRY) {
             self.builder
@@ -581,7 +640,7 @@ impl<'ctx> Lowering<'ctx> {
     }
 }
 
-fn write_object(module: &Module<'_>, path: &Path) -> Result<(), CodegenError> {
+fn target_machine(cpu: &str) -> Result<TargetMachine, CodegenError> {
     LlvmTarget::initialize_native(&InitializationConfig::default())
         .map_err(|detail| CodegenError::TargetUnavailable { detail })?;
 
@@ -590,25 +649,35 @@ fn write_object(module: &Module<'_>, path: &Path) -> Result<(), CodegenError> {
         detail: e.to_string(),
     })?;
 
-    let machine = target
+    // `native` is the only setting that reads the machine underneath, and it
+    // is opt in for exactly that reason.
+    let (name, features) = if cpu == "native" {
+        (
+            TargetMachine::get_host_cpu_name()
+                .to_string_lossy()
+                .into_owned(),
+            TargetMachine::get_host_cpu_features()
+                .to_string_lossy()
+                .into_owned(),
+        )
+    } else {
+        (cpu.to_owned(), String::new())
+    };
+
+    target
         .create_target_machine(
             &triple,
-            &TargetMachine::get_host_cpu_name().to_string_lossy(),
-            &TargetMachine::get_host_cpu_features().to_string_lossy(),
+            &name,
+            &features,
             OptimizationLevel::None,
             RelocMode::PIC,
             CodeModel::Default,
         )
         .ok_or_else(|| CodegenError::TargetUnavailable {
             detail: format!(
-                "no target machine for {}",
+                "no target machine for {} on {}",
+                name,
                 triple.as_str().to_string_lossy()
             ),
-        })?;
-
-    machine
-        .write_to_file(module, FileType::Object, path)
-        .map_err(|e| CodegenError::ObjectWriteFailed {
-            detail: e.to_string(),
         })
 }

@@ -1,0 +1,20 @@
+component gcsoak_lite
+export Executable
+
+inner(n:ZZ64):ZZ64 = if n < 1 then 0 else do
+      s:String = "x" n
+      inner(n-1)
+   end
+end
+
+outer(n:ZZ64):ZZ64 = if n < 1 then 0 else do
+      inner(1000)
+      outer(n-1)
+   end
+end
+
+run() = do
+   outer(10)
+   println("done")
+end
+end

@@ -12,7 +12,7 @@ From: rockylinux/rockylinux:9
     set -eux
     dnf -y install dnf-plugins-core
     dnf config-manager --set-enabled crb
-    dnf -y install gcc binutils openmpi openmpi-devel
+    dnf -y install gcc binutils openmpi openmpi-devel gc gc-devel
     dnf clean all
     rm -rf /var/cache/dnf
 
@@ -21,6 +21,9 @@ From: rockylinux/rockylinux:9
     # are fixed in %environment and asserted at build time.
     test -x /usr/lib64/openmpi/bin/mpicc
     test -x /usr/lib64/openmpi/bin/mpirun
+    # runtime/shims.c includes <gc.h> and every Fortress binary links -lgc, so
+    # the collector is part of the link toolchain, not an optional extra.
+    test -f /usr/include/gc.h
 
 %environment
     export PATH=/usr/lib64/openmpi/bin:$PATH
@@ -37,13 +40,14 @@ From: rockylinux/rockylinux:9
     mpicc --showme:version
     mpirun --version
     nm --version > /dev/null
+    echo 'int main(void){return 0;}' > /tmp/t.c && mpicc /tmp/t.c -lgc -o /tmp/t && rm -f /tmp/t.c /tmp/t
 
 %labels
     Milestone M2a
-    Purpose Fortress MPI link and launch toolchain
+    Purpose Fortress MPI link and launch toolchain, plus the Boehm collector
 
 %help
-    Carries mpicc, mpirun and libmpi for the Fortress compiler's MPI
-    milestone. fortressc runs on the host and emits an object; this image
+    Carries mpicc, mpirun, libmpi and the Boehm collector for the Fortress
+    compiler. fortressc runs on the host and emits an object; this image
     links it and launches the ranks. Nothing Fortress specific is baked in,
     so the image does not need rebuilding when the compiler changes.
