@@ -8,7 +8,7 @@ Every phase has one exit criterion. The measure throughout is the ~1950 `.fss`
 and `.fsi` files already in this tree, run against the legacy interpreter for a
 differential baseline.
 
-## Where the work actually is, 2026-08-18
+## Where the work actually is, 2026-08-19
 
 Phases 1, 2 and 5 are done for a subset, and phase 6's C ABI half is done and
 gated: a Fortress program calls MPI and runs as four ranks under `mpirun`,
@@ -18,19 +18,41 @@ The rest of phase 6 and all of phase 8 are **shelved**. There is no cluster to
 test on, and MPI is not what is blocking the language. Slurm, `sbatch`,
 multi-node runs and the InfiniBand fabric wait until the compiler is finished.
 
-What is in front instead is language completion, in this order and no other:
+Language completion was the plan, in this order, and all four are now done:
 
-1. **Memory.** Done. Boehm collector, `docs/superpowers/specs/2026-08-18-m3a-memory.md`.
-2. **Arrays and iteration.** Done, primitively.
-   `docs/superpowers/specs/2026-08-18-m3b-arrays.md`. `Array[\T\]`, `ZZ64`
-   subscripts, bounds checking, `while`, and mutable bindings. It forced the
-   scannable allocator, as expected. `for`, generators and comprehensions are
-   held back with traits: `for` is parallel by default and cannot be faked with
-   a counter.
-3. **Traits and dispatch.** Next, and last of the three, because it is the
-   largest and because the standard library's arrays are written in terms of it.
-   It is also what the corpus is waiting on: `trait` and `object` are the top
-   two things blocking the parser.
+1. **Memory.** Boehm collector. `specs/2026-08-18-m3a-memory.md`.
+2. **Arrays and iteration.** `specs/2026-08-18-m3b-arrays.md`. `Array[\T\]`,
+   `ZZ64` subscripts, bounds checking, `while`, mutable bindings. It forced the
+   scannable allocator, as expected.
+3. **Traits and symmetric multiple dispatch.**
+   `specs/2026-08-18-m3c-dispatch-design.md`. Whole-program enumeration of the
+   concrete tuples reaching each overload set, in place of 1.0's modular rules.
+4. **Generics, by monomorphization.**
+   `specs/2026-08-19-m3d-generics-design.md`. Concrete copies at compile time,
+   expanded to a fixpoint before the type checker exists so the dispatch tables
+   are built against a closed world.
+
+Held back deliberately: `for`, generators, comprehensions and reductions. `for`
+is parallel by default and cannot be faked with a counter, so it belongs with
+phase 7 rather than with iteration.
+
+**A measurement that changed the plan.** M3d was expected to open the corpus,
+because 737 of the 1956 files use `[\...\]`. It does not. Erasing every static
+argument from all 737 and re-running the compiler -- simulating generics that
+parse perfectly and cost nothing -- got ten more files past the parser. The wall
+was the *lexer*: 319 of those 737 died on `|` and `=>`, and every load-bearing
+library file was a lexer casualty. Clearing that took the lexer from 1277 to
+1780 of 1956 and the parser from 84 to 154, for about thirty lines of code, and
+generics then took the parser to 168.
+
+The lesson is recorded rather than buried: count what the compiler actually does,
+not what the blocker histogram implies. The same estimate done by counting was
+wrong by an order of magnitude one milestone earlier.
+
+**What is in front now**, in rough order of what the corpus is waiting on:
+tuple and arrow types (the top parser blocker), `getter`/`setter` and `opr`
+declarations, then enclosing operators, which need the precedence map that `<|`,
+`|>` and `|x|` were tokenised without.
 
 ## Phases
 
@@ -47,6 +69,9 @@ stable across runs.
 `.rats` modules under `ProjectFortress/src/com/sun/fortress/parser/`.
 *Exit:* parses 90% of the corpus to an AST. The remaining 10% is catalogued with
 a reason each.
+*Where it is:* 1780 of 1956 lex (91%), 168 of those parse. Both numbers are
+ratchets in the corpus tests rather than commentary, so a regression fails the
+build.
 
 **3. Names and modules.** Component and API resolution, imports, scoping.
 *Exit:* `Library/` resolves clean with no unresolved references.
