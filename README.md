@@ -65,8 +65,11 @@ never got one.
 
 ## What v1 will be
 
-In scope, because the whole point is cluster work: `ZZ64` indexing past 2^31,
-reduction variables, distributions, non-`RR64` floats, native C ABI.
+Everything the Sun implementation never finished is in scope. All 16 items off
+its unimplemented list, including the cluster critical ones (`ZZ64` indexing past
+2^31, reduction variables, distributions, non-`RR64` floats) and the expensive
+ones (dimensions and units, coercion, where clauses, `nat` constraint solving),
+plus a native C ABI. v1 is the 1.0 specification, less the one exception below.
 
 Out of scope: user definable syntax. Fortress lets programs extend the grammar,
 and measured across all 1956 source files in this tree, only its own test

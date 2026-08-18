@@ -86,11 +86,35 @@ stays ASCII and mathematical symbols come in through library aliasing. Worth
 knowing the original grammar imports a `Unicode` module, so this is a choice
 being made, not one inherited. Not reopening it.
 
-**4. v1 language scope.** The old README listed what was never implemented. Some
-of it is HPC critical and has to be in v1: reduction variables, distributions,
-`ZZ64` indexing, non-`RR64` floats, bits and storage types. The rest (dimensions
-and units, keyword arguments, where clauses, coercion, modifiers) is deferrable.
-Draw the line explicitly before phase 4.
+**4. v1 language scope. Settled: everything ships.** The old README listed 16
+features the Sun implementation never finished. All of them are v1:
+
+reduction variables, distributions, `ZZ64` indexing, non-`RR64` floats, bits and
+storage types, integers beyond `ZZ32`/`ZZ64`, dimensions and units, keyword
+arguments, where clauses, coercion, modifiers, radix numerals, the types that
+classify operator properties, constraint solving for `nat` parameters, static
+arguments (`nat` with minus, `int`, `bool`, `dimension`, `unit`), and Unicode
+names.
+
+The call was made deliberately with the cost known: v1 is now the complete 1.0
+specification minus syntax abstraction, and Sun did not finish this list in five
+years with a funded team. What it buys is that nothing gets retrofitted into the
+type system later, which is the expensive direction.
+
+Two consequences for the plan above.
+
+Phase 4 is no longer one phase. Dimensions and units, coercion, where clauses and
+`nat` constraint solving are four separate inference problems that happen to live
+in the same checker, and unit algebra in particular has to survive inference
+rather than being checked after it. Split phase 4 before starting it and give
+each part its own exit criterion.
+
+Unicode names collide with decision 3. `02-stack.md` says the core grammar stays
+ASCII with mathematical symbols coming in through library aliasing. Unicode
+identifiers are a lexer level change, not a library one. Either that rule bends
+to allow Unicode in identifiers while operators stay ASCII, or Unicode names come
+off this list. This is the only item on it that contradicts a rule already
+written down, and it needs a decision rather than a preference.
 
 ## Out of scope for v1
 
