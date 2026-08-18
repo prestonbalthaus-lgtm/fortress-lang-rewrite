@@ -122,4 +122,13 @@ fn lexes_the_whole_corpus_without_panicking() {
         lexed,
         "every readable file must reach a verdict"
     );
+
+    // A ratchet, not a target. The number only ever goes up; a change that drops
+    // it is a regression and should fail here rather than be noticed a
+    // milestone later. M3d's lexer pass took this from 1277 to 1780 by adding
+    // `|`, `<|`, `|>`, `||`, `=>`, `^` and `#`.
+    assert!(
+        ok >= 1780,
+        "lexer corpus regressed: {ok} files lex, floor is 1780"
+    );
 }

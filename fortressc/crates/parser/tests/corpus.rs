@@ -102,4 +102,11 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
     for (label, count) in ranked.iter().take(10) {
         eprintln!("    {count:5}  {label}");
     }
+
+    // The same ratchet. M3d's lexer pass took this from 84 to 154 by adding
+    // `import`, the headerless-file production, and the tokens above it.
+    assert!(
+        parsed >= 154,
+        "parser corpus regressed: {parsed} files parse, floor is 154"
+    );
 }

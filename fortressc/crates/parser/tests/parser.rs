@@ -417,3 +417,61 @@ fn an_element_can_be_assigned() {
         other => panic!("expected an assignment, got {other:?}"),
     }
 }
+
+// ------------------------------- M3d lexer pass: imports and headerless files
+
+#[test]
+fn imports_are_recorded_and_the_brace_group_is_not_interpreted() {
+    let src = "component t\n\
+               import List.{...}\n\
+               import Set.{Set, set}\n\
+               import a.b.NestedOne.{...} except {ShellTrait}\n\
+               import AliasTest.{ opr OPLUS => MYPLUS }\n\
+               export Executable\n\
+               run() = 1\n\
+               end\n";
+    let c = component(src);
+    let names: Vec<&str> = c.imports.iter().map(|i| i.api_name.as_str()).collect();
+    assert_eq!(names, vec!["List", "Set", "a.b.NestedOne", "AliasTest"]);
+    assert_eq!(c.exports, vec!["Executable"]);
+    assert_eq!(c.decls.len(), 1);
+}
+
+#[test]
+fn import_api_is_a_different_form() {
+    let c = component("component t\nimport api Collection\nrun() = 1\nend\n");
+    let first = c.imports.first().expect("an import");
+    assert!(first.is_api);
+    assert_eq!(first.api_name, "Collection");
+}
+
+/// `Compilation.rats:14-19`: a file may be exports, imports and declarations
+/// straight to end of file, with no `component` wrapper and no `end`.
+#[test]
+fn a_headerless_file_parses_to_end_of_input() {
+    let c = component("export Executable\nimport List.{...}\nrun() = 1\n");
+    assert!(c.name.is_empty(), "a headerless file has no component name");
+    assert_eq!(c.exports, vec!["Executable"]);
+    assert_eq!(c.imports.len(), 1);
+    assert_eq!(c.decls.len(), 1);
+}
+
+#[test]
+fn a_wrapped_component_still_requires_its_end() {
+    let src = "component t\nrun() = 1\n";
+    let tokens = fortress_lexer::lex(src).expect("lex");
+    assert!(
+        parse(&tokens).is_err(),
+        "dropping `end` from a wrapped component must not silently become a headerless file"
+    );
+}
+
+#[test]
+fn imports_and_exports_may_come_in_either_order() {
+    // The reference grammar has an error production for exports first, and the
+    // corpus uses both.
+    let a = component("component t\nimport L.{...}\nexport E\nrun() = 1\nend\n");
+    let b = component("component t\nexport E\nimport L.{...}\nrun() = 1\nend\n");
+    assert_eq!(a.imports.len(), b.imports.len());
+    assert_eq!(a.exports, b.exports);
+}

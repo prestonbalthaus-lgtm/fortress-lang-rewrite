@@ -1,7 +1,7 @@
 use fortress_ast::Span;
 
-/// The 90 reserved words of `Keyword.rats:21-49`. Eighteen are acted on by the
-/// parser, `true`/`false` become literals, and the remaining 70 are reserved so
+/// The 90 reserved words of `Keyword.rats:21-49`. Twenty are acted on by the
+/// parser, `true`/`false` become literals, and the remaining 68 are reserved so
 /// the namespace stays closed: reserving late would be a breaking change.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Kind<'a> {
@@ -30,6 +30,11 @@ pub enum Kind<'a> {
     KwExcludes,
     KwWhere,
     KwVar,
+    /// M3d's lexer pass. Imports parse and are recorded; nothing reads them
+    /// until separate compilation exists, which whole-program monomorphization
+    /// deliberately does not have.
+    KwImport,
+    KwExcept,
     /// The receiver of a dotted method. Method bodies are parsed and not
     /// checked, so this never reaches the type checker.
     KwSelf,
@@ -85,6 +90,18 @@ pub enum Kind<'a> {
     Gt,
     Le,
     Ge,
+    /// `=>`. A map entry, a case arm, and an import alias.
+    FatArrow,
+    /// `<|` and `|>`, the list-literal enclosers, and the bare `|` they are
+    /// built from. Lexed, not parsed: enclosing operators need a precedence
+    /// map, and that is not this milestone.
+    LeftBar,
+    RightBar,
+    BarBar,
+    Bar,
+    /// `^`, exponentiation, and `#`, which the library uses as an operator.
+    Caret,
+    Hash,
     /// `===`. There is no `==` in Fortress.
     EqEqEq,
     /// `=/=`.
@@ -110,7 +127,7 @@ impl<'a> Token<'a> {
 
 /// The 79 reserved words outside the implemented subset, sorted for binary
 /// search.
-pub(crate) const RESERVED: [&str; 70] = [
+pub(crate) const RESERVED: [&str; 68] = [
     "BIG",
     "FORALL",
     "SI_unit",
@@ -133,7 +150,6 @@ pub(crate) const RESERVED: [&str; 70] = [
     "dim",
     "dominates",
     "ensures",
-    "except",
     "exit",
     "finally",
     "fn",
@@ -144,7 +160,6 @@ pub(crate) const RESERVED: [&str; 70] = [
     "grammar",
     "hidden",
     "idiom",
-    "import",
     "int",
     "invariant",
     "io",
@@ -203,6 +218,8 @@ pub(crate) fn classify_word(word: &str) -> Kind<'_> {
         "where" => Kind::KwWhere,
         "var" => Kind::KwVar,
         "self" => Kind::KwSelf,
+        "import" => Kind::KwImport,
+        "except" => Kind::KwExcept,
         "true" => Kind::True,
         "false" => Kind::False,
         _ if RESERVED.binary_search(&word).is_ok() => Kind::Reserved(word),
