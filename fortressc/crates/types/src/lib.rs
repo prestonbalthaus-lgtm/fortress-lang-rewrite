@@ -1366,6 +1366,14 @@ impl Checker {
         returns: Type,
         span: Span,
     ) -> Checked<Target> {
+        // One candidate is one winner in every cell, so there is nothing to
+        // enumerate and no size to bound. This is the whole pre-M3c language.
+        if let [only] = candidates {
+            return Ok(Target::UserFn {
+                name: only.symbol.clone(),
+            });
+        }
+
         let domain: Vec<Vec<Type>> = statics
             .iter()
             .map(|t| match *t {

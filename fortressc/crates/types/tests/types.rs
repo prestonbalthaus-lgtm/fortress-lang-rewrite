@@ -865,3 +865,57 @@ fn objects_are_tagged_from_one_so_that_zero_is_never_valid() {
     let tags: Vec<u32> = c.objects.iter().map(|o| o.tag).collect();
     assert_eq!(tags, vec![1, 2]);
 }
+
+#[test]
+fn a_cell_may_not_return_something_the_call_site_cannot_hold() {
+    // The static type `Ink` picks `name(Ink)` and with it a ZZ32 result, but
+    // the cell (Solid) would return a String through the same signature.
+    let e = body_error(
+        "trait Ink end\n\
+         object Solid extends {Ink} end\n\
+         object Dotted extends {Ink} end\n\
+         name(x: Ink): ZZ32 = 1\n\
+         name(x: Solid): String = \"a\"\n\
+         pick(n: ZZ32): Ink = if n === 0 then Solid else Dotted end\n\
+         run(): ZZ32 = name(pick(0))",
+    );
+    assert!(
+        matches!(e, TypeError::ReturnTypeNotCovariant { .. }),
+        "got {e}"
+    );
+}
+
+#[test]
+fn a_table_that_would_not_fit_is_a_diagnostic_rather_than_a_hang() {
+    // 101 concrete types across three dispatched positions is 1,030,301 cells.
+    // The bound is checked on the product, before anything is enumerated.
+    let objects: String = (0..101)
+        .map(|i| format!("object O{i} extends {{Big}} end\n"))
+        .collect();
+    let e = body_error(&format!(
+        "trait Big end\n{objects}\
+         f(a: Big, b: Big, c: Big): ZZ32 = 1\n\
+         f(a: O0, b: Big, c: Big): ZZ32 = 2\n\
+         g(x: Big): ZZ32 = f(x, x, x)"
+    ));
+    match e {
+        TypeError::DispatchTableTooLarge { cells, .. } => assert_eq!(cells, 101 * 101 * 101),
+        other => panic!("got {other}"),
+    }
+}
+
+#[test]
+fn a_lone_declaration_is_never_sized_or_enumerated() {
+    // The same hierarchy with one declaration is a direct call, so the bound
+    // above must not fire on it.
+    let objects: String = (0..101)
+        .map(|i| format!("object O{i} extends {{Big}} end\n"))
+        .collect();
+    let src = format!(
+        "component t\ntrait Big end\n{objects}\
+         f(a: Big, b: Big, c: Big): ZZ32 = 1\n\
+         g(x: Big): ZZ32 = f(x, x, x)\nend\n"
+    );
+    assert_eq!(last_target(&src), "f");
+    assert!(typed(&src).dispatches.is_empty());
+}
