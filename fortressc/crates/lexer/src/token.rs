@@ -1,0 +1,185 @@
+use fortress_ast::Span;
+
+/// The 90 reserved words of `Keyword.rats:21-49`. Eight are acted on by the M1
+/// parser, `true`/`false` become literals, and the remaining 80 are reserved so
+/// the namespace stays closed: reserving late would be a breaking change.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Kind<'a> {
+    /// Statement terminator. Carries a zero-width span at the first line
+    /// terminator of the whitespace run that produced it.
+    Newline,
+    Eof,
+
+    KwComponent,
+    KwExport,
+    KwEnd,
+    KwDo,
+    KwIf,
+    KwThen,
+    KwElse,
+    KwElif,
+
+    /// One of the other 80 reserved words. The parser rejects these with
+    /// "not in the M1 subset".
+    Reserved(&'a str),
+    Ident(&'a str),
+
+    True,
+    False,
+    /// `digits` has every group separator removed; `text` is the source slice.
+    IntLit {
+        text: &'a str,
+        digits: String,
+    },
+    /// Split at the single `.`, separators removed. The value is exact, not an
+    /// IEEE double: there is no exponent syntax in Fortress.
+    FloatLit {
+        text: &'a str,
+        int_digits: String,
+        frac_digits: String,
+    },
+    /// Escapes already decoded.
+    StrLit(String),
+
+    LParen,
+    RParen,
+    Comma,
+    Semi,
+    Colon,
+    Dot,
+
+    /// Serves both the definition `=` and the equality operator; the parser
+    /// disambiguates by position.
+    Eq,
+    ColonEq,
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Lt,
+    Gt,
+    Le,
+    Ge,
+    /// `===`. There is no `==` in Fortress.
+    EqEqEq,
+    /// `=/=`.
+    NotEq,
+    /// `//` is an operator, never a comment opener.
+    SlashSlash,
+    /// `///`.
+    SlashSlashSlash,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Token<'a> {
+    pub kind: Kind<'a>,
+    pub span: Span,
+}
+
+impl<'a> Token<'a> {
+    #[must_use]
+    pub const fn new(kind: Kind<'a>, span: Span) -> Self {
+        Self { kind, span }
+    }
+}
+
+/// The 80 reserved words outside the M1 subset, sorted for binary search.
+pub(crate) const RESERVED: [&str; 80] = [
+    "BIG",
+    "FORALL",
+    "SI_unit",
+    "Self",
+    "Zilch",
+    "absorbs",
+    "abstract",
+    "also",
+    "api",
+    "asif",
+    "at",
+    "atomic",
+    "bool",
+    "case",
+    "catch",
+    "coerce",
+    "coerces",
+    "comprises",
+    "contravariant",
+    "covariant",
+    "default",
+    "dim",
+    "dominates",
+    "ensures",
+    "except",
+    "excludes",
+    "exit",
+    "extends",
+    "finally",
+    "fn",
+    "for",
+    "forbid",
+    "getter",
+    "goto",
+    "grammar",
+    "hidden",
+    "idiom",
+    "import",
+    "int",
+    "invariant",
+    "io",
+    "label",
+    "most",
+    "nat",
+    "native",
+    "object",
+    "of",
+    "opr",
+    "or",
+    "override",
+    "private",
+    "property",
+    "provided",
+    "public",
+    "pure",
+    "reciprocal",
+    "requires",
+    "self",
+    "settable",
+    "setter",
+    "spawn",
+    "static",
+    "syntax",
+    "test",
+    "throw",
+    "throws",
+    "trait",
+    "try",
+    "tryatomic",
+    "type",
+    "typecase",
+    "typed",
+    "unit",
+    "value",
+    "var",
+    "where",
+    "while",
+    "widens",
+    "with",
+    "wrapped",
+];
+
+pub(crate) fn classify_word(word: &str) -> Kind<'_> {
+    match word {
+        "component" => Kind::KwComponent,
+        "export" => Kind::KwExport,
+        "end" => Kind::KwEnd,
+        "do" => Kind::KwDo,
+        "if" => Kind::KwIf,
+        "then" => Kind::KwThen,
+        "else" => Kind::KwElse,
+        "elif" => Kind::KwElif,
+        "true" => Kind::True,
+        "false" => Kind::False,
+        _ if RESERVED.binary_search(&word).is_ok() => Kind::Reserved(word),
+        _ => Kind::Ident(word),
+    }
+}

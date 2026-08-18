@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 fortress-ast.workspace = true
+logos = "0.16.1"
 
 [lints]
 workspace = true

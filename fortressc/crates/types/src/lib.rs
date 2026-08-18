@@ -9,9 +9,23 @@ use fortress_ast::Span;
 pub enum TypeError {
     /// A value of one type used where another is required. Never resolved by
     /// an implicit conversion; `widen` must be explicit.
-    Mismatch { span: Span, found: String, required: String },
+    Mismatch {
+        span: Span,
+        found: String,
+        required: String,
+    },
     /// Juxtaposition whose operands are neither both numeric nor both textual.
-    UnresolvableJuxtaposition { span: Span, left: String, right: String },
-    UnknownName { span: Span, name: String },
-    NoMatchingOverload { span: Span, name: String },
+    UnresolvableJuxtaposition {
+        span: Span,
+        left: String,
+        right: String,
+    },
+    UnknownName {
+        span: Span,
+        name: String,
+    },
+    NoMatchingOverload {
+        span: Span,
+        name: String,
+    },
 }
