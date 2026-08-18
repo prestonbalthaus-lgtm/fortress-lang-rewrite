@@ -286,9 +286,9 @@ shape() {
 # to FAIL. The tree has to be clean first, and it is restored either way.
 
 MUTATIONS=(
-  "crates/types/src/lib.rs|strictly_below(\&a.params, \&b.params, registry)|strictly_below(\&b.params, \&a.params, registry)|invert the specificity comparison"
-  "crates/codegen/src/lib.rs|.build_switch(tag, fail, \&cases)|.build_switch(tag, fail, \&cases[..cases.len().saturating_sub(1)])|drop the last case from every switch"
-  "crates/types/src/lib.rs|if maximal.len() != 1 {|if false {|accept a tie instead of reporting it"
+  'crates/types/src/lib.rs|strictly_below(&a.params, &b.params, registry)|strictly_below(&b.params, &a.params, registry)|invert the specificity comparison'
+  'crates/codegen/src/lib.rs|.build_switch(tag, fail, &cases)|.build_switch(tag, fail, &cases[..cases.len().saturating_sub(1)])|drop the last case from every switch'
+  'crates/types/src/lib.rs|if maximal.len() != 1 {|if false {|accept a tie instead of reporting it'
 )
 
 mutate() {

@@ -1,7 +1,7 @@
 # Fortress M3c: traits and symmetric multiple dispatch
 
 Date: 2026-08-18
-Status: **design, for review. Nothing implemented.**
+Status: **design approved, implemented on `m3c/dispatch`. See "As built" at the end.**
 
 The hard one. What follows is the plan, the two places it deliberately departs
 from the 1.0 specification, and the smallest subset that clears the milestone.
@@ -185,3 +185,67 @@ are what replaces it.
 * Mutations, each expected to be caught by exactly one check: invert the
   specificity comparison; drop a case from a switch and prove
   `fortress_dispatch_failed` halts cleanly rather than falling through.
+
+---
+
+## As built
+
+Approved and implemented on `m3c/dispatch`. Four things came out different from
+the design above, and one prediction in it was simply wrong.
+
+**The direct-call rule in §2 is not what got built, because as written it is
+unsound.** "If the static argument types leave exactly one applicable
+declaration, the call site emits a plain `call`" fails on `f(x: Alpha)` and
+`f(x: TraitA)` called with a `TraitA`: only `f(TraitA)` is applicable to
+`TraitA` itself, but the cell `(Alpha)` has both applicable and `f(Alpha)` wins
+it. Binding statically would call the wrong declaration. What is implemented is
+the §-1 sentence taken literally: **build the table, then let the collapse
+decide**. A table whose cells all name the same winner is a leaf, and a leaf is
+the direct call. Same outcome for every call that was direct before, and correct
+for this one. `tests/specificity.fss` is that case, and the gate prints `1 2 1`
+where a static binding prints `2 2 1`.
+
+**The statically computed return type is required to exist, which is stricter
+than raw cell enumeration.** `f(x: A)`, `f(x: B)`, called at a static `Top`
+whose concretes are `OA` and `OB`: every cell has a winner, but nothing applies
+to `Top` itself. That is refused, with `no declaration of f applies to (Top)`.
+Two reasons: the call has to be statically well typed to have a return type at
+all, and the same fact is what makes the table total. A declaration applicable
+to the static tuple is applicable to every concrete tuple beneath it, so no cell
+can be empty and the `fail` arms really are unreachable. `tests/ambiguous.fss`
+carries a covering `pick(Top, Top)` for exactly this reason.
+
+**Field initializers are restricted, and this is new.** A body field
+`f: T = expr` may not reference a singleton, call a user function, or construct
+another object. Without that, a singleton whose initializer reaches a singleton
+declared later loads a null global, and two objects whose initializers construct
+each other recurse until the stack goes. Both are segmentation faults out of
+ordinary user source, which is the one outcome this compiler does not ship.
+Constructor parameters are unrestricted -- the caller builds those values -- so
+the restriction costs nothing that matters yet.
+
+**`println` now refuses what there is no shim for.** It used to accept any type
+and fail in codegen with an internal error for an array. It is a diagnostic now.
+
+**The corpus prediction was wrong, and by a lot.** The design said M3c would
+move the parse metric "roughly 562 files". It moved it from 52 to 84. What
+actually moved was the *lexer*: `{` and `}` were not tokens at all, and adding
+them took 939 of 1956 files to 1277 (48.0% to 65.3%). The parser's first
+blockers are now modifiers in front of a declaration (`native component`, 295),
+`import` (169) and static parameters (138) -- none of which the 562 estimate
+accounted for, because it counted first blockers on the 939 files that lexed
+before rather than the 1277 that lex now. Generics remain the cliff.
+
+### The gate refused
+
+`tools/dispatch-gate.sh` is 19/0 with a 9/0 self test, and
+`./tools/dispatch-gate.sh --mutate` breaks the compiler three ways and requires
+each break to fail it. All three were run:
+
+| mutation | what it did |
+|---|---|
+| invert the specificity comparison (`strictly_below(&a, &b)` to `strictly_below(&b, &a)`) | matrix `3000 2000 1000 4000` became `1000 1000 1000 1000`; `specificity.fss` `1 2 1` became `2 2 2`; the table collapsed so completely that **no switch was emitted at all** (switches=0). 6 checks refused. |
+| drop the last case from every switch | `fortress: no declaration of draw for argument 1 with type tag 4`, **status 1** -- a clean halt with a diagnostic, not a fault, which is the entire reason the `fail` arm exists. 2 checks refused. |
+| accept a tie instead of reporting it (`if maximal.len() != 1` to `if false`) | `ambiguous.fss` compiled, status 0. Exactly 1 check refused, and it was the ambiguity check. |
+
+3 run, 0 survived, 0 could not be applied.
