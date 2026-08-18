@@ -1,7 +1,7 @@
 use fortress_ast::Span;
 
-/// The 90 reserved words of `Keyword.rats:21-49`. Nine are acted on by the
-/// parser, `true`/`false` become literals, and the remaining 79 are reserved so
+/// The 90 reserved words of `Keyword.rats:21-49`. Eighteen are acted on by the
+/// parser, `true`/`false` become literals, and the remaining 70 are reserved so
 /// the namespace stays closed: reserving late would be a breaking change.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Kind<'a> {
@@ -19,6 +19,20 @@ pub enum Kind<'a> {
     KwElse,
     KwElif,
     KwWhile,
+
+    /// M3c. `api` is the separate-compilation form, parsed so the corpus
+    /// metric moves; the checker refuses to compile one as a program.
+    KwApi,
+    KwTrait,
+    KwObject,
+    KwExtends,
+    KwComprises,
+    KwExcludes,
+    KwWhere,
+    KwVar,
+    /// The receiver of a dotted method. Method bodies are parsed and not
+    /// checked, so this never reaches the type checker.
+    KwSelf,
 
     /// One of the other 80 reserved words. The parser rejects these with
     /// "not in the M1 subset".
@@ -47,6 +61,10 @@ pub enum Kind<'a> {
     /// `[` and `]`: an array literal, or an index glued to what it indexes.
     LBracket,
     RBracket,
+    /// `{` and `}`: the `extends {A, B}` list, and the set and map literals
+    /// that are not in the subset yet but do have to lex.
+    LBrace,
+    RBrace,
     /// `[\` and `\]`, the static argument brackets of `Array[\ZZ64\]`.
     LGeneric,
     RGeneric,
@@ -92,7 +110,7 @@ impl<'a> Token<'a> {
 
 /// The 79 reserved words outside the implemented subset, sorted for binary
 /// search.
-pub(crate) const RESERVED: [&str; 79] = [
+pub(crate) const RESERVED: [&str; 70] = [
     "BIG",
     "FORALL",
     "SI_unit",
@@ -101,7 +119,6 @@ pub(crate) const RESERVED: [&str; 79] = [
     "absorbs",
     "abstract",
     "also",
-    "api",
     "asif",
     "at",
     "atomic",
@@ -110,7 +127,6 @@ pub(crate) const RESERVED: [&str; 79] = [
     "catch",
     "coerce",
     "coerces",
-    "comprises",
     "contravariant",
     "covariant",
     "default",
@@ -118,9 +134,7 @@ pub(crate) const RESERVED: [&str; 79] = [
     "dominates",
     "ensures",
     "except",
-    "excludes",
     "exit",
-    "extends",
     "finally",
     "fn",
     "for",
@@ -138,7 +152,6 @@ pub(crate) const RESERVED: [&str; 79] = [
     "most",
     "nat",
     "native",
-    "object",
     "of",
     "opr",
     "or",
@@ -150,7 +163,6 @@ pub(crate) const RESERVED: [&str; 79] = [
     "pure",
     "reciprocal",
     "requires",
-    "self",
     "settable",
     "setter",
     "spawn",
@@ -159,7 +171,6 @@ pub(crate) const RESERVED: [&str; 79] = [
     "test",
     "throw",
     "throws",
-    "trait",
     "try",
     "tryatomic",
     "type",
@@ -167,8 +178,6 @@ pub(crate) const RESERVED: [&str; 79] = [
     "typed",
     "unit",
     "value",
-    "var",
-    "where",
     "widens",
     "with",
     "wrapped",
@@ -185,6 +194,15 @@ pub(crate) fn classify_word(word: &str) -> Kind<'_> {
         "else" => Kind::KwElse,
         "elif" => Kind::KwElif,
         "while" => Kind::KwWhile,
+        "api" => Kind::KwApi,
+        "trait" => Kind::KwTrait,
+        "object" => Kind::KwObject,
+        "extends" => Kind::KwExtends,
+        "comprises" => Kind::KwComprises,
+        "excludes" => Kind::KwExcludes,
+        "where" => Kind::KwWhere,
+        "var" => Kind::KwVar,
+        "self" => Kind::KwSelf,
         "true" => Kind::True,
         "false" => Kind::False,
         _ if RESERVED.binary_search(&word).is_ok() => Kind::Reserved(word),

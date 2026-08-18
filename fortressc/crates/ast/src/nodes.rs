@@ -8,12 +8,18 @@ pub struct Component {
     pub name: String,
     pub exports: Vec<String>,
     pub decls: Vec<Decl>,
+    /// `api Foo ... end` rather than `component Foo ... end`. Parsed so the
+    /// corpus metric can move; an api has no bodies and is not executable, so
+    /// the type checker refuses it rather than pretending to compile one.
+    pub is_api: bool,
     pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decl {
     Function(FnDecl),
+    Trait(TraitDecl),
+    Object(ObjectDecl),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,7 +27,60 @@ pub struct FnDecl {
     pub name: String,
     pub params: Vec<Param>,
     pub return_type: Option<TypeRef>,
-    pub body: Expr,
+    /// `None` only inside an `api`, where a declaration is a signature.
+    pub body: Option<Expr>,
+    pub span: Span,
+}
+
+/// `trait T extends {A, B} comprises {...} excludes {...} ... end`.
+/// Only `extends` is checked; the rest is recorded and ignored, because
+/// exclusion is decided extensionally from the concrete types in the program.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraitDecl {
+    pub name: String,
+    pub extends: Vec<TypeRef>,
+    pub comprises: Vec<TypeRef>,
+    pub excludes: Vec<TypeRef>,
+    pub members: Vec<Member>,
+    pub span: Span,
+}
+
+/// `object O(x: T) extends {A} ... end`, or without the parentheses, a
+/// singleton: one instance, built once before `run`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObjectDecl {
+    pub name: String,
+    /// `None` is a singleton. `Some(vec![])` is `object O() ... end`.
+    pub params: Option<Vec<Param>>,
+    pub extends: Vec<TypeRef>,
+    pub members: Vec<Member>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Member {
+    Field(FieldDecl),
+    /// A dotted method. Parsed, never checked: the specification gives dotted
+    /// and functional methods separate namespaces, and desugaring one into the
+    /// other would have to be unbuilt later.
+    Method(MethodDecl),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldDecl {
+    pub name: String,
+    pub ty: TypeRef,
+    pub init: Option<Expr>,
+    pub mutable: bool,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MethodDecl {
+    pub name: String,
+    pub params: Vec<Param>,
+    pub return_type: Option<TypeRef>,
+    pub body: Option<Expr>,
     pub span: Span,
 }
 
@@ -153,6 +212,13 @@ pub enum Expr {
         body: Box<Expr>,
         span: Span,
     },
+    /// `x.f`. A field read, or -- under a glued `(` -- the receiver of a
+    /// dotted method call, which the checker refuses.
+    Field {
+        base: Box<Expr>,
+        name: String,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -199,7 +265,8 @@ impl Expr {
             | Self::Block { span, .. }
             | Self::ArrayLit { span, .. }
             | Self::Index { span, .. }
-            | Self::While { span, .. } => *span,
+            | Self::While { span, .. }
+            | Self::Field { span, .. } => *span,
         }
     }
 }

@@ -16,8 +16,8 @@ fn expr(src: &str) -> Expr {
     let wrapped = format!("component t\nf() = {src}\nend\n");
     let c = component(&wrapped);
     match c.decls.into_iter().next() {
-        Some(Decl::Function(f)) => f.body,
-        None => panic!("no decl parsed from {src:?}"),
+        Some(Decl::Function(f)) => f.body.expect("a body"),
+        other => panic!("expected a function, got {other:?}"),
     }
 }
 
@@ -149,7 +149,7 @@ fn a_newline_may_follow_a_loose_infix_operator() {
     let src = "component t\nf() = do\n  a +\n  b\nend\nend\n";
     let c = component(src);
     match c.decls.into_iter().next() {
-        Some(Decl::Function(f)) => match f.body {
+        Some(Decl::Function(f)) => match f.body.expect("a body") {
             Expr::Block { items, .. } => {
                 assert_eq!(
                     items.len(),
@@ -159,7 +159,7 @@ fn a_newline_may_follow_a_loose_infix_operator() {
             }
             other => panic!("expected a block, got {other:?}"),
         },
-        None => panic!("no decl"),
+        other => panic!("expected a function, got {other:?}"),
     }
 }
 
@@ -169,11 +169,11 @@ fn a_newline_may_not_precede_a_loose_infix_operator() {
     let src = "component t\nf() = do\n  a\n  + b\nend\nend\n";
     let c = component(src);
     match c.decls.into_iter().next() {
-        Some(Decl::Function(f)) => match f.body {
+        Some(Decl::Function(f)) => match f.body.expect("a body") {
             Expr::Block { items, .. } => assert_eq!(items.len(), 2, "expected two statements"),
             other => panic!("expected a block, got {other:?}"),
         },
-        None => panic!("no decl"),
+        other => panic!("expected a function, got {other:?}"),
     }
 }
 
@@ -182,11 +182,11 @@ fn blank_lines_between_statements_are_not_extra_statements() {
     let src = "component t\nf() = do\n  a\n\n\n  b\nend\nend\n";
     let c = component(src);
     match c.decls.into_iter().next() {
-        Some(Decl::Function(f)) => match f.body {
+        Some(Decl::Function(f)) => match f.body.expect("a body") {
             Expr::Block { items, .. } => assert_eq!(items.len(), 2),
             other => panic!("expected a block, got {other:?}"),
         },
-        None => panic!("no decl"),
+        other => panic!("expected a function, got {other:?}"),
     }
 }
 
@@ -197,7 +197,7 @@ fn a_typed_local_binding_parses() {
     let src = "component t\nf() = do\n  j:ZZ64 = widen(20)\n  j\nend\nend\n";
     let c = component(src);
     match c.decls.into_iter().next() {
-        Some(Decl::Function(f)) => match f.body {
+        Some(Decl::Function(f)) => match f.body.expect("a body") {
             Expr::Block { items, .. } => match items.first() {
                 Some(BlockItem::Binding(b)) => {
                     assert_eq!(b.name, "j");
@@ -207,7 +207,7 @@ fn a_typed_local_binding_parses() {
             },
             other => panic!("expected a block, got {other:?}"),
         },
-        None => panic!("no decl"),
+        other => panic!("expected a function, got {other:?}"),
     }
 }
 
@@ -268,7 +268,7 @@ fn the_m1_acceptance_program_parses() {
     let Expr::If {
         else_branch: Some(else_branch),
         ..
-    } = &f.body
+    } = f.body.as_ref().expect("a body")
     else {
         panic!("expected an if with an else, got {:?}", f.body)
     };
@@ -298,7 +298,7 @@ fn the_m1_acceptance_program_parses() {
     };
     assert_eq!(run.name, "run");
     assert!(run.params.is_empty());
-    let Expr::Block { items, .. } = &run.body else {
+    let Expr::Block { items, .. } = run.body.as_ref().expect("a body") else {
         panic!("run should be a block")
     };
     assert_eq!(items.len(), 2, "a binding and a println: {items:?}");

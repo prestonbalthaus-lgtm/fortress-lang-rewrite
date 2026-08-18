@@ -81,6 +81,9 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
                     fortress_parser::ParseError::ReservedWord { word, .. } => {
                         format!("reserved word `{word}`")
                     }
+                    fortress_parser::ParseError::StaticParametersUnsupported { .. } => {
+                        "static parameters on a declaration".to_owned()
+                    }
                 };
                 *blockers.entry(label).or_default() += 1;
             }

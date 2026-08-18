@@ -1,0 +1,45 @@
+component dispatch
+export Executable
+
+trait Ink end
+trait Face end
+
+object Solid extends {Ink} end
+object Dotted(width: ZZ32) extends {Ink} end
+object Round extends {Face} end
+object Square(side: ZZ32) extends {Face}
+   mark: String = "sq"
+end
+
+(* Four declarations, deliberately overlapping, so that every cell of the two
+   by two matrix has a different winner and none of them is the default. *)
+draw(i: Ink, f: Face): ZZ32 = 1000
+draw(i: Solid, f: Face): ZZ32 = 2000
+draw(i: Solid, f: Round): ZZ32 = 3000
+draw(i: Dotted, f: Square): ZZ32 = 4000
+
+(* The return annotation is what makes the value trait typed, and so what makes
+   the call site undecidable statically. *)
+inkOf(n: ZZ32): Ink = if n === 0 then Solid else Dotted(7) end
+faceOf(n: ZZ32): Face = if n === 0 then Round else Square(3) end
+
+run() = do
+   i:ZZ32 := 0
+   while i < 2 do
+      j:ZZ32 := 0
+      while j < 2 do
+         println(draw(inkOf(i), faceOf(j)))
+         j := j + 1
+      end
+      i := i + 1
+   end
+
+   (* Statically concrete arguments never reach a switch. *)
+   println(draw(Solid, Round))
+
+   s:Square = Square(5)
+   println(s.side)
+   println(s.mark)
+   println(Dotted(9).width)
+end
+end

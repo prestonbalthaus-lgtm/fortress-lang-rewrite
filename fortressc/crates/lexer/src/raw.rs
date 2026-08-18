@@ -338,6 +338,12 @@ pub(crate) enum Raw {
     LBracket,
     #[token("]")]
     RBracket,
+    /// M3c: `extends {A, B}`. Set and map literals use the same pair, which is
+    /// why adding them moves the lexer's corpus number as well.
+    #[token("{")]
+    LBrace,
+    #[token("}")]
+    RBrace,
     #[token(",")]
     Comma,
     #[token(";")]

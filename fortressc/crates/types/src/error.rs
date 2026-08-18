@@ -94,6 +94,89 @@ pub enum TypeError {
     InvalidAssignTarget {
         span: Span,
     },
+
+    // ------------------------------------------------------------------ M3c
+    /// An `api` parses, so the corpus metric can move, but there is nothing to
+    /// emit for a file of signatures.
+    ApiNotExecutable {
+        span: Span,
+    },
+    MissingBody {
+        span: Span,
+        name: String,
+    },
+    /// `trait A extends B` and `trait B extends A`. The transitive closure has
+    /// to terminate, and a cycle is a fact about the program, not a hang.
+    TraitCycle {
+        span: Span,
+        name: String,
+    },
+    NotATrait {
+        span: Span,
+        name: String,
+    },
+    UnknownField {
+        span: Span,
+        found: Type,
+        name: String,
+    },
+    /// `x.f(y)`. Dotted and functional methods have separate namespaces in the
+    /// specification, so `x.f(y)` is not `f(x, y)` and will not be desugared
+    /// into it.
+    DottedMethodUnsupported {
+        span: Span,
+        name: String,
+    },
+    MutableFieldUnsupported {
+        span: Span,
+        name: String,
+    },
+    FieldNeedsInitializer {
+        span: Span,
+        name: String,
+    },
+    SingletonNotConstructible {
+        span: Span,
+        name: String,
+    },
+    /// A singleton's fields are computed once, in declaration order, before
+    /// `run`. Letting one reach another singleton or a user function would put
+    /// a null dereference one forward reference away.
+    SingletonInitializerRestricted {
+        span: Span,
+        name: String,
+    },
+    NoApplicableDeclaration {
+        span: Span,
+        name: String,
+        arguments: String,
+    },
+    /// The deliberate deviation from specification 1.0, which would choose one
+    /// of the maximal declarations arbitrarily. An arbitrary winner is a
+    /// silently wrong answer.
+    AmbiguousDispatch {
+        span: Span,
+        name: String,
+        arguments: String,
+        first: Span,
+        second: Span,
+    },
+    ReturnTypeNotCovariant {
+        span: Span,
+        name: String,
+        arguments: String,
+        found: Type,
+        required: Type,
+    },
+    DispatchTableTooLarge {
+        span: Span,
+        name: String,
+        cells: usize,
+    },
+    NotPrintable {
+        span: Span,
+        found: Type,
+    },
 }
 
 impl TypeError {
@@ -118,7 +201,22 @@ impl TypeError {
             | Self::UnsupportedElementType { span, .. }
             | Self::AssignToImmutable { span, .. }
             | Self::AssignToUndeclared { span, .. }
-            | Self::InvalidAssignTarget { span } => *span,
+            | Self::InvalidAssignTarget { span }
+            | Self::ApiNotExecutable { span }
+            | Self::MissingBody { span, .. }
+            | Self::TraitCycle { span, .. }
+            | Self::NotATrait { span, .. }
+            | Self::UnknownField { span, .. }
+            | Self::DottedMethodUnsupported { span, .. }
+            | Self::MutableFieldUnsupported { span, .. }
+            | Self::FieldNeedsInitializer { span, .. }
+            | Self::SingletonNotConstructible { span, .. }
+            | Self::SingletonInitializerRestricted { span, .. }
+            | Self::NoApplicableDeclaration { span, .. }
+            | Self::AmbiguousDispatch { span, .. }
+            | Self::ReturnTypeNotCovariant { span, .. }
+            | Self::DispatchTableTooLarge { span, .. }
+            | Self::NotPrintable { span, .. } => *span,
         }
     }
 }
@@ -209,6 +307,78 @@ impl core::fmt::Display for TypeError {
             ),
             Self::InvalidAssignTarget { .. } => {
                 write!(f, "only a variable or an array element can be assigned to")
+            }
+            Self::ApiNotExecutable { .. } => write!(
+                f,
+                "an `api` is a set of signatures with no bodies; there is nothing to compile"
+            ),
+            Self::MissingBody { name, .. } => {
+                write!(f, "`{name}` has no body; write `{name}(...) = ...`")
+            }
+            Self::TraitCycle { name, .. } => {
+                write!(f, "`{name}` extends itself, directly or through another trait")
+            }
+            Self::NotATrait { name, .. } => {
+                write!(f, "`{name}` is not a trait, so nothing can extend it")
+            }
+            Self::UnknownField { found, name, .. } => {
+                write!(f, "{} has no field `{name}`", found.name())
+            }
+            Self::DottedMethodUnsupported { name, .. } => write!(
+                f,
+                "dotted method `.{name}` is parsed but not implemented; \
+                 it is not the same declaration as a function `{name}`"
+            ),
+            Self::MutableFieldUnsupported { name, .. } => {
+                write!(f, "`var {name}`: mutable fields are not implemented")
+            }
+            Self::FieldNeedsInitializer { name, .. } => write!(
+                f,
+                "field `{name}` is not a constructor parameter, so it needs `= ...`"
+            ),
+            Self::SingletonNotConstructible { name, .. } => write!(
+                f,
+                "`{name}` is a singleton object; write `{name}`, not `{name}(...)`"
+            ),
+            Self::SingletonInitializerRestricted { name, .. } => write!(
+                f,
+                "a singleton's fields are computed before `run`, so this one may not \
+                 reach `{name}`"
+            ),
+            Self::NoApplicableDeclaration {
+                name, arguments, ..
+            } => write!(f, "no declaration of `{name}` applies to ({arguments})"),
+            Self::AmbiguousDispatch {
+                name,
+                arguments,
+                first,
+                second,
+                ..
+            } => write!(
+                f,
+                "`{name}` is ambiguous for ({arguments}): the declarations at {}..{} and {}..{} \
+                 are both most specific, and neither is more specific than the other",
+                first.start, first.end, second.start, second.end
+            ),
+            Self::ReturnTypeNotCovariant {
+                name,
+                arguments,
+                found,
+                required,
+                ..
+            } => write!(
+                f,
+                "`{name}` for ({arguments}) returns {}, which is not a {}",
+                found.name(),
+                required.name()
+            ),
+            Self::DispatchTableTooLarge { name, cells, .. } => write!(
+                f,
+                "the dispatch table for `{name}` would have {cells} cells; \
+                 narrow the parameter types"
+            ),
+            Self::NotPrintable { found, .. } => {
+                write!(f, "`println` does not accept {}", found.name())
             }
         }
     }

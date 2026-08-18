@@ -15,8 +15,8 @@ mod error;
 pub use error::ParseError;
 
 use fortress_ast::{
-    Assign, BinOp, Binding, BlockItem, Component, Decl, Expr, Fixity, FnDecl, Param, Span, TypeRef,
-    UnOp,
+    Assign, BinOp, Binding, BlockItem, Component, Decl, Expr, FieldDecl, Fixity, FnDecl, Member,
+    MethodDecl, ObjectDecl, Param, Span, TraitDecl, TypeRef, UnOp,
 };
 use fortress_lexer::{Kind, Token};
 
@@ -147,7 +147,16 @@ impl<'t, 'a> Parser<'t, 'a> {
     fn component(&mut self) -> Parsed<Component> {
         self.skip_newlines();
         let start = self.span_here();
-        self.expect(&Kind::KwComponent, "`component`")?;
+        // An `api` is the same shape with no bodies. It parses so the corpus
+        // metric can move; `check` refuses it, because a declaration without a
+        // body is not something to emit code for.
+        let is_api = if self.at(&Kind::KwApi) {
+            self.pos += 1;
+            true
+        } else {
+            self.expect(&Kind::KwComponent, "`component` or `api`")?;
+            false
+        };
         let name = self.dotted_name()?;
         self.expect_separator()?;
 
@@ -160,7 +169,7 @@ impl<'t, 'a> Parser<'t, 'a> {
 
         let mut decls = Vec::new();
         while !self.at(&Kind::KwEnd) && !self.at_eof() {
-            decls.push(Decl::Function(self.fn_decl()?));
+            decls.push(self.decl(is_api)?);
             if self.at(&Kind::KwEnd) {
                 break;
             }
@@ -172,8 +181,210 @@ impl<'t, 'a> Parser<'t, 'a> {
             name,
             exports,
             decls,
+            is_api,
             span: Span::new(start.start, end.end),
         })
+    }
+
+    fn decl(&mut self, signature_only: bool) -> Parsed<Decl> {
+        match self.peek_kind() {
+            Some(Kind::KwTrait) => Ok(Decl::Trait(self.trait_decl()?)),
+            Some(Kind::KwObject) => Ok(Decl::Object(self.object_decl()?)),
+            _ => Ok(Decl::Function(self.fn_decl(signature_only)?)),
+        }
+    }
+
+    // ------------------------------------------------------ traits and objects
+
+    /// `comprises` and `excludes` are recorded and never read: exclusion is
+    /// decided from the concrete types the program actually declares, which a
+    /// whole-program compiler can see and a modular one cannot.
+    fn trait_decl(&mut self) -> Parsed<TraitDecl> {
+        let start = self.expect(&Kind::KwTrait, "`trait`")?.span;
+        let (name, _) = self.identifier("a trait name")?;
+        self.reject_static_parameters()?;
+        let extends = self.extends_clause()?;
+        let comprises = self.type_set_after(&Kind::KwComprises)?;
+        let excludes = self.type_set_after(&Kind::KwExcludes)?;
+        self.skip_where()?;
+        let members = self.members()?;
+        let end = self.expect(&Kind::KwEnd, "`end`")?.span;
+        Ok(TraitDecl {
+            name,
+            extends,
+            comprises,
+            excludes,
+            members,
+            span: Span::new(start.start, end.end),
+        })
+    }
+
+    /// No parameter list at all is a singleton: one instance, constructed once
+    /// before `run`. `object O() ... end` is a constructor taking nothing.
+    fn object_decl(&mut self) -> Parsed<ObjectDecl> {
+        let start = self.expect(&Kind::KwObject, "`object`")?.span;
+        let (name, _) = self.identifier("an object name")?;
+        self.reject_static_parameters()?;
+        let params = if self.at(&Kind::LParen) {
+            self.pos += 1;
+            let params = self.params()?;
+            self.expect(&Kind::RParen, "`)`")?;
+            Some(params)
+        } else {
+            None
+        };
+        let extends = self.extends_clause()?;
+        self.skip_where()?;
+        let members = self.members()?;
+        let end = self.expect(&Kind::KwEnd, "`end`")?.span;
+        Ok(ObjectDecl {
+            name,
+            params,
+            extends,
+            members,
+            span: Span::new(start.start, end.end),
+        })
+    }
+
+    fn reject_static_parameters(&self) -> Parsed<()> {
+        if self.at(&Kind::LGeneric) {
+            return Err(ParseError::StaticParametersUnsupported {
+                span: self.span_here(),
+            });
+        }
+        Ok(())
+    }
+
+    fn extends_clause(&mut self) -> Parsed<Vec<TypeRef>> {
+        self.type_set_after(&Kind::KwExtends)
+    }
+
+    fn type_set_after(&mut self, keyword: &Kind<'_>) -> Parsed<Vec<TypeRef>> {
+        if !self.at(keyword) {
+            return Ok(Vec::new());
+        }
+        self.pos += 1;
+        self.skip_newlines();
+        if !self.at(&Kind::LBrace) {
+            return Ok(vec![self.type_ref()?]);
+        }
+        self.pos += 1;
+        self.skip_newlines();
+        let mut out = Vec::new();
+        if self.at(&Kind::RBrace) {
+            self.pos += 1;
+            return Ok(out);
+        }
+        loop {
+            out.push(self.type_ref()?);
+            self.skip_newlines();
+            if !self.at(&Kind::Comma) {
+                break;
+            }
+            self.pos += 1;
+            self.skip_newlines();
+        }
+        self.expect(&Kind::RBrace, "`}`")?;
+        Ok(out)
+    }
+
+    /// `where {T extends U}`. Consumed and discarded: there are no static
+    /// parameters to constrain until generics land.
+    fn skip_where(&mut self) -> Parsed<()> {
+        if !self.at(&Kind::KwWhere) {
+            return Ok(());
+        }
+        self.pos += 1;
+        self.skip_newlines();
+        self.expect(&Kind::LBrace, "`{`")?;
+        let mut depth = 1usize;
+        while depth > 0 {
+            match self.peek_kind() {
+                Some(Kind::LBrace) => depth += 1,
+                Some(Kind::RBrace) => depth -= 1,
+                None | Some(Kind::Eof) => return Err(self.error("`}`")),
+                _ => {}
+            }
+            self.pos += 1;
+        }
+        Ok(())
+    }
+
+    fn members(&mut self) -> Parsed<Vec<Member>> {
+        let mut members = Vec::new();
+        self.skip_newlines();
+        while !self.at(&Kind::KwEnd) && !self.at_eof() {
+            members.push(self.member()?);
+            if self.at(&Kind::KwEnd) {
+                break;
+            }
+            self.expect_separator()?;
+        }
+        Ok(members)
+    }
+
+    /// A field (`x: T`, `var x: T = e`) or a dotted method. Methods are parsed
+    /// and never checked, so their bodies may say anything the grammar allows.
+    fn member(&mut self) -> Parsed<Member> {
+        let start = self.span_here();
+        let mutable = if self.at(&Kind::KwVar) {
+            self.pos += 1;
+            true
+        } else {
+            false
+        };
+        let (name, name_span) = self.identifier("a field or method name")?;
+
+        if self.at(&Kind::LParen) {
+            if mutable {
+                return Err(self.error("a field name after `var`"));
+            }
+            self.pos += 1;
+            let params = self.params()?;
+            let rparen = self.expect(&Kind::RParen, "`)`")?.span;
+            let return_type = if self.at(&Kind::Colon) {
+                self.pos += 1;
+                Some(self.type_ref()?)
+            } else {
+                None
+            };
+            self.skip_where()?;
+            let body = self.optional_definition()?;
+            let end = body.as_ref().map_or(rparen, Expr::span);
+            return Ok(Member::Method(MethodDecl {
+                name,
+                params,
+                return_type,
+                body,
+                span: Span::new(start.start, end.end),
+            }));
+        }
+
+        self.expect(&Kind::Colon, "`:` or `(`")?;
+        let ty = self.type_ref()?;
+        let init = self.optional_definition()?;
+        let end = init.as_ref().map_or(ty.span, Expr::span);
+        Ok(Member::Field(FieldDecl {
+            name,
+            ty,
+            init,
+            mutable,
+            span: Span::new(name_span.start, end.end),
+        }))
+    }
+
+    /// `= e`, where the `=` may sit on the following line. Restores the
+    /// position when there is none, so the separator the caller needs survives.
+    fn optional_definition(&mut self) -> Parsed<Option<Expr>> {
+        let save = self.pos;
+        self.skip_newlines();
+        if !self.at(&Kind::Eq) {
+            self.pos = save;
+            return Ok(None);
+        }
+        self.pos += 1;
+        self.skip_newlines();
+        Ok(Some(self.expr()?))
     }
 
     /// Component names may be dotted (`Compiled2.h`), which the lexer sees as
@@ -211,11 +422,11 @@ impl<'t, 'a> Parser<'t, 'a> {
 
     // ------------------------------------------------------------- fn decls
 
-    fn fn_decl(&mut self) -> Parsed<FnDecl> {
+    fn fn_decl(&mut self, signature_only: bool) -> Parsed<FnDecl> {
         let (name, name_span) = self.identifier("a function name")?;
         self.expect(&Kind::LParen, "`(`")?;
         let params = self.params()?;
-        self.expect(&Kind::RParen, "`)`")?;
+        let rparen = self.expect(&Kind::RParen, "`)`")?.span;
 
         let return_type = if self.at(&Kind::Colon) {
             self.pos += 1;
@@ -223,14 +434,20 @@ impl<'t, 'a> Parser<'t, 'a> {
         } else {
             None
         };
+        self.skip_where()?;
 
         // `w equals w` at top level: a newline is permitted on both sides.
-        self.skip_newlines();
-        self.expect(&Kind::Eq, "`=`")?;
-        self.skip_newlines();
-
-        let body = self.expr()?;
-        let span = Span::new(name_span.start, body.span().end);
+        // Inside an `api` there is no `=` at all and the declaration ends here.
+        let body = match self.optional_definition()? {
+            Some(body) => Some(body),
+            None if signature_only => None,
+            None => {
+                self.skip_newlines();
+                return Err(self.error("`=`"));
+            }
+        };
+        let end = body.as_ref().map_or(rparen, Expr::span);
+        let span = Span::new(name_span.start, end.end);
         Ok(FnDecl {
             name,
             params,
@@ -436,6 +653,17 @@ impl<'t, 'a> Parser<'t, 'a> {
                 };
                 continue;
             }
+            if self.at(&Kind::Dot) {
+                self.pos += 1;
+                let (name, name_span) = self.identifier("a field or method name")?;
+                let span = Span::new(expr.span().start, name_span.end);
+                expr = Expr::Field {
+                    base: Box::new(expr),
+                    name,
+                    span,
+                };
+                continue;
+            }
             // A glued `[` subscripts; a spaced one opens an array literal that
             // the juxtaposition layer will pick up.
             if self.at(&Kind::LBracket) && self.glued_left(self.pos) {
@@ -521,6 +749,15 @@ impl<'t, 'a> Parser<'t, 'a> {
                 let name = (*name).to_owned();
                 self.pos += 1;
                 Ok(Expr::Var { name, span })
+            }
+            // Only reachable inside a method body, which is parsed and never
+            // checked, so `self` never has to resolve to anything.
+            Kind::KwSelf => {
+                self.pos += 1;
+                Ok(Expr::Var {
+                    name: "self".to_owned(),
+                    span,
+                })
             }
             Kind::LParen => {
                 self.pos += 1;

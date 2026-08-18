@@ -569,3 +569,87 @@ fn a_subscript_goes_through_the_bounds_checked_slot_shim() {
         assert!(ir.contains(expected), "missing {expected} in:\n{ir}");
     }
 }
+
+// ------------------------------------ M3c: traits, objects and dispatch
+
+/// The matrix, with the expected answer computed here rather than read out of
+/// the program: the four cells of Ink x Face, then a statically concrete call,
+/// then two field reads and one on a freshly built object.
+#[test]
+fn every_cell_of_the_dispatch_matrix_reaches_its_own_declaration() {
+    let binary = compile_fixture("dispatch.fss", "dispatch");
+    let out = run(&binary);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "3000\n2000\n1000\n4000\n3000\n5\nsq\n9\n"
+    );
+    assert_eq!(out.status.code(), Some(0));
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// The regression that a "one applicable declaration statically" shortcut would
+/// introduce: it would bind both calls to `name(Ink)` and print 2, 2, 2.
+#[test]
+fn the_run_time_type_decides_and_not_the_static_one() {
+    let binary = compile_fixture("specificity.fss", "specificity");
+    let out = run(&binary);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "1\n2\n1\n");
+    assert_eq!(out.status.code(), Some(0));
+    let _ = std::fs::remove_file(&binary);
+}
+
+#[test]
+fn an_ambiguous_call_is_refused_at_compile_time_and_names_both_declarations() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture("ambiguous.fss"))
+        .arg("--emit-ir")
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "an ambiguity is a user diagnostic, not a compiler bug:\n{message}"
+    );
+    assert!(message.contains("is ambiguous for (OL, OR)"), "{message}");
+    assert!(
+        message.contains("the declarations at"),
+        "the diagnostic must name both declarations:\n{message}"
+    );
+}
+
+/// Generated code names the shims and nothing else: no `GC_malloc`, no second
+/// allocation path, and the tag written where the collector cannot mistake it
+/// for a pointer.
+#[test]
+fn an_object_is_allocated_through_the_scanned_shim_and_dispatch_loads_a_tag() {
+    let ir = emit_ir("dispatch.fss");
+    for expected in [
+        "call ptr @fortress_object_alloc",
+        "@fortress_dispatch_failed",
+        "switch i32 %tag",
+        "unreachable",
+    ] {
+        assert!(ir.contains(expected), "missing {expected} in:\n{ir}");
+    }
+    for forbidden in ["GC_malloc", "@malloc"] {
+        assert!(!ir.contains(forbidden), "{forbidden} reached the IR:\n{ir}");
+    }
+}
+
+#[test]
+fn a_dispatch_leaf_is_a_direct_call_so_callees_stay_inlinable() {
+    let ir = emit_ir("dispatch.fss");
+    for expected in [
+        "call i32 @\"draw$Solid_Round\"",
+        "call i32 @\"draw$Solid_Face\"",
+        "call i32 @\"draw$Dotted_Square\"",
+        "call i32 @\"draw$Ink_Face\"",
+    ] {
+        assert!(ir.contains(expected), "missing {expected} in:\n{ir}");
+    }
+    assert!(
+        !ir.contains("indirectbr"),
+        "no leaf may become an indirect branch:\n{ir}"
+    );
+}

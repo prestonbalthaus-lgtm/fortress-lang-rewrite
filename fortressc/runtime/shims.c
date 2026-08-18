@@ -162,6 +162,41 @@ long long fortress_array_length(const void *array) {
     return ((const FortressArray *)array)->length;
 }
 
+/*
+ * Objects. One block per instance: a 32 bit concrete type tag at offset 0, four
+ * bytes of padding, then the fields at +8. The tag is written here rather than
+ * in generated code so that there is exactly one place it can be written from,
+ * the same reason the bounds check is in exactly one place.
+ *
+ * SCANNED, with no exception for an object whose fields are all scalars. An
+ * object that holds a String or another object holds real pointers, and telling
+ * the two cases apart at the allocation site is how the collector ends up
+ * freeing something that is still reachable.
+ */
+void *fortress_object_alloc(long long bytes, int tag) {
+    if (bytes < (long long)sizeof(int)) {
+        fortress_halt("object is too small to carry a tag", bytes, tag);
+    }
+    void *object = fortress_alloc_scanned((size_t)bytes);
+    /* The negative control is plain malloc and does not zero. A field read
+     * before its store would otherwise see whatever was there. */
+    memset(object, 0, (size_t)bytes);
+    *(int *)object = tag;
+    return object;
+}
+
+/*
+ * A switch arm no concrete tag can reach. Statically dead -- the type checker
+ * proved every cell has a winner before it emitted the switch -- and it exists
+ * because "unreachable" should mean a clean halt with a diagnostic rather than
+ * undefined behaviour.
+ */
+void fortress_dispatch_failed(const char *name, int position, int tag) {
+    fprintf(stderr, "fortress: no declaration of %s for argument %d with type tag %d\n", name,
+            position, tag);
+    exit(1);
+}
+
 void *fortress_array_slot(void *array, long long index) {
     FortressArray *a = array;
     if (index < 0 || index >= a->length) {

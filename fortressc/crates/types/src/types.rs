@@ -1,7 +1,27 @@
 //! The typed AST. Every operator and call in here names one concrete target,
 //! so codegen never asks a type question.
 
+use std::collections::HashSet;
+use std::sync::{LazyLock, Mutex, PoisonError};
+
 use fortress_ast::Span;
+
+/// User declared type names, promoted to `'static` so that [`Type`] stays
+/// `Copy` and comparable by value. The compiler handles one component per
+/// process, so this table is that component's own vocabulary; interning is what
+/// keeps it from growing by a copy per call in a test binary.
+#[must_use]
+pub fn intern(name: &str) -> &'static str {
+    static TABLE: LazyLock<Mutex<HashSet<&'static str>>> =
+        LazyLock::new(|| Mutex::new(HashSet::new()));
+    let mut table = TABLE.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(found) = table.get(name) {
+        return found;
+    }
+    let leaked: &'static str = Box::leak(name.to_owned().into_boxed_str());
+    table.insert(leaked);
+    leaked
+}
 
 /// What an array holds. A separate enum from [`Type`] so that [`Type`] stays
 /// `Copy` without boxing, and so that "array of array" is unrepresentable
@@ -35,7 +55,7 @@ impl Elem {
             Type::RR64 => Some(Self::RR64),
             Type::Boolean => Some(Self::Boolean),
             Type::String => Some(Self::String),
-            Type::Void | Type::Array(_) => None,
+            Type::Void | Type::Array(_) | Type::Object(_) | Type::Trait(_) => None,
         }
     }
 
@@ -73,6 +93,12 @@ pub enum Type {
     Void,
     /// One dimensional and homogeneous. Nesting arrives with generics.
     Array(Elem),
+    /// A concrete object type: a heap block whose first four bytes are its tag.
+    Object(&'static str),
+    /// A trait. No run-time representation of its own -- a trait typed value is
+    /// a pointer to some concrete object, and its membership is a compile time
+    /// fact about that object's tag.
+    Trait(&'static str),
 }
 
 impl Type {
@@ -90,6 +116,7 @@ impl Type {
             Self::Array(Elem::RR64) => "Array[\\RR64\\]",
             Self::Array(Elem::Boolean) => "Array[\\Boolean\\]",
             Self::Array(Elem::String) => "Array[\\String\\]",
+            Self::Object(name) | Self::Trait(name) => name,
         }
     }
 
@@ -108,7 +135,13 @@ impl Type {
             Self::Array(Elem::RR64) => "array_rr64",
             Self::Array(Elem::Boolean) => "array_boolean",
             Self::Array(Elem::String) => "array_string",
+            Self::Object(name) | Self::Trait(name) => name,
         }
+    }
+
+    #[must_use]
+    pub const fn is_reference(self) -> bool {
+        matches!(self, Self::Object(_) | Self::Trait(_))
     }
 
     #[must_use]
@@ -263,9 +296,21 @@ pub enum Target {
     Println {
         ty: Type,
     },
-    /// A function declared in this component.
+    /// A function declared in this component. `name` is already the mangled
+    /// symbol: an overload set of one keeps its bare name, so nothing about
+    /// pre-M3c generated code changes.
     UserFn {
         name: String,
+    },
+    /// A compiler generated decision tree over the concrete type tags of the
+    /// arguments. Reached only when the table for this call site does not
+    /// collapse to a single winner.
+    Dispatch {
+        symbol: String,
+    },
+    /// `O(...)`: the generated constructor for an object.
+    ObjectNew {
+        symbol: String,
     },
     Mpi(MpiOp),
     /// `array(n)`. The element type is not in the symbol: the runtime is told
@@ -289,6 +334,7 @@ impl Target {
             Self::Concat => "concat_string_string".to_owned(),
             Self::Println { ty } => format!("println_{}", ty.symbol()),
             Self::UserFn { name } => name.clone(),
+            Self::Dispatch { symbol } | Self::ObjectNew { symbol } => symbol.clone(),
             Self::Mpi(op) => op.symbol().to_owned(),
             Self::ArrayNew { .. } => ARRAY_ALLOC.to_owned(),
             Self::ArrayLength => ARRAY_LENGTH.to_owned(),
@@ -300,7 +346,12 @@ impl Target {
 pub struct TypedComponent {
     pub name: String,
     pub exports: Vec<String>,
+    /// Declaration order, which is also singleton construction order.
+    pub objects: Vec<TypedObject>,
     pub functions: Vec<TypedFn>,
+    /// One per distinct (overload set, static argument tuple) that needed a
+    /// run-time decision. Sorted by symbol, so the module is deterministic.
+    pub dispatches: Vec<DispatchFn>,
     /// Set when any function resolved an MPI builtin. The driver reads it to
     /// decide whether the MPI shim goes into the link.
     pub uses_mpi: bool,
@@ -313,6 +364,67 @@ pub struct TypedFn {
     pub return_type: Type,
     pub body: TypedExpr,
     pub span: Span,
+}
+
+/// The tag of the first object declared. Zero is never a valid tag, so a block
+/// that was never given one cannot be mistaken for an instance of anything.
+pub const FIRST_TAG: u32 = 1;
+
+/// The allocator entry point for objects. It takes the tag as well as the size
+/// so that writing the tag lives in exactly one place, the same way the bounds
+/// check lives in exactly one place.
+pub const OBJECT_ALLOC: &str = "fortress_object_alloc";
+
+/// Called from a switch arm that no concrete tag can reach. Statically dead;
+/// it exists so "unreachable" means a clean halt with a diagnostic.
+pub const DISPATCH_FAILED: &str = "fortress_dispatch_failed";
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypedObject {
+    pub name: &'static str,
+    pub tag: u32,
+    /// The generated constructor, `Name$new`.
+    pub symbol: String,
+    /// Fields in layout order. The first `param_count` of them are the
+    /// constructor's value parameters; the rest are computed by `initializers`,
+    /// in the same order.
+    pub fields: Vec<TypedField>,
+    pub param_count: usize,
+    pub initializers: Vec<TypedExpr>,
+    /// One instance, built between `fortress_runtime_init` and `run`.
+    pub singleton: bool,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypedField {
+    pub name: String,
+    pub ty: Type,
+}
+
+/// A generated dispatch function. Its signature is the call site's static
+/// argument types, so every call that shares those types shares the function.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DispatchFn {
+    pub symbol: String,
+    /// The overload set's Fortress name, passed to the failure shim.
+    pub set_name: String,
+    pub params: Vec<Type>,
+    pub returns: Type,
+    pub tree: DispatchNode,
+}
+
+/// The table, already flattened. A row whose cells all name the same winner is
+/// a [`DispatchNode::Call`], so the tree is usually shallower than the arity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DispatchNode {
+    /// Forward every parameter to this symbol and return the result.
+    Call { symbol: String },
+    Switch {
+        /// Which parameter's tag to read.
+        position: usize,
+        arms: Vec<(u32, DispatchNode)>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -364,6 +476,16 @@ pub enum TypedExprKind {
         cond: Box<TypedExpr>,
         body: Box<TypedExpr>,
     },
+    /// A field read. The index is into [`TypedObject::fields`]; the offset it
+    /// becomes is codegen's business.
+    Field {
+        base: Box<TypedExpr>,
+        index: u32,
+    },
+    /// The one instance of a singleton object.
+    Singleton {
+        name: &'static str,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -391,9 +513,11 @@ pub enum AssignTarget {
         name: String,
         ty: Type,
     },
+    /// Boxed: an assignment target holding two whole expressions inline made
+    /// `TypedBlockItem` several hundred bytes wide once `Type` grew a name.
     Element {
-        base: TypedExpr,
-        index: TypedExpr,
+        base: Box<TypedExpr>,
+        index: Box<TypedExpr>,
         elem: Elem,
     },
 }
