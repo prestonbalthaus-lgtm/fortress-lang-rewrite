@@ -1,18 +1,44 @@
 /*
- * The M1 runtime. Every symbol here is a target the type checker resolved
+ * The Fortress runtime. Every symbol here is a target the type checker resolved
  * statically, so the compiler emits a direct call and never dispatches.
  *
- * Memory: the string returning shims allocate and never free. That leak is
- * accepted for M1 by design. Every allocation goes through fortress_alloc so
- * that replacing it with Boehm or ARC is a change to one function rather than
- * a hunt through generated code.
+ * Memory: collected, by Boehm-Demers-Weiser. M1 centralised every allocation
+ * behind fortress_alloc precisely so that this would be a change to one
+ * function, and it was.
+ *
+ * fortress_alloc hands out ATOMIC memory: the collector does not scan it for
+ * pointers. That is correct for strings, which are bytes, and it is what keeps
+ * a million string allocations from retaining each other by accident when a
+ * character pair happens to look like an address. Anything that stores a
+ * pointer into the heap -- M3b's arrays, above all -- needs a scannable
+ * allocator built on GC_malloc instead, or the collector will free the objects
+ * it points at while it is still holding them.
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(FORTRESS_NO_GC)
+/*
+ * The leaking allocator M1 shipped, kept only so tools/memory-gate.sh has a
+ * negative control: an RSS measurement that cannot tell a collected build from
+ * a leaking one is not a measurement. Nothing in the compiler defines this.
+ */
+#define FORTRESS_RAW_ALLOC(bytes) malloc(bytes)
+
+void fortress_runtime_init(void) {}
+#else
+#include <gc.h>
+
+#define FORTRESS_RAW_ALLOC(bytes) GC_malloc_atomic(bytes)
+
+/* Generated main calls this before anything else, so the collector is up
+ * before the first allocation. */
+void fortress_runtime_init(void) { GC_INIT(); }
+#endif
+
 static void *fortress_alloc(size_t bytes) {
-    void *p = malloc(bytes);
+    void *p = FORTRESS_RAW_ALLOC(bytes);
     if (p == NULL) {
         fputs("fortress: out of memory\n", stderr);
         abort();

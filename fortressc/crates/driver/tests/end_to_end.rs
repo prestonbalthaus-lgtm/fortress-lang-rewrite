@@ -69,7 +69,7 @@ fn a_fortress_source_file_becomes_a_running_native_binary() {
 }
 
 #[test]
-fn the_produced_binary_links_nothing_but_libc() {
+fn the_produced_binary_carries_no_vm_runtime() {
     let binary = compile_fixture("skeleton.fss", "ldd");
     let out = Command::new("ldd")
         .arg(&binary)
@@ -349,4 +349,138 @@ fn the_mpi_shim_stays_out_of_a_program_that_does_not_use_mpi() {
         linked_a(&args, ".shims.c"),
         "the base runtime was not linked:\n{args}"
     );
+}
+
+// ------------------------------------------------- M3: the target CPU
+// The build host and the compute node are not the same machine, so the CPU the
+// object is built for is a decision rather than whatever `cargo` happened to
+// run on.
+
+fn emit_ir_with(fixture_name: &str, extra: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture(fixture_name))
+        .arg("--emit-ir")
+        .args(extra)
+        .output()
+        .expect("could not run fortressc")
+}
+
+#[test]
+fn the_default_target_cpu_is_x86_64_v3_not_whatever_built_it() {
+    let out = emit_ir_with("fact.fss", &[]);
+    let ir = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        ir.contains("\"target-cpu\"=\"x86-64-v3\""),
+        "the default must be a named baseline, not the host:\n{ir}"
+    );
+}
+
+#[test]
+fn target_cpu_selects_the_cluster_part() {
+    let out = emit_ir_with("fact.fss", &["--target-cpu", "skylake-avx512"]);
+    let ir = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        ir.contains("\"target-cpu\"=\"skylake-avx512\""),
+        "--target-cpu did not reach the emitted functions:\n{ir}"
+    );
+}
+
+#[test]
+fn the_module_carries_a_triple_and_a_data_layout() {
+    let out = emit_ir_with("fact.fss", &[]);
+    let ir = String::from_utf8_lossy(&out.stdout);
+    assert!(ir.contains("target datalayout ="), "no data layout:\n{ir}");
+    assert!(ir.contains("target triple ="), "no triple:\n{ir}");
+}
+
+/// LLVM answers an unknown processor name with a warning on stderr and then
+/// silently builds for the baseline. That is a wrong binary, not a failed one,
+/// so the driver refuses the name itself.
+#[test]
+fn an_unknown_target_cpu_is_refused_rather_than_silently_ignored() {
+    let out = emit_ir_with("fact.fss", &["--target-cpu", "skylake-avx1024"]);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "an unknown CPU must be a user error"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("x86-64-v3") && stderr.contains("skylake-avx512"),
+        "the diagnostic should list what is accepted:\n{stderr}"
+    );
+}
+
+#[test]
+fn native_is_available_for_a_build_that_runs_where_it_was_built() {
+    let out = emit_ir_with("fact.fss", &["--target-cpu", "native"]);
+    assert_eq!(out.status.code(), Some(0), "`native` must be accepted");
+    let ir = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        ir.contains("\"target-cpu\"=") && !ir.contains("\"target-cpu\"=\"native\""),
+        "`native` must resolve to a real part name:\n{ir}"
+    );
+}
+
+// --------------------------------------------------- M3a: the collector
+// Every heap allocation in a Fortress program goes through `fortress_alloc` in
+// runtime/shims.c. M1 accepted that it never freed; M3a replaces the body with
+// a collector, which is why the allocation path was centralised in the first
+// place. The proof that memory stays flat is `tools/memory-gate.sh`, which
+// needs an RSS measurement cargo cannot make.
+
+#[test]
+fn allocation_goes_through_the_collector() {
+    let binary = compile_fixture("skeleton.fss", "gcsym");
+    let symbols = Command::new("nm")
+        .arg("-u")
+        .arg(&binary)
+        .output()
+        .expect("could not run nm");
+    let undefined = String::from_utf8_lossy(&symbols.stdout);
+    assert!(
+        undefined.contains("GC_malloc_atomic"),
+        "the runtime is still allocating with malloc:\n{undefined}"
+    );
+
+    let deps = Command::new("ldd")
+        .arg(&binary)
+        .output()
+        .expect("could not run ldd");
+    let deps = String::from_utf8_lossy(&deps.stdout);
+    assert!(
+        deps.contains("libgc.so"),
+        "the collector is not linked:\n{deps}"
+    );
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// The collector has to be started before the first allocation, and `main` is
+/// the only place that is guaranteed to run first.
+#[test]
+fn generated_main_starts_the_runtime_before_the_program() {
+    let ir = emit_ir("skeleton.fss");
+    let main = ir
+        .split("define i32 @main()")
+        .nth(1)
+        .unwrap_or_else(|| panic!("no main in:\n{ir}"));
+    let init = main
+        .find("call void @fortress_runtime_init()")
+        .unwrap_or_else(|| panic!("main does not start the runtime:\n{main}"));
+    let run = main
+        .find("call void @run()")
+        .unwrap_or_else(|| panic!("main does not call run:\n{main}"));
+    assert!(
+        init < run,
+        "the runtime must start before the program:\n{main}"
+    );
+}
+
+#[test]
+fn the_soak_program_runs_to_completion() {
+    let binary = compile_fixture("gcsoak_lite.fss", "soak");
+    let out = run(&binary);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "done\n");
+    assert_eq!(out.status.code(), Some(0));
+    let _ = std::fs::remove_file(&binary);
 }
