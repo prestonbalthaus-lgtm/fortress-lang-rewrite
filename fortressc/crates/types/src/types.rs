@@ -264,6 +264,10 @@ impl MpiOp {
 /// The array runtime. Three entry points: one allocates, one reports the
 /// length, and one turns an index into the address of a slot after checking it.
 /// Everything else about an array is a typed load or store in generated code.
+/// The halt a failed `assert` calls. Named here so codegen and the checker
+/// cannot disagree about it.
+pub const ASSERT_FAILED: &str = "fortress_assert_failed";
+
 pub const ARRAY_ALLOC: &str = "fortress_array_alloc";
 pub const ARRAY_LENGTH: &str = "fortress_array_length";
 pub const ARRAY_SLOT: &str = "fortress_array_slot";
@@ -299,6 +303,13 @@ pub enum Target {
     Println {
         ty: Type,
     },
+    /// `print`: `println` without the newline.
+    Print {
+        ty: Type,
+    },
+    /// The halt a failed `assert` reaches. It takes the message and does not
+    /// return, so nothing downstream needs a value from it.
+    AssertFailed,
     /// A function declared in this component. `name` is already the mangled
     /// symbol: an overload set of one keeps its bare name, so nothing about
     /// pre-M3c generated code changes.
@@ -337,6 +348,8 @@ impl Target {
             Self::ToString { from } => format!("to_string_{}", from.symbol()),
             Self::Concat => "concat_string_string".to_owned(),
             Self::Println { ty } => format!("println_{}", ty.symbol()),
+            Self::Print { ty } => format!("print_{}", ty.symbol()),
+            Self::AssertFailed => ASSERT_FAILED.to_owned(),
             Self::UserFn { name } => name.clone(),
             Self::Dispatch { symbol } | Self::ObjectNew { symbol } => symbol.clone(),
             Self::Mpi(op) => op.symbol().to_owned(),

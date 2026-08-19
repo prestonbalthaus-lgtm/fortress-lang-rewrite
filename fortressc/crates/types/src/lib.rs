@@ -22,7 +22,8 @@ pub use error::TypeError;
 pub use types::{
     intern, ArithOp, AssignTarget, CompareOp, DispatchFn, DispatchNode, Elem, MpiOp, Target, Type,
     TypedBlockItem, TypedComponent, TypedExpr, TypedExprKind, TypedField, TypedFn, TypedObject,
-    TypedParam, ARRAY_ALLOC, ARRAY_LENGTH, ARRAY_SLOT, DISPATCH_FAILED, FIRST_TAG, OBJECT_ALLOC,
+    TypedParam, ARRAY_ALLOC, ARRAY_LENGTH, ARRAY_SLOT, ASSERT_FAILED, DISPATCH_FAILED, FIRST_TAG,
+    OBJECT_ALLOC,
 };
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -2203,7 +2204,10 @@ impl Checker {
         // before M3c; a user function named `println` is unreachable.
         match name.as_str() {
             "widen" => self.widen(args, span, expected),
-            "println" => self.println(args, span, expected),
+            "println" => self.println(args, span, expected, true),
+            "print" => self.println(args, span, expected, false),
+            "ignore" => self.ignore(args, span, expected),
+            "assert" => self.assert(args, span, expected),
             "array" => self.array_new(args, span, expected),
             "length" => self.array_length(args, span, expected),
             _ if self.registry.is_object(name) => {
@@ -2729,11 +2733,20 @@ impl Checker {
         })
     }
 
-    fn println(&mut self, args: &[Expr], span: Span, expected: Option<Type>) -> Checked<TypedExpr> {
+    /// `println` and `print`, which differ by one character in the shim they
+    /// reach and by nothing else.
+    fn println(
+        &mut self,
+        args: &[Expr],
+        span: Span,
+        expected: Option<Type>,
+        newline: bool,
+    ) -> Checked<TypedExpr> {
+        let name = if newline { "println" } else { "print" };
         let [arg] = args else {
             return Err(TypeError::ArityMismatch {
                 span,
-                name: "println".to_owned(),
+                name: name.to_owned(),
                 expected: 1,
                 found: args.len(),
             });
@@ -2748,10 +2761,160 @@ impl Checker {
         self.require(Type::Void, expected, span)?;
         Ok(TypedExpr {
             kind: TypedExprKind::Apply {
-                target: Target::Println { ty },
+                target: if newline {
+                    Target::Println { ty }
+                } else {
+                    Target::Print { ty }
+                },
                 args: vec![inner],
             },
             ty: Type::Void,
+            span,
+        })
+    }
+
+    /// `ignore(e)`: evaluate `e` for its effects and discard its value.
+    ///
+    /// A block whose only item is the expression and whose tail is absent is
+    /// exactly that, so this needs no target and no shim -- the discard is what
+    /// a block statement already does.
+    fn ignore(&mut self, args: &[Expr], span: Span, expected: Option<Type>) -> Checked<TypedExpr> {
+        let [arg] = args else {
+            return Err(TypeError::ArityMismatch {
+                span,
+                name: "ignore".to_owned(),
+                expected: 1,
+                found: args.len(),
+            });
+        };
+        let inner = self.expr(arg, None)?;
+        self.require(Type::Void, expected, span)?;
+        Ok(TypedExpr {
+            kind: TypedExprKind::Block {
+                items: vec![TypedBlockItem::Expr(inner)],
+                tail: None,
+            },
+            ty: Type::Void,
+            span,
+        })
+    }
+
+    /// `assert`, in the four shapes the corpus writes:
+    ///
+    /// ```text
+    /// assert(flag)                 assert(flag, message)
+    /// assert(actual, expected)     assert(actual, expected, message)
+    /// ```
+    ///
+    /// The two two-argument forms are told apart by the SECOND argument's
+    /// type, which is decidable: a message is a String, and comparing a value
+    /// against a String is the equality form only when the first is a String
+    /// too. `assert(s1, s2)` on two Strings is therefore the flag form's shape
+    /// but the equality form's meaning, and String equality is not implemented,
+    /// so it is refused rather than quietly read as a message.
+    ///
+    /// It becomes an `if`, a call to the halt shim, and nothing else. The
+    /// comparison is the `Target::Compare` the language already has, so an
+    /// assert is exactly as strong as `=` is -- and no stronger.
+    fn assert(&mut self, args: &[Expr], span: Span, expected: Option<Type>) -> Checked<TypedExpr> {
+        let (condition, message) = match args {
+            [flag] => (self.assert_flag(flag, span)?, None),
+            [flag, second] => {
+                let first = self.expr(flag, None)?;
+                if first.ty == Type::Boolean && !is_string_literal(second) {
+                    // `assert(flag, otherFlag)` is the equality form.
+                    let right = self.expr(second, Some(Type::Boolean))?;
+                    (self.assert_equal(first, right, span)?, None)
+                } else if first.ty == Type::Boolean {
+                    (first, Some(self.expr(second, Some(Type::String))?))
+                } else {
+                    let right = self.expr(second, Some(first.ty))?;
+                    (self.assert_equal(first, right, span)?, None)
+                }
+            }
+            [actual, wanted, message] => {
+                let left = self.expr(actual, None)?;
+                let right = self.expr(wanted, Some(left.ty))?;
+                let message = self.expr(message, Some(Type::String))?;
+                (self.assert_equal(left, right, span)?, Some(message))
+            }
+            _ => {
+                return Err(TypeError::ArityMismatch {
+                    span,
+                    name: "assert".to_owned(),
+                    expected: 3,
+                    found: args.len(),
+                })
+            }
+        };
+        let message = message.unwrap_or(TypedExpr {
+            kind: TypedExprKind::StrConst("assertion failed".to_owned()),
+            ty: Type::String,
+            span,
+        });
+        self.require(Type::Void, expected, span)?;
+        Ok(TypedExpr {
+            kind: TypedExprKind::If {
+                cond: Box::new(condition),
+                then_branch: Box::new(TypedExpr {
+                    kind: TypedExprKind::Unit,
+                    ty: Type::Void,
+                    span,
+                }),
+                else_branch: Some(Box::new(TypedExpr {
+                    kind: TypedExprKind::Apply {
+                        target: Target::AssertFailed,
+                        args: vec![message],
+                    },
+                    ty: Type::Void,
+                    span,
+                })),
+            },
+            ty: Type::Void,
+            span,
+        })
+    }
+
+    fn assert_flag(&mut self, flag: &Expr, span: Span) -> Checked<TypedExpr> {
+        let typed = self.expr(flag, Some(Type::Boolean))?;
+        if typed.ty != Type::Boolean {
+            return Err(TypeError::LogicalOperandNotBoolean {
+                span,
+                op: "assert",
+                found: typed.ty,
+            });
+        }
+        Ok(typed)
+    }
+
+    fn assert_equal(
+        &mut self,
+        left: TypedExpr,
+        right: TypedExpr,
+        span: Span,
+    ) -> Checked<TypedExpr> {
+        if left.ty != right.ty {
+            return Err(TypeError::MixedNumericOperands {
+                span,
+                left: left.ty,
+                right: right.ty,
+            });
+        }
+        if !left.ty.is_numeric() && left.ty != Type::Boolean {
+            return Err(TypeError::NotComparable {
+                span,
+                found: left.ty,
+            });
+        }
+        Ok(TypedExpr {
+            kind: TypedExprKind::Apply {
+                target: Target::Compare {
+                    op: CompareOp::Eq,
+                    ty: left.ty,
+                },
+                args: vec![left, right],
+            },
+            ty: Type::Boolean,
             span,
         })
     }
@@ -2907,6 +3070,10 @@ impl Checker {
             span,
         })
     }
+}
+
+const fn is_string_literal(e: &Expr) -> bool {
+    matches!(e, Expr::StrLit { .. })
 }
 
 const fn is_int_literal(e: &Expr) -> bool {

@@ -238,6 +238,12 @@ pub enum TypeError {
         name: String,
         cells: usize,
     },
+    /// `assert(a, b)` on values `=` is not defined for. An assert is exactly
+    /// as strong as equality is, and no stronger.
+    NotComparable {
+        span: Span,
+        found: Type,
+    },
     NotPrintable {
         span: Span,
         found: Type,
@@ -334,6 +340,7 @@ impl TypeError {
             | Self::ReturnTypeNotCovariant { span, .. }
             | Self::DispatchTableTooLarge { span, .. }
             | Self::NotPrintable { span, .. }
+            | Self::NotComparable { span, .. }
             | Self::AccessorUnsupported { span, .. }
             | Self::GenericFunctionalMethodUnsupported { span, .. }
             | Self::ValueBindingUnsupported { span, .. }
@@ -545,6 +552,12 @@ impl core::fmt::Display for TypeError {
                 f,
                 "the dispatch table for `{name}` would have {cells} cells; \
                  narrow the parameter types"
+            ),
+            Self::NotComparable { found, .. } => write!(
+                f,
+                "`assert` compares its arguments with `=`, which is not \
+                 defined on {}",
+                found.name()
             ),
             Self::NotPrintable { found, .. } => {
                 write!(f, "`println` does not accept {}", found.name())

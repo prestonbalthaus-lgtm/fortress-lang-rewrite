@@ -73,6 +73,29 @@ void println_rr64(double v) { printf("%g\n", v); }
 void println_boolean(int v) { puts(v ? "true" : "false"); }
 void println_void(void) { puts(""); }
 
+/*
+ * `print` is `println` without the newline. Separate shims rather than a flag,
+ * because a flag would be one more thing generated code has to get right and
+ * these are four lines each.
+ */
+void print_string(const char *s) { fputs(s, stdout); }
+void print_zz32(int v) { printf("%d", v); }
+void print_zz64(long long v) { printf("%lld", v); }
+void print_rr64(double v) { printf("%g", v); }
+void print_boolean(int v) { fputs(v ? "true" : "false", stdout); }
+void print_void(void) {}
+
+/*
+ * A failed `assert`. Fortress 1.0 throws; there are no exceptions here, so it
+ * halts the way an out of bounds subscript does -- a diagnostic on stderr and
+ * exit 1, never a silent continue.
+ */
+void fortress_assert_failed(const char *message) {
+    fflush(stdout);
+    fprintf(stderr, "fortress: assertion failed: %s\n", message);
+    exit(1);
+}
+
 char *to_string_zz32(int v) {
     int n = snprintf(NULL, 0, "%d", v);
     char *out = fortress_alloc((size_t)n + 1);
