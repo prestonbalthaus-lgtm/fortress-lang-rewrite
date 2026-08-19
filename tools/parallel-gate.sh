@@ -252,9 +252,9 @@ MUTATIONS=(
   'runtime/shims.c|#define GC_THREADS|#define GC_THREADS_DISABLED_BY_MUTATION|stop registering worker threads with the collector'
   'runtime/shims.c|int64_t begin = lo + base * w + (w < extra ? w : extra);|int64_t begin = lo + base * w;|drop the remainder from the partition, so indices are skipped'
   'runtime/shims.c|if (requested == 1 |if (0 |hand a sequential loop to the pool'
-  'runtime/shims.c|task.workers = parallelism;|task.workers = parallelism - 1;|leave the last chunk unrun'
+  'runtime/shims.c|    fortress_run_chunk(&task, 0);|    (void)0;|let the calling thread skip its own chunk'
   'crates/types/src/lib.rs|matches!(self.depth_of(name), Some(depth) if depth < floor)|false|let a parallel body assign to a binding outside it'
-  'crates/codegen/src/lib.rs|let value = self.load_name(&capture.name)?;|let value = self.context.i64_type().const_zero().into();|capture nothing, and pass zero instead'
+  'crates/codegen/src/lib.rs|scope.insert(binder.to_owned(), Slot::Value(index));|scope.insert(binder.to_owned(), Slot::Value(self.context.i64_type().const_zero().into()));|give every iteration the same index'
 )
 
 mutate() {
