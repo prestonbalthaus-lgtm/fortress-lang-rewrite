@@ -111,15 +111,60 @@ pub struct Param {
     pub span: Span,
 }
 
-/// Types are bare names (`ZZ32`) or a name applied to static arguments
-/// (`Map[\ZZ64, List[\String\]\]`). Resolution happens in the types crate; the
-/// parser only records what was written. After monomorphization no `TypeRef` in
-/// a component has arguments -- expansion rewrites every one to a ground name.
+/// Types are bare names (`ZZ32`), a name applied to static arguments
+/// (`Map[\ZZ64, List[\String\]\]`), the unit type `()`, a tuple of two or more,
+/// or an arrow. Resolution happens in the types crate; the parser only records
+/// what was written. After monomorphization no `TypeRef` in a component has
+/// static arguments -- expansion rewrites every one to a ground name.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TypeRef {
-    pub name: String,
-    pub args: Vec<TypeRef>,
-    pub span: Span,
+pub enum TypeRef {
+    Named {
+        name: String,
+        args: Vec<TypeRef>,
+        span: Span,
+    },
+    /// `()`. The specification's special type, pronounced void; not a tuple.
+    Unit { span: Span },
+    /// Two or more, by construction. A one-element parenthesised list is
+    /// unwrapped by the parser and can never arrive here.
+    Tuple { elems: Vec<TypeRef>, span: Span },
+    /// `A -> B`, right associative. Parsed, never resolved: this subset has no
+    /// function values, so an arrow type is uninhabited.
+    Arrow {
+        from: Box<TypeRef>,
+        to: Box<TypeRef>,
+        span: Span,
+    },
+}
+
+impl TypeRef {
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        match self {
+            Self::Named { span, .. }
+            | Self::Unit { span }
+            | Self::Tuple { span, .. }
+            | Self::Arrow { span, .. } => *span,
+        }
+    }
+
+    /// The type as the user wrote it, for diagnostics.
+    #[must_use]
+    pub fn written(&self) -> String {
+        match self {
+            Self::Named { name, args, .. } if args.is_empty() => name.clone(),
+            Self::Named { name, args, .. } => {
+                let inner: Vec<String> = args.iter().map(Self::written).collect();
+                format!("{name}[\\{}\\]", inner.join(", "))
+            }
+            Self::Unit { .. } => "()".to_owned(),
+            Self::Tuple { elems, .. } => {
+                let inner: Vec<String> = elems.iter().map(Self::written).collect();
+                format!("({})", inner.join(", "))
+            }
+            Self::Arrow { from, to, .. } => format!("{} -> {}", from.written(), to.written()),
+        }
+    }
 }
 
 /// `[\T extends {Foo, Bar}\]`. Type parameters only: `nat`, `int`, `bool`,

@@ -38,6 +38,12 @@ pub enum TypeError {
         span: Span,
         name: String,
     },
+    /// A type form the parser accepts and this subset does not implement.
+    /// `form` names it: "a tuple type", "an arrow type", "a tuple expression".
+    TypeNotImplemented {
+        span: Span,
+        form: &'static str,
+    },
     ArityMismatch {
         span: Span,
         name: String,
@@ -235,6 +241,7 @@ impl TypeError {
             | Self::MixedNumericOperands { span, .. }
             | Self::UnknownName { span, .. }
             | Self::UnknownType { span, .. }
+            | Self::TypeNotImplemented { span, .. }
             | Self::ArityMismatch { span, .. }
             | Self::LiteralOutOfRange { span, .. }
             | Self::LiteralNotApplicable { span, .. }
@@ -304,6 +311,9 @@ impl core::fmt::Display for TypeError {
             ),
             Self::UnknownName { name, .. } => write!(f, "unknown name `{name}`"),
             Self::UnknownType { name, .. } => write!(f, "unknown type `{name}`"),
+            Self::TypeNotImplemented { form, .. } => {
+                write!(f, "{form} is not implemented in this subset")
+            }
             Self::ArityMismatch {
                 name,
                 expected,

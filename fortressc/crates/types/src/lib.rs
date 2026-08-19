@@ -200,8 +200,8 @@ impl Checker {
         match self.registry.resolve(reference)? {
             Type::Trait(name) => Ok(name),
             _ => Err(TypeError::NotATrait {
-                span: reference.span,
-                name: reference.name.clone(),
+                span: reference.span(),
+                name: reference.written(),
             }),
         }
     }

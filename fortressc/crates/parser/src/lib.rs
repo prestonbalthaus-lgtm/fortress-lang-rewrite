@@ -435,7 +435,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         self.expect(&Kind::Colon, "`:` or `(`")?;
         let ty = self.type_ref()?;
         let init = self.optional_definition()?;
-        let end = init.as_ref().map_or(ty.span, Expr::span);
+        let end = init.as_ref().map_or_else(|| ty.span(), Expr::span);
         Ok(Member::Field(FieldDecl {
             name,
             ty,
@@ -550,7 +550,7 @@ impl<'t, 'a> Parser<'t, 'a> {
             let (name, name_span) = self.identifier("a parameter name")?;
             self.expect(&Kind::Colon, "`:`")?;
             let ty = self.type_ref()?;
-            let span = Span::new(name_span.start, ty.span.end);
+            let span = Span::new(name_span.start, ty.span().end);
             params.push(Param { name, ty, span });
             self.skip_newlines();
             if !self.at(&Kind::Comma) {
@@ -565,7 +565,7 @@ impl<'t, 'a> Parser<'t, 'a> {
     fn type_ref(&mut self) -> Parsed<TypeRef> {
         let (name, span) = self.identifier("a type name")?;
         if !self.at(&Kind::LGeneric) {
-            return Ok(TypeRef {
+            return Ok(TypeRef::Named {
                 name,
                 args: Vec::new(),
                 span,
@@ -574,7 +574,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         self.pos += 1;
         let args = self.type_args()?;
         let close = self.expect(&Kind::RGeneric, "`\\]`")?.span;
-        Ok(TypeRef {
+        Ok(TypeRef::Named {
             name,
             args,
             span: Span::new(span.start, close.end),

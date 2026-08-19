@@ -1086,12 +1086,12 @@ fn an_array_of_objects_cannot_be_made_uninitialised() {
 #[test]
 fn mangling_distinguishes_nesting_from_arity() {
     use fortress_ast::{Span, TypeRef};
-    let bare = |n: &str| TypeRef {
+    let bare = |n: &str| TypeRef::Named {
         name: n.to_owned(),
         args: Vec::new(),
         span: Span::new(0, 0),
     };
-    let nested = TypeRef {
+    let nested = TypeRef::Named {
         name: "List".to_owned(),
         args: vec![bare("B")],
         span: Span::new(0, 0),
