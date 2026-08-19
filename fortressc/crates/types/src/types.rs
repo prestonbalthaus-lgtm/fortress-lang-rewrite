@@ -268,6 +268,12 @@ impl MpiOp {
 /// cannot disagree about it.
 pub const ASSERT_FAILED: &str = "fortress_assert_failed";
 
+/// The parallel loop entry point and the environment allocator. The
+/// environment is SCANNED: a capture may be a String or an Array, and the
+/// collector has to see through the environment to it while a worker holds it.
+pub const PARALLEL_FOR: &str = "fortress_parallel_for";
+pub const ENV_ALLOC: &str = "fortress_env_alloc";
+
 pub const ARRAY_ALLOC: &str = "fortress_array_alloc";
 pub const ARRAY_LENGTH: &str = "fortress_array_length";
 pub const ARRAY_SLOT: &str = "fortress_array_slot";
@@ -513,6 +519,22 @@ pub enum TypedExprKind {
     Field {
         base: Box<TypedExpr>,
         index: u32,
+    },
+    /// A `for` loop over a half-open integer range. The body is OUTLINED into
+    /// a real function -- `symbol` -- so a worker thread can call it; the
+    /// values it reads from the enclosing scope are copied into an environment
+    /// struct allocated ONCE, before the loop, never per iteration.
+    ///
+    /// `sequential` loops keep the same shape and run inline, so there is one
+    /// lowering rather than two.
+    ParallelFor {
+        binder: String,
+        lo: Box<TypedExpr>,
+        hi: Box<TypedExpr>,
+        body: Box<TypedExpr>,
+        captures: Vec<TypedParam>,
+        symbol: String,
+        sequential: bool,
     },
     /// The one instance of a singleton object.
     Singleton {

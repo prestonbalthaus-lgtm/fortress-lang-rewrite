@@ -1,0 +1,13 @@
+component parallelseq
+export Executable
+
+(* `seq(...)` is a promise about ORDER, so it is honoured whatever the range
+   size -- the runtime never hands a sequential loop to the pool. 5000 is above
+   the threshold below which everything runs inline anyway, so this really does
+   distinguish the flag being honoured from the range being small. *)
+run(): () = do
+   for i <- seq(0#5000) do
+      println(i)
+   end
+end
+end

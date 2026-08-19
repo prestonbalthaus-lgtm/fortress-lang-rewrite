@@ -1,0 +1,15 @@
+component badparallelescape
+export Executable
+
+(* THE data race, refused syntactically. `total` is declared outside the loop,
+   so two iterations on two threads would read-modify-write it at once. No
+   dataflow analysis is needed to see that: the name resolves below the loop's
+   own scope, and that is the whole rule. *)
+run(): () = do
+   total: ZZ64 := 0
+   for i <- 0#1000 do
+      total := total + i
+   end
+   println(total)
+end
+end

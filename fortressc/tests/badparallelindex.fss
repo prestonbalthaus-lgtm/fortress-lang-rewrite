@@ -1,0 +1,14 @@
+component badparallelindex
+export Executable
+
+(* `a[i]` is the slot this iteration owns; `a[i + 1]` is somebody else's.
+   Proving two iterations cannot collide needs an analysis this compiler does
+   not have, so the index must BE the binder. *)
+run(): () = do
+   a: Array[\ZZ64\] = array(1000)
+   for i <- 0#999 do
+      a[i + 1] := i
+   end
+   println(a[1])
+end
+end

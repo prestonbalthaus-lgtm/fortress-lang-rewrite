@@ -1,0 +1,51 @@
+export Demo
+
+(* 1. M3c: Traits and Objects *)
+trait Entity end
+object Asteroid extends {Entity} end
+object Ship extends {Entity} end
+
+(* 2. M3c: Symmetric Multiple Dispatch *)
+collide(a: Asteroid, b: Asteroid): () = println("Rock hits rock. Lots of dust.")
+collide(a: Asteroid, b: Ship): () =     println("Rock hits ship. Hull breach!")
+collide(a: Ship, b: Asteroid): () =     println("Ship hits rock. Hull breach!")
+collide(a: Ship, b: Ship): () =         println("Ship hits ship. Shield flare!")
+collide(a: Entity, b: Entity): () =     println("Generic bump.")
+
+(* Helper to simulate modulo 2 using M3k math operators *)
+isEven(n: ZZ64): Boolean = (n = (n / 2) * 2)
+
+run(): () = do
+    println("--- Fortress Bare-Metal Demo ---")
+    
+    (* Flexing Multiple Dispatch *)
+    println("")
+    println("1. Testing Symmetric Dispatch:")
+    rock: Entity = Asteroid
+    player: Entity = Ship
+    
+    collide(rock, rock)
+    collide(rock, player)
+    collide(player, player)
+    
+    (* Flexing Math, Control Flow, and Mutables *)
+    println("")
+    println("2. Testing Math & Control Flow (Collatz of 27):")
+    n: ZZ64 := 27
+    steps: ZZ64 := 0
+    
+    while n > 1 do
+        if isEven(n) then
+            n := n / 2
+        else
+            n := (3 * n) + 1
+        end
+        steps := steps + 1
+    end
+    
+    println("Collatz sequence reached 1. Total steps:")
+    println(steps)
+    
+    println("")
+    println("Execution complete. No segfaults!")
+end

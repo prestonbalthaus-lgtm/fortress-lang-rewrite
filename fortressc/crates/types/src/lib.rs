@@ -22,8 +22,8 @@ pub use error::TypeError;
 pub use types::{
     intern, ArithOp, AssignTarget, CompareOp, DispatchFn, DispatchNode, Elem, MpiOp, Target, Type,
     TypedBlockItem, TypedComponent, TypedExpr, TypedExprKind, TypedField, TypedFn, TypedObject,
-    TypedParam, ARRAY_ALLOC, ARRAY_LENGTH, ARRAY_SLOT, ASSERT_FAILED, DISPATCH_FAILED, FIRST_TAG,
-    OBJECT_ALLOC,
+    TypedParam, ARRAY_ALLOC, ARRAY_LENGTH, ARRAY_SLOT, ASSERT_FAILED, DISPATCH_FAILED, ENV_ALLOC,
+    FIRST_TAG, OBJECT_ALLOC, PARALLEL_FOR,
 };
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -85,6 +85,18 @@ struct SelfCtx {
     fields: Vec<TypedField>,
 }
 
+/// One parallel loop being checked.
+struct LoopCtx {
+    binder: String,
+    /// A `seq(...)` loop runs in order on one thread, so the scope boundary
+    /// below does not apply to it. Only a parallel body has to be race free.
+    parallel: bool,
+    /// How deep the scope stack was when the loop body opened. A lookup that
+    /// resolves below this is a capture; at or above it is loop-local.
+    floor: usize,
+    captures: BTreeMap<String, Type>,
+}
+
 struct Checker {
     registry: Registry,
     functions: HashMap<String, Vec<Signature>>,
@@ -122,11 +134,18 @@ struct Checker {
     scopes: Vec<HashMap<String, Local>>,
     uses_mpi: bool,
     dispatches: BTreeMap<String, DispatchFn>,
+    /// While a parallel loop body is checked: the binder's name, and the names
+    /// the body read from OUTSIDE the loop. The captures are collected here
+    /// rather than recomputed by walking the typed tree, because the scope
+    /// stack already knows which lookups crossed the boundary.
+    loop_ctx: Vec<LoopCtx>,
     /// Set while an object's field initializers are checked. They run when the
     /// object is built -- for a singleton, before `run` -- so they may not
     /// reach a singleton, a user function or another constructor. That is what
     /// makes construction order a non-question instead of a null dereference.
     object_init: bool,
+    /// Numbers the outlined loop bodies so their symbols are unique.
+    loops: usize,
 }
 
 /// A method lives in its own namespace, so its symbol must not be able to
@@ -368,6 +387,8 @@ impl Checker {
             uses_mpi: false,
             dispatches: BTreeMap::new(),
             object_init: false,
+            loop_ctx: Vec::new(),
+            loops: 0,
         };
         let counts = overload_counts(component);
         checker.build_hierarchy(component)?;
@@ -1310,6 +1331,25 @@ impl Checker {
         self.scopes.iter().rev().find_map(|s| s.get(name).copied())
     }
 
+    /// The same lookup, recording a crossing. A name resolved from below the
+    /// innermost loop's floor is read by the loop body from the enclosing
+    /// scope, so it has to travel to the worker in the environment struct.
+    fn lookup_capturing(&mut self, name: &str) -> Option<Local> {
+        let found = self
+            .scopes
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(depth, s)| s.get(name).map(|local| (depth, *local)));
+        let (depth, local) = found?;
+        for ctx in &mut self.loop_ctx {
+            if depth < ctx.floor && name != ctx.binder {
+                ctx.captures.insert(name.to_owned(), local.ty);
+            }
+        }
+        Some(local)
+    }
+
     fn declare(&mut self, name: String, ty: Type, mutable: bool) {
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(name, Local { ty, mutable });
@@ -1384,6 +1424,24 @@ impl Checker {
             Expr::Index { base, index, span } => self.index(base, index, *span, expected),
             Expr::While { cond, body, span } => self.while_expr(cond, body, *span, expected),
             Expr::Field { base, name, span } => self.field(base, name, *span, expected),
+            Expr::For {
+                binder,
+                lo,
+                hi,
+                inclusive,
+                sequential,
+                body,
+                span,
+            } => self.for_expr(
+                binder,
+                lo,
+                hi,
+                *inclusive,
+                *sequential,
+                body,
+                *span,
+                expected,
+            ),
             // Unreachable: expansion rewrites every instantiation to a plain
             // name before the checker is constructed.
             Expr::Instantiate { callee, span, .. } => Err(TypeError::NotGeneric {
@@ -1399,7 +1457,7 @@ impl Checker {
     /// A name in scope, or -- failing that -- a singleton object, which is the
     /// only kind of type name that is also a value.
     fn variable(&mut self, name: &str, span: Span, expected: Option<Type>) -> Checked<TypedExpr> {
-        if let Some(local) = self.lookup(name) {
+        if let Some(local) = self.lookup_capturing(name) {
             self.require(local.ty, expected, span)?;
             return Ok(TypedExpr {
                 kind: TypedExprKind::Var(name.to_owned()),
@@ -1579,6 +1637,125 @@ impl Checker {
         })
     }
 
+    /// `for i <- lo#n do ... end`.
+    ///
+    /// The index is ZZ64 and so are the bounds. That is not a simplification
+    /// for its own sake: array subscripts are ZZ64 because the JVM's 2^31
+    /// ceiling is why this rewrite exists, and a loop that fills an array has
+    /// to be able to reach every slot of it.
+    ///
+    /// The scope boundary is enforced here, and every rule is SYNTACTIC. That
+    /// is the whole reason M4 needs no dataflow analysis: a body that cannot
+    /// name anything outside itself on the left of an assignment cannot race,
+    /// whatever order its iterations run in.
+    #[allow(clippy::too_many_arguments)]
+    fn for_expr(
+        &mut self,
+        binder: &str,
+        lo: &Expr,
+        hi: &Expr,
+        inclusive: bool,
+        sequential: bool,
+        body: &Expr,
+        span: Span,
+        expected: Option<Type>,
+    ) -> Checked<TypedExpr> {
+        let lo_typed = self.expr(lo, Some(Type::ZZ64))?;
+        let bound = self.expr(hi, Some(Type::ZZ64))?;
+        for operand in [&lo_typed, &bound] {
+            if operand.ty != Type::ZZ64 {
+                return Err(TypeError::Mismatch {
+                    span: operand.span,
+                    found: operand.ty,
+                    required: Type::ZZ64,
+                });
+            }
+        }
+
+        // One shape reaches codegen: a half-open [lo, hi). `a:b` is inclusive,
+        // so its end is b + 1; `a#n` is a count, so its end is a + n. The
+        // difference between the two generator forms stops existing here
+        // rather than in the runtime.
+        let add = |left: TypedExpr, right: TypedExpr| TypedExpr {
+            kind: TypedExprKind::Apply {
+                target: Target::Arith {
+                    op: ArithOp::Add,
+                    ty: Type::ZZ64,
+                },
+                args: vec![left, right],
+            },
+            ty: Type::ZZ64,
+            span,
+        };
+        let one = TypedExpr {
+            kind: TypedExprKind::IntConst(1),
+            ty: Type::ZZ64,
+            span,
+        };
+        let hi_typed = if inclusive {
+            add(bound, one)
+        } else {
+            add(lo_typed.clone(), bound)
+        };
+
+        let mut scope = HashMap::new();
+        scope.insert(
+            binder.to_owned(),
+            Local {
+                ty: Type::ZZ64,
+                mutable: false,
+            },
+        );
+        self.scopes.push(scope);
+        self.loop_ctx.push(LoopCtx {
+            binder: binder.to_owned(),
+            parallel: !sequential,
+            floor: self.scopes.len() - 1,
+            captures: BTreeMap::new(),
+        });
+
+        let checked = self.expr(body, Some(Type::Void));
+
+        let ctx = self.loop_ctx.pop();
+        self.scopes.pop();
+        let body_typed = checked?;
+        let Some(ctx) = ctx else {
+            return Err(TypeError::ParallelFormUnsupported {
+                span,
+                form: "a loop body",
+            });
+        };
+        if body_typed.ty != Type::Void {
+            return Err(TypeError::ParallelFormUnsupported {
+                span,
+                form: "a loop body with a value",
+            });
+        }
+
+        let captures: Vec<TypedParam> = ctx
+            .captures
+            .into_iter()
+            .map(|(name, ty)| TypedParam { name, ty, span })
+            .collect();
+
+        self.loops += 1;
+        let symbol = format!("$loop{}", self.loops);
+        self.require(Type::Void, expected, span)?;
+        Ok(TypedExpr {
+            kind: TypedExprKind::ParallelFor {
+                binder: binder.to_owned(),
+                lo: Box::new(lo_typed),
+                hi: Box::new(hi_typed),
+                body: Box::new(body_typed),
+                captures,
+                symbol,
+                sequential,
+            },
+            ty: Type::Void,
+            span,
+        })
+    }
+
     fn while_expr(
         &mut self,
         cond: &Expr,
@@ -1606,7 +1783,68 @@ impl Checker {
         })
     }
 
+    /// The innermost enclosing PARALLEL loop, if there is one. A `seq(...)`
+    /// loop is not one: it runs in order on one thread and needs no boundary.
+    fn parallel_loop(&self) -> Option<&LoopCtx> {
+        self.loop_ctx.iter().rev().find(|c| c.parallel)
+    }
+
+    /// Which scope a name resolves in. A target that resolves BELOW the loop's
+    /// floor is shared between iterations, and assigning to it is the race.
+    fn depth_of(&self, name: &str) -> Option<usize> {
+        self.scopes
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(depth, s)| s.contains_key(name).then_some(depth))
+    }
+
+    /// Whether a name is shared across iterations: it resolves BELOW the
+    /// loop's own scope, so every iteration sees the same storage. This one
+    /// comparison is the whole of M4's race freedom.
+    fn escapes_loop(&self, name: &str, floor: usize) -> bool {
+        matches!(self.depth_of(name), Some(depth) if depth < floor)
+    }
+
     fn assign(&mut self, a: &Assign) -> Checked<TypedBlockItem> {
+        // THE scope boundary, and it is one comparison. Everything M4 claims
+        // about data races reduces to this: a parallel body may only assign to
+        // storage it can prove belongs to its own iteration -- a binding it
+        // declared itself, or the array slot its own index names.
+        if let Some(floor) = self.parallel_loop().map(|c| c.floor) {
+            let binder = self.parallel_loop().map(|c| c.binder.clone());
+            match &a.target {
+                Expr::Var { name, span } => {
+                    if self.escapes_loop(name, floor) {
+                        return Err(TypeError::ParallelEscape {
+                            span: *span,
+                            name: name.clone(),
+                        });
+                    }
+                }
+                Expr::Index { base, index, span } => {
+                    // An array the body created ITSELF is private to this
+                    // iteration, so any index into it is safe. Only a shared
+                    // array -- one whose name resolves below the loop -- has to
+                    // be written at the slot this iteration owns.
+                    let shared = match base.as_ref() {
+                        Expr::Var { name, .. } => self.escapes_loop(name, floor),
+                        _ => true,
+                    };
+                    let names_binder = matches!(
+                        (index.as_ref(), binder.as_deref()),
+                        (Expr::Var { name, .. }, Some(b)) if name == b
+                    );
+                    if shared && !names_binder {
+                        return Err(TypeError::ParallelIndexNotBinder {
+                            span: *span,
+                            binder: binder.unwrap_or_default(),
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
         match &a.target {
             Expr::Var { name, span } => {
                 let local = self

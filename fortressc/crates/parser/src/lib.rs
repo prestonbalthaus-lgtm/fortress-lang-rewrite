@@ -1048,6 +1048,71 @@ impl<'t, 'a> Parser<'t, 'a> {
         }
     }
 
+    /// `for i <- generator do body end`.
+    ///
+    /// `<-` is NOT a token and does not need to be: it is `Lt` glued to
+    /// `Minus`, decided by span adjacency exactly as `->` already is in
+    /// `type_ref`. Adding a token would change how every file in the corpus
+    /// lexes, for nothing.
+    fn for_expr(&mut self) -> Parsed<Expr> {
+        let start = self.span_here();
+        self.pos += 1; // `for`
+        self.skip_newlines();
+        let (binder, _) = self.identifier("a loop variable")?;
+        self.skip_newlines();
+        if !self.at_left_arrow() {
+            return Err(self.error("`<-` after the loop variable"));
+        }
+        self.pos += 2;
+        self.skip_newlines();
+
+        // `seq(...)` is recognised HERE rather than as a call, because it is
+        // what decides whether the loop is parallel and the checker must not
+        // have to guess that back from an application node.
+        let sequential = self.at_word_op("seq") && matches!(self.peek_ahead(1), Some(Kind::LParen));
+        if sequential {
+            self.pos += 2;
+            self.skip_newlines();
+        }
+        let lo = self.expr()?;
+        let (hi, inclusive) = match self.peek_kind() {
+            Some(Kind::Colon) => {
+                self.pos += 1;
+                self.skip_newlines();
+                (self.expr()?, true)
+            }
+            Some(Kind::Hash) => {
+                self.pos += 1;
+                self.skip_newlines();
+                (self.expr()?, false)
+            }
+            _ => return Err(self.error("`:` or `#` to close the generator range")),
+        };
+        if sequential {
+            self.expect(&Kind::RParen, "`)` to close `seq(`")?;
+        }
+        self.skip_newlines();
+        self.expect(&Kind::KwDo, "`do`")?;
+        let body = self.block_body(&[Kind::KwEnd])?;
+        let end = self.expect(&Kind::KwEnd, "`end`")?.span;
+        Ok(Expr::For {
+            binder,
+            lo: Box::new(lo),
+            hi: Box::new(hi),
+            inclusive,
+            sequential,
+            body: Box::new(body),
+            span: Span::new(start.start, end.end),
+        })
+    }
+
+    /// `<-`, as two glued tokens.
+    fn at_left_arrow(&self) -> bool {
+        self.at(&Kind::Lt)
+            && self.glued_right(self.pos)
+            && matches!(self.peek_ahead(1), Some(Kind::Minus))
+    }
+
     fn unary(&mut self) -> Parsed<Expr> {
         // `NOT` is a prefix operator, and 1.0 puts prefix operators above every
         // infix operator, so `NOT a AND b` is `(NOT a) AND b`.
@@ -1263,6 +1328,11 @@ impl<'t, 'a> Parser<'t, 'a> {
             Kind::KwDo => self.block(),
             Kind::KwWhile => self.while_expr(),
             Kind::LBracket => self.array_literal(),
+            // `for` is one of the 66 reserved words the lexer keeps out of the
+            // identifier namespace. Intercepting it here rather than giving it
+            // a keyword token is the same trade `<-` takes: no lexer change,
+            // so no file in the corpus lexes differently.
+            Kind::Reserved("for") => self.for_expr(),
             Kind::Reserved(word) => Err(ParseError::ReservedWord {
                 span,
                 word: (*word).to_owned(),

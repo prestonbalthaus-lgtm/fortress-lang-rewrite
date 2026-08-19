@@ -348,6 +348,22 @@ pub enum Expr {
         name: String,
         span: Span,
     },
+    /// `for i <- lo#count do body end`. 1.0 makes iterations parallel unless
+    /// every generator is `seq(...)`, so `sequential` records which was
+    /// written rather than leaving it to a later guess.
+    For {
+        binder: String,
+        /// The lower bound, and the count or upper bound, already separated by
+        /// the parser: `a:b` is inclusive and `a#n` is a count.
+        lo: Box<Expr>,
+        hi: Box<Expr>,
+        /// True for `a:b`, false for `a#n`. The checker turns both into a
+        /// half-open range so codegen only ever sees one shape.
+        inclusive: bool,
+        sequential: bool,
+        body: Box<Expr>,
+        span: Span,
+    },
     /// `f[\ZZ64\]` in expression position. Monomorphization rewrites this to a
     /// plain `Var` naming the instantiation, so nothing downstream sees it.
     Instantiate {
@@ -405,6 +421,7 @@ impl Expr {
             | Self::Index { span, .. }
             | Self::While { span, .. }
             | Self::Field { span, .. }
+            | Self::For { span, .. }
             | Self::Instantiate { span, .. } => *span,
         }
     }

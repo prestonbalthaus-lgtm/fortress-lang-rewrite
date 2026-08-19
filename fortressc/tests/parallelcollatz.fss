@@ -1,0 +1,28 @@
+component parallelcollatz
+export Executable
+
+(* An allocation-free body with data-dependent work in it, so nothing
+   vectorises it away and every iteration costs a different amount -- which is
+   also what makes a STATIC split a fair test rather than a flattering one. *)
+even(x: ZZ64): Boolean = x - (x / 2) 2 = 0
+
+steps(start: ZZ64): ZZ64 = do
+   n: ZZ64 := start
+   count: ZZ64 := 0
+   while n > 1 do
+      if even(n) then n := n / 2 else n := 3 n + 1 end
+      count := count + 1
+   end
+   count
+end
+
+run(): () = do
+   n: ZZ64 = 2000000
+   a: Array[\ZZ64\] = array(n)
+   for i <- 0#n do
+      a[i] := steps(i + 1)
+   end
+   println(a[26])
+   println(a[1999999])
+end
+end

@@ -13,4 +13,12 @@ if [[ ! -f $sif ]]; then
     exit 1
 fi
 
-exec apptainer exec "$sif" mpicc "$@"
+# The host's CPATH and LIBRARY_PATH point at the host's gc-root, and Apptainer
+# bind-mounts $HOME and passes the environment through -- so without this the
+# in-image link picks up the HOST's static libgc.a. That archive is compiled
+# against the build host's glibc and fails inside Rocky 9 with an undefined
+# `__isoc23_strtol`. The image has its own collector; point at it.
+exec env \
+    APPTAINERENV_CPATH=/opt/gc-root/usr/include \
+    APPTAINERENV_LIBRARY_PATH=/opt/gc-root/usr/lib64 \
+    apptainer exec "$sif" mpicc "$@"

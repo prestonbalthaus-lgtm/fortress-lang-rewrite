@@ -9,8 +9,9 @@ use std::path::Path;
 
 use fortress_types::{
     ArithOp, AssignTarget, CompareOp, DispatchFn, DispatchNode, Elem, Target, Type, TypedBlockItem,
-    TypedComponent, TypedExpr, TypedExprKind, TypedFn, TypedObject, ARRAY_ALLOC, ARRAY_LENGTH,
-    ARRAY_SLOT, ASSERT_FAILED, DISPATCH_FAILED, OBJECT_ALLOC,
+    TypedComponent, TypedExpr, TypedExprKind, TypedFn, TypedObject, TypedParam, ARRAY_ALLOC,
+    ARRAY_LENGTH, ARRAY_SLOT, ASSERT_FAILED, DISPATCH_FAILED, ENV_ALLOC, OBJECT_ALLOC,
+    PARALLEL_FOR,
 };
 use inkwell::attributes::AttributeLoc;
 use inkwell::builder::Builder;
@@ -316,6 +317,29 @@ impl<'ctx> Lowering<'ctx> {
         self.module.add_function(
             ASSERT_FAILED,
             void.fn_type(&[ptr.into()], false),
+            Some(Linkage::External),
+        );
+
+        // The parallel loop entry point and its environment allocator. Declared
+        // unconditionally, like the dispatch halt: a program with no parallel
+        // loop simply never calls them.
+        self.module.add_function(
+            PARALLEL_FOR,
+            void.fn_type(
+                &[
+                    i64t.into(),
+                    i64t.into(),
+                    ptr.into(),
+                    ptr.into(),
+                    i64t.into(),
+                ],
+                false,
+            ),
+            Some(Linkage::External),
+        );
+        self.module.add_function(
+            ENV_ALLOC,
+            ptr.fn_type(&[i64t.into()], false),
             Some(Linkage::External),
         );
 
@@ -809,6 +833,17 @@ impl<'ctx> Lowering<'ctx> {
                 self.load_element(*elem, slot).map(Some)
             }
             TypedExprKind::While { cond, body } => self.while_loop(cond, body).map(|()| None),
+            TypedExprKind::ParallelFor {
+                binder,
+                lo,
+                hi,
+                body,
+                captures,
+                symbol,
+                sequential,
+            } => self
+                .parallel_for(binder, lo, hi, body, captures, symbol, *sequential)
+                .map(|()| None),
             TypedExprKind::Field { base, index } => self.load_field(base, *index, e.ty).map(Some),
             TypedExprKind::Singleton { name } => {
                 let global =
@@ -820,6 +855,181 @@ impl<'ctx> Lowering<'ctx> {
                     .map_err(CodegenError::from_builder)
                     .map(Some)
             }
+        }
+    }
+
+    /// The outliner.
+    ///
+    /// The body becomes a real function `symbol(i64 index, ptr env)` so a
+    /// worker thread can call it, and the values it reads from the enclosing
+    /// scope are copied into one environment struct. The struct is filled and
+    /// allocated ONCE, here, before the loop starts -- allocation inside the
+    /// parallel region is what makes an allocating loop collect N times as
+    /// often and run slower than the serial one.
+    ///
+    /// A `seq(...)` loop takes the same path. The runtime runs a range below
+    /// its threshold inline anyway, so one lowering serves both and there is no
+    /// second code path to keep correct.
+    #[allow(clippy::too_many_arguments)]
+    fn parallel_for(
+        &mut self,
+        binder: &str,
+        lo: &TypedExpr,
+        hi: &TypedExpr,
+        body: &TypedExpr,
+        captures: &[TypedParam],
+        symbol: &str,
+        sequential: bool,
+    ) -> Result<(), CodegenError> {
+        let lo_value = self.operand(lo)?;
+        let hi_value = self.operand(hi)?;
+
+        // The environment: one field per captured value, in the order the
+        // checker recorded them, which is sorted and therefore deterministic.
+        let field_types: Vec<BasicTypeEnum<'ctx>> = captures
+            .iter()
+            .map(|c| {
+                self.basic_type(c.ty).ok_or_else(|| {
+                    CodegenError::internal("a captured value has no type".to_owned())
+                })
+            })
+            .collect::<Result<_, _>>()?;
+        let env_type = self.context.struct_type(&field_types, false);
+
+        // Scanned, not atomic: a capture may be a String or an Array, and the
+        // collector has to see through the environment to it while a worker is
+        // still using it.
+        let env = if captures.is_empty() {
+            self.ptr_type().const_null()
+        } else {
+            let size = env_type.size_of().ok_or_else(|| {
+                CodegenError::internal("the loop environment has no size".to_owned())
+            })?;
+            let raw = self
+                .call_runtime(ENV_ALLOC, &[size.into()], true)?
+                .ok_or_else(|| CodegenError::internal("no environment returned".to_owned()))?;
+            let pointer = raw.into_pointer_value();
+            for (index, capture) in captures.iter().enumerate() {
+                let value = self.load_name(&capture.name)?;
+                let slot = self
+                    .builder
+                    .build_struct_gep(env_type, pointer, index as u32, "env.slot")
+                    .map_err(CodegenError::from_builder)?;
+                self.builder
+                    .build_store(slot, value)
+                    .map_err(CodegenError::from_builder)?;
+            }
+            pointer
+        };
+
+        let outlined = self.declare_loop_body(symbol);
+        self.define_loop_body(outlined, binder, body, captures, env_type)?;
+
+        let workers = if sequential {
+            // One worker means the runtime runs the whole range on the calling
+            // thread. `seq` is a promise about ORDER, so it cannot be handed to
+            // a pool however small the range is.
+            self.context.i64_type().const_int(1, false)
+        } else {
+            self.context.i64_type().const_zero()
+        };
+        self.call_runtime(
+            PARALLEL_FOR,
+            &[
+                lo_value,
+                hi_value,
+                outlined.as_global_value().as_pointer_value().into(),
+                env.into(),
+                workers.into(),
+            ],
+            false,
+        )?;
+        Ok(())
+    }
+
+    fn declare_loop_body(&mut self, symbol: &str) -> FunctionValue<'ctx> {
+        if let Some(existing) = self.functions.get(symbol) {
+            return *existing;
+        }
+        let ty = self
+            .context
+            .void_type()
+            .fn_type(&[self.context.i64_type().into(), self.ptr().into()], false);
+        let function = self.module.add_function(symbol, ty, None);
+        self.functions.insert(symbol.to_owned(), function);
+        function
+    }
+
+    /// Emits the outlined body. The builder is parked and restored, because the
+    /// caller is in the middle of emitting the function this loop appears in.
+    fn define_loop_body(
+        &mut self,
+        function: FunctionValue<'ctx>,
+        binder: &str,
+        body: &TypedExpr,
+        captures: &[TypedParam],
+        env_type: inkwell::types::StructType<'ctx>,
+    ) -> Result<(), CodegenError> {
+        let resume = self.builder.get_insert_block();
+        let saved = std::mem::take(&mut self.scopes);
+
+        let entry = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry);
+
+        let index = function
+            .get_nth_param(0)
+            .ok_or_else(|| CodegenError::internal("the loop body has no index".to_owned()))?;
+        let env = function
+            .get_nth_param(1)
+            .ok_or_else(|| CodegenError::internal("the loop body has no environment".to_owned()))?
+            .into_pointer_value();
+
+        let mut scope: HashMap<String, Slot<'ctx>> = HashMap::new();
+        scope.insert(binder.to_owned(), Slot::Value(index));
+        for (position, capture) in captures.iter().enumerate() {
+            let ty = self
+                .basic_type(capture.ty)
+                .ok_or_else(|| CodegenError::internal("a captured value has no type".to_owned()))?;
+            let slot = self
+                .builder
+                .build_struct_gep(env_type, env, position as u32, "env.read")
+                .map_err(CodegenError::from_builder)?;
+            let value = self
+                .builder
+                .build_load(ty, slot, &capture.name)
+                .map_err(CodegenError::from_builder)?;
+            scope.insert(capture.name.clone(), Slot::Value(value));
+        }
+        self.scopes.push(scope);
+
+        let emitted = self.expr(body);
+        self.scopes.pop();
+        emitted?;
+
+        self.builder
+            .build_return(None)
+            .map_err(CodegenError::from_builder)?;
+
+        self.scopes = saved;
+        if let Some(block) = resume {
+            self.builder.position_at_end(block);
+        }
+        Ok(())
+    }
+
+    fn load_name(&mut self, name: &str) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+        let slot = self
+            .scopes
+            .iter()
+            .rev()
+            .find_map(|s| s.get(name).copied())
+            .ok_or_else(|| CodegenError::internal(format!("no binding `{name}` to capture")))?;
+        match slot {
+            Slot::Value(value) => Ok(value),
+            Slot::Cell { pointer, ty } => self
+                .builder
+                .build_load(ty, pointer, name)
+                .map_err(CodegenError::from_builder),
         }
     }
 

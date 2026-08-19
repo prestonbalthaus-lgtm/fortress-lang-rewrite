@@ -1,0 +1,23 @@
+component parallelfill
+export Executable
+
+(* The correctness claim, and it is checked by DUMPING the array rather than by
+   sampling it: every element, in index order, so the gate can compare the
+   serial and parallel runs byte for byte.
+
+   Index order is not iteration order. The loop writes a[i] from whichever
+   worker owns i, and the dump afterwards is sequential -- which is exactly why
+   a byte-identical dump proves every slot got the value its own index says. *)
+run(): () = do
+   n: ZZ64 = 1000000
+   a: Array[\ZZ64\] = array(n)
+   for i <- 0#n do
+      a[i] := i i + 7
+   end
+   j: ZZ64 := 0
+   while j < n do
+      println(a[j])
+      j := j + 1
+   end
+end
+end

@@ -244,6 +244,26 @@ pub enum TypeError {
         span: Span,
         found: Type,
     },
+    /// An assignment inside a parallel loop body to something declared outside
+    /// it. THIS IS THE DATA RACE, and refusing it syntactically is what lets
+    /// M4 ship without any dataflow analysis at all.
+    ParallelEscape {
+        span: Span,
+        name: String,
+    },
+    /// `a[e] := ...` inside a parallel loop where `e` is not the loop binder.
+    /// Distinct iterations touch distinct slots only when the index IS the
+    /// binder; anything else needs a proof this compiler does not have.
+    ParallelIndexNotBinder {
+        span: Span,
+        binder: String,
+    },
+    /// A `for` construct outside the M4 subset, named rather than reported as
+    /// a syntax error so the file lands in its own bucket.
+    ParallelFormUnsupported {
+        span: Span,
+        form: &'static str,
+    },
     NotPrintable {
         span: Span,
         found: Type,
@@ -341,6 +361,9 @@ impl TypeError {
             | Self::DispatchTableTooLarge { span, .. }
             | Self::NotPrintable { span, .. }
             | Self::NotComparable { span, .. }
+            | Self::ParallelEscape { span, .. }
+            | Self::ParallelIndexNotBinder { span, .. }
+            | Self::ParallelFormUnsupported { span, .. }
             | Self::AccessorUnsupported { span, .. }
             | Self::GenericFunctionalMethodUnsupported { span, .. }
             | Self::ValueBindingUnsupported { span, .. }
@@ -552,6 +575,22 @@ impl core::fmt::Display for TypeError {
                 f,
                 "the dispatch table for `{name}` would have {cells} cells; \
                  narrow the parameter types"
+            ),
+            Self::ParallelEscape { name, .. } => write!(
+                f,
+                "`{name}` is declared outside this loop, and a parallel loop \
+                 body may not assign to it; iterations run in any order and on \
+                 any thread. Write `for ... <- seq(...)` for a sequential loop"
+            ),
+            Self::ParallelIndexNotBinder { binder, .. } => write!(
+                f,
+                "a parallel loop may only assign to `a[{binder}]`, the element \
+                 its own iteration owns; any other index needs a proof that two \
+                 iterations cannot collide"
+            ),
+            Self::ParallelFormUnsupported { form, .. } => write!(
+                f,
+                "{form} is parsed but not implemented in parallel loops"
             ),
             Self::NotComparable { found, .. } => write!(
                 f,

@@ -14,11 +14,25 @@
  * allocator built on GC_malloc instead, or the collector will free the objects
  * it points at while it is still holding them.
  */
+/*
+ * M4: the collector must know about every thread that allocates. Defining
+ * GC_THREADS before <gc.h> is what makes gc.h pull in gc_pthread_redirects.h,
+ * which redefines pthread_create as GC_pthread_create -- so a plain
+ * pthread_create below registers the thread transparently.
+ *
+ * Without it the program aborts with the collector's own "Collecting from
+ * unknown thread", every run. That is not a documented risk, it is a measured
+ * one, and tools/parallel-gate.sh mutates this line to show it.
+ */
+#define GC_THREADS
+
 #include <math.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #if defined(FORTRESS_NO_GC)
 /*
@@ -38,8 +52,247 @@ void fortress_runtime_init(void) {}
 
 /* Generated main calls this before anything else, so the collector is up
  * before the first allocation. */
-void fortress_runtime_init(void) { GC_INIT(); }
+void fortress_runtime_init(void) {
+    GC_INIT();
+    /* Starts the marker threads. Until this runs GC_get_parallel() reports 0
+     * even on a collector built with --enable-parallel-mark, which is what
+     * made an early measurement of this claim wrong. */
+    GC_allow_register_threads();
+}
 #endif
+
+
+/* ------------------------------------------------------------------ M4
+ *
+ * The parallel loop runtime. A fixed pool, a static split, and no atomics on
+ * the hot path.
+ *
+ * The split is a pure function of (lo, hi, workers) and nothing else, which is
+ * what lets tools/parallel-gate.sh compute the expected partition itself
+ * instead of reading it back out of the thing it is testing.
+ *
+ * The calling thread takes chunk 0 and runs it itself, so P-way parallelism
+ * costs P-1 spawned threads and a one-worker machine spawns none.
+ */
+
+#define FORTRESS_MAX_WORKERS 16
+/* Below this, the synchronisation costs more than the work it distributes. A
+ * parallel loop slower than a serial one is a bug, not a tradeoff. */
+#define FORTRESS_PARALLEL_MIN 4096
+
+typedef void (*fortress_loop_body)(int64_t index, void *env);
+
+/* The chunk worker `w` of `workers` owns. Contiguous, and every index in
+ * [lo, hi) belongs to exactly one worker: the first `remainder` chunks take one
+ * extra iteration, so no index is dropped and none is run twice. */
+static void fortress_chunk(int64_t lo, int64_t hi, int w, int workers,
+                           int64_t *start, int64_t *end) {
+    int64_t total = hi - lo;
+    int64_t base = total / workers;
+    int64_t extra = total % workers;
+    int64_t begin = lo + base * w + (w < extra ? w : extra);
+    int64_t count = base + (w < extra ? 1 : 0);
+    *start = begin;
+    *end = begin + count;
+}
+
+struct fortress_task {
+    int64_t lo, hi;
+    fortress_loop_body body;
+    void *env;
+    int workers;
+};
+
+static pthread_t fortress_pool[FORTRESS_MAX_WORKERS];
+static pthread_mutex_t fortress_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t fortress_go = PTHREAD_COND_INITIALIZER;
+static pthread_cond_t fortress_done = PTHREAD_COND_INITIALIZER;
+static struct fortress_task fortress_task;
+static int fortress_pool_size = 0;   /* spawned threads; parallelism is this + 1 */
+static unsigned long fortress_generation = 0;
+static int fortress_outstanding = 0;
+static int fortress_stopping = 0;
+
+/* Set inside a worker, and on the calling thread while a loop is running. A
+ * nested parallel loop runs sequentially: one pool, one level. */
+static __thread int fortress_in_parallel = 0;
+
+static void fortress_run_chunk(const struct fortress_task *task, int w) {
+    int64_t start, end;
+    fortress_chunk(task->lo, task->hi, w, task->workers, &start, &end);
+    for (int64_t i = start; i < end; i++) {
+        task->body(i, task->env);
+    }
+}
+
+static void *fortress_worker(void *arg) {
+    int id = (int)(intptr_t)arg;
+    unsigned long seen = 0;
+
+    fortress_in_parallel = 1;
+    for (;;) {
+        struct fortress_task task;
+        pthread_mutex_lock(&fortress_lock);
+        while (fortress_generation == seen && !fortress_stopping) {
+            pthread_cond_wait(&fortress_go, &fortress_lock);
+        }
+        if (fortress_stopping) {
+            pthread_mutex_unlock(&fortress_lock);
+            return NULL;
+        }
+        seen = fortress_generation;
+        task = fortress_task;
+        pthread_mutex_unlock(&fortress_lock);
+
+        /* Worker `id` runs chunk id+1; chunk 0 belongs to the caller. */
+        if (id + 1 < task.workers) {
+            fortress_run_chunk(&task, id + 1);
+        }
+
+        pthread_mutex_lock(&fortress_lock);
+        if (--fortress_outstanding == 0) {
+            pthread_cond_signal(&fortress_done);
+        }
+        pthread_mutex_unlock(&fortress_lock);
+    }
+}
+
+static void fortress_pool_stop(void) {
+    pthread_mutex_lock(&fortress_lock);
+    fortress_stopping = 1;
+    pthread_cond_broadcast(&fortress_go);
+    pthread_mutex_unlock(&fortress_lock);
+    for (int i = 0; i < fortress_pool_size; i++) {
+        pthread_join(fortress_pool[i], NULL);
+    }
+    fortress_pool_size = 0;
+}
+
+/*
+ * N threads allocate N times faster, so with an untuned heap they collect N
+ * times as often -- and every collection is stop the world. Measured on this
+ * machine: an allocating loop that should scale 3.3x runs at 1.14x with the
+ * default heap policy and 703 collections, and at 3.28x with 6.
+ *
+ * So the heap grows with the worker count, once, on first parallel use. A
+ * program with no parallel loop keeps exactly the memory behaviour it had,
+ * which is also what keeps tools/memory-gate.sh measuring something.
+ */
+static void fortress_parallel_heap(int parallelism) {
+#if !defined(FORTRESS_NO_GC)
+    size_t megabytes = (size_t)parallelism * 8;
+    const char *override = getenv("FORTRESS_GC_HEAP_MB");
+    if (override != NULL) {
+        megabytes = (size_t)strtoul(override, NULL, 10);
+    } else if (megabytes > 64) {
+        megabytes = 64;
+    }
+    GC_set_free_space_divisor(1);
+    if (megabytes > 0) {
+        GC_expand_hp(megabytes * 1024u * 1024u);
+    }
+#else
+    (void)parallelism;
+#endif
+}
+
+static int fortress_pool_start(void) {
+    long cores = sysconf(_SC_NPROCESSORS_ONLN);
+    int parallelism = cores > 0 ? (int)cores : 1;
+    if (parallelism > FORTRESS_MAX_WORKERS) {
+        parallelism = FORTRESS_MAX_WORKERS;
+    }
+    const char *override = getenv("FORTRESS_WORKERS");
+    if (override != NULL) {
+        long want = strtol(override, NULL, 10);
+        if (want >= 1 && want <= FORTRESS_MAX_WORKERS) {
+            parallelism = (int)want;
+        }
+    }
+
+    fortress_parallel_heap(parallelism);
+
+    for (int i = 0; i < parallelism - 1; i++) {
+        /* GC_pthread_create, via the redirect GC_THREADS turns on. A raw
+         * pthread_create here aborts the program on the first collection. */
+        if (pthread_create(&fortress_pool[i], NULL, fortress_worker,
+                           (void *)(intptr_t)i) != 0) {
+            /* Whatever started is still usable; run with what we have. */
+            fortress_pool_size = i;
+            return i + 1;
+        }
+    }
+    fortress_pool_size = parallelism - 1;
+    atexit(fortress_pool_stop);
+    return parallelism;
+}
+
+/*
+ * Run `body(i, env)` for every i in [lo, hi). The body is an outlined function
+ * and `env` is its captured environment, allocated ONCE by the caller -- never
+ * per iteration, because allocation inside the parallel region is what the
+ * heap measurement above is about.
+ */
+void fortress_parallel_for(int64_t lo, int64_t hi, fortress_loop_body body, void *env,
+                           int64_t requested) {
+    static int parallelism = 0;
+    struct fortress_task task;
+
+    if (hi <= lo) {
+        return;
+    }
+
+    /* `requested == 1` is `seq(...)`: a promise about ORDER, so it is honoured
+     * whatever the range size. Everything else runs here too when it is too
+     * small to be worth distributing, or when a parallel loop is already
+     * running -- one pool, one level. */
+    if (requested == 1 || hi - lo < FORTRESS_PARALLEL_MIN || fortress_in_parallel) {
+        for (int64_t i = lo; i < hi; i++) {
+            body(i, env);
+        }
+        return;
+    }
+
+    if (parallelism == 0) {
+        parallelism = fortress_pool_start();
+    }
+    if (parallelism <= 1) {
+        for (int64_t i = lo; i < hi; i++) {
+            body(i, env);
+        }
+        return;
+    }
+
+    task.lo = lo;
+    task.hi = hi;
+    task.body = body;
+    task.env = env;
+    task.workers = parallelism;
+
+    pthread_mutex_lock(&fortress_lock);
+    fortress_task = task;
+    fortress_outstanding = fortress_pool_size;
+    fortress_generation++;
+    pthread_cond_broadcast(&fortress_go);
+    pthread_mutex_unlock(&fortress_lock);
+
+    /* The caller is worker 0 and does a chunk's worth of the work itself. */
+    fortress_in_parallel = 1;
+    fortress_run_chunk(&task, 0);
+    fortress_in_parallel = 0;
+
+    pthread_mutex_lock(&fortress_lock);
+    while (fortress_outstanding > 0) {
+        pthread_cond_wait(&fortress_done, &fortress_lock);
+    }
+    pthread_mutex_unlock(&fortress_lock);
+}
+
+/* The gate computes the same split independently and compares. */
+void fortress_parallel_chunk(int64_t lo, int64_t hi, int w, int workers,
+                             int64_t *start, int64_t *end) {
+    fortress_chunk(lo, hi, w, workers, start, end);
+}
 
 static void *checked(void *p) {
     if (p == NULL) {
@@ -55,6 +308,19 @@ static void *fortress_alloc(size_t bytes) { return checked(FORTRESS_RAW_ALLOC(by
 /* Memory that may hold pointers, and so must be traced. */
 static void *fortress_alloc_scanned(size_t bytes) {
     return checked(FORTRESS_RAW_ALLOC_SCANNED(bytes));
+}
+
+/*
+ * The captured environment of an outlined loop body. SCANNED, because a capture
+ * may be a String or an Array and the collector has to see through the
+ * environment to it while a worker still holds it. Allocated once per loop, by
+ * the code that starts the loop, never per iteration.
+ */
+void *fortress_env_alloc(int64_t bytes) {
+    if (bytes <= 0) {
+        return NULL;
+    }
+    return fortress_alloc_scanned((size_t)bytes);
 }
 
 /*

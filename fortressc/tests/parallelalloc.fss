@@ -1,0 +1,16 @@
+component parallelalloc
+export Executable
+
+(* Every iteration allocates: the number is rendered and the two strings are
+   concatenated, so this is three trips through the collector per element.
+   This is the body the collector rebuild and the heap policy exist for. *)
+run(): () = do
+   n: ZZ64 = 3000000
+   a: Array[\String\] = array(n)
+   for i <- 0#n do
+      a[i] := "row " i
+   end
+   println(a[0])
+   println(a[2999999])
+end
+end
