@@ -32,6 +32,13 @@ pub enum ParseError {
     LocalFunctionDeclarationUnsupported {
         span: Span,
     },
+    /// `a <= b > c`. `chained-multifix.tex:16-34` restricts a chain to a
+    /// mixture of equivalence operators and ordering operators of one sense.
+    ChainedOperatorsDiffer {
+        span: Span,
+        first: &'static str,
+        second: &'static str,
+    },
 }
 
 impl ParseError {
@@ -42,7 +49,8 @@ impl ParseError {
             | Self::PostfixOperatorUnsupported { span }
             | Self::ReservedWord { span, .. }
             | Self::StaticParameterKindUnsupported { span, .. }
-            | Self::LocalFunctionDeclarationUnsupported { span } => Some(*span),
+            | Self::LocalFunctionDeclarationUnsupported { span }
+            | Self::ChainedOperatorsDiffer { span, .. } => Some(*span),
             Self::UnexpectedEndOfInput { .. } => None,
         }
     }
@@ -87,6 +95,16 @@ impl core::fmt::Display for ParseError {
                 f,
                 "{}..{}: a local function declaration is not implemented; \
                  declare it at component level",
+                span.start, span.end
+            ),
+            Self::ChainedOperatorsDiffer {
+                span,
+                first,
+                second,
+            } => write!(
+                f,
+                "{}..{}: a chain mixes `{first}` with `{second}`; \
+                 chained ordering operators must have the same sense",
                 span.start, span.end
             ),
         }

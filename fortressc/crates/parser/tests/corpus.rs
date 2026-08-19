@@ -89,6 +89,9 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
                     fortress_parser::ParseError::LocalFunctionDeclarationUnsupported { .. } => {
                         "local function declaration".to_owned()
                     }
+                    fortress_parser::ParseError::ChainedOperatorsDiffer { .. } => {
+                        "chain mixes ordering senses".to_owned()
+                    }
                 };
                 *blockers.entry(label).or_default() += 1;
             }

@@ -796,3 +796,28 @@ fn an_integer_literal_in_float_position_is_a_float_constant() {
     assert_eq!(String::from_utf8_lossy(&out.stdout), "1.75\n");
     let _ = std::fs::remove_file(&binary);
 }
+
+/// The one property of chaining that is observable from inside the language:
+/// the middle operand is evaluated exactly once. This subset has no mutable
+/// global and no closure, so the counter is a print.
+#[test]
+fn a_chain_evaluates_its_middle_operand_once() {
+    let binary = compile_fixture("chainonce.fss", "chainonce");
+    let out = run(&binary);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        stdout.matches("MID").count(),
+        1,
+        "the middle operand ran more than once: {stdout}"
+    );
+    assert!(stdout.contains("YES"), "the chain was false: {stdout}");
+    let _ = std::fs::remove_file(&binary);
+}
+
+#[test]
+fn a_chain_mixing_equivalence_with_one_sense_is_true() {
+    let binary = compile_fixture("chainmixed.fss", "chainmixed");
+    let out = run(&binary);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "YES\n");
+    let _ = std::fs::remove_file(&binary);
+}

@@ -34,12 +34,21 @@ fn widen(t: TypeRef, span: Span) -> TypeRef {
 }
 
 pub fn parse(tokens: &[Token<'_>]) -> Parsed<Component> {
-    Parser { tokens, pos: 0 }.component()
+    Parser {
+        tokens,
+        pos: 0,
+        chain_temps: 0,
+    }
+    .component()
 }
 
 struct Parser<'t, 'a> {
     tokens: &'t [Token<'a>],
     pos: usize,
+    /// Monotonic and never reset, so nested chains cannot collide. `$` cannot
+    /// appear in a source identifier -- the property `mangle_type` already
+    /// relies on -- so a temporary cannot shadow anything the user wrote.
+    chain_temps: usize,
 }
 
 impl<'t, 'a> Parser<'t, 'a> {
@@ -701,19 +710,108 @@ impl<'t, 'a> Parser<'t, 'a> {
         self.comparison()
     }
 
+    /// Comparison operators chain. One operator is left exactly as it was: no
+    /// block, no temporaries, and nothing about existing generated code moves.
     fn comparison(&mut self) -> Parsed<Expr> {
-        let mut lhs = self.additive()?;
+        let first = self.additive()?;
+        let mut operands = vec![first];
+        let mut ops: Vec<(BinOp, Fixity, Span)> = Vec::new();
+        let mut sense: Option<(Sense, BinOp)> = None;
+
         while let Some(op) = self.peek_kind().and_then(comparison_op) {
             let index = self.pos;
             let Some(fixity) = self.infix_fixity(index)? else {
                 break;
             };
+            let op_span = self.span_here();
+            if let Some(this) = chain_sense(op) {
+                match sense {
+                    Some((seen, earlier)) if seen != this => {
+                        return Err(ParseError::ChainedOperatorsDiffer {
+                            span: op_span,
+                            first: op_text(earlier),
+                            second: op_text(op),
+                        });
+                    }
+                    Some(_) => {}
+                    None => sense = Some((this, op)),
+                }
+            }
             self.pos += 1;
             self.skip_newlines(); // a newline may follow an infix operator
-            let rhs = self.additive()?;
-            lhs = infix(op, fixity, lhs, rhs);
+            operands.push(self.additive()?);
+            ops.push((op, fixity, op_span));
         }
-        Ok(lhs)
+
+        if ops.is_empty() {
+            return operands.pop().ok_or(missing_operand());
+        }
+        if ops.len() == 1 {
+            let (op, fixity, _) = ops.first().copied().ok_or_else(missing_operand)?;
+            let mut both = operands.into_iter();
+            let lhs = both.next().ok_or_else(missing_operand)?;
+            let rhs = both.next().ok_or_else(missing_operand)?;
+            return Ok(infix(op, fixity, lhs, rhs));
+        }
+        self.desugar_chain(&operands, &ops)
+    }
+
+    /// `a < b < c` becomes a block of one binding per operand and a nested
+    /// `if`. The bindings are what the specification's "evaluated only once"
+    /// requires, and the nested `if` is the conjunction: this subset has no
+    /// `AND`, and does not gain one here.
+    fn desugar_chain(&mut self, operands: &[Expr], ops: &[(BinOp, Fixity, Span)]) -> Parsed<Expr> {
+        let start = operands.first().map_or(0, |e| e.span().start);
+        let end = operands.last().map_or(0, |e| e.span().end);
+        let span = Span::new(start, end);
+
+        let mut items = Vec::with_capacity(operands.len() + 1);
+        let mut refs: Vec<Expr> = Vec::with_capacity(operands.len());
+        for operand in operands {
+            // A literal is a constant, so binding it would buy nothing and cost
+            // the bidirectional typing `infix` does for a bare literal operand,
+            // which is what decides ZZ32 against ZZ64. Only what can actually be
+            // evaluated is bound.
+            if is_literal(operand) {
+                refs.push(operand.clone());
+                continue;
+            }
+            let name = format!("$chain{}", self.chain_temps);
+            self.chain_temps += 1;
+            let operand_span = operand.span();
+            items.push(BlockItem::Binding(Binding {
+                name: name.clone(),
+                ty: None,
+                value: operand.clone(),
+                mutable: false,
+                span: operand_span,
+            }));
+            // Reading the temporary, not the operand, is the whole of
+            // evaluate-once. Nothing else in this function depends on it.
+            refs.push(Expr::Var {
+                name,
+                span: operand_span,
+            });
+        }
+
+        let link = |index: usize| -> Parsed<Expr> {
+            let (op, fixity, _) = ops.get(index).copied().ok_or_else(missing_operand)?;
+            let lhs = refs.get(index).cloned().ok_or_else(missing_operand)?;
+            let rhs = refs.get(index + 1).cloned().ok_or_else(missing_operand)?;
+            Ok(infix(op, fixity, lhs, rhs))
+        };
+
+        let mut tail = link(ops.len().saturating_sub(1))?;
+        for index in (0..ops.len().saturating_sub(1)).rev() {
+            tail = Expr::If {
+                cond: Box::new(link(index)?),
+                then_branch: Box::new(tail),
+                else_branch: Some(Box::new(Expr::BoolLit { value: false, span })),
+                span,
+            };
+        }
+        items.push(BlockItem::Expr(tail));
+        Ok(Expr::Block { items, span })
     }
 
     fn additive(&mut self) -> Parsed<Expr> {
@@ -1248,6 +1346,53 @@ enum OperatorShape {
     LooseInfix,
     Prefix,
     Postfix,
+}
+
+const fn is_literal(e: &Expr) -> bool {
+    matches!(
+        e,
+        Expr::IntLit { .. } | Expr::FloatLit { .. } | Expr::StrLit { .. } | Expr::BoolLit { .. }
+    )
+}
+
+/// Unreachable in practice: `comparison` only reaches these after collecting at
+/// least one operand. Written as a diagnostic rather than an index, because a
+/// parser that panics on its own bookkeeping is worse than one that reports.
+const fn missing_operand() -> ParseError {
+    ParseError::UnexpectedEndOfInput {
+        expected: "an operand",
+    }
+}
+
+/// A chain's ordering sense. Equivalence operators carry none and mix freely;
+/// two ordering operators must agree. `chained-multifix.tex:16-34`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Sense {
+    Increasing,
+    Decreasing,
+}
+
+const fn chain_sense(op: BinOp) -> Option<Sense> {
+    match op {
+        BinOp::Lt | BinOp::Le => Some(Sense::Increasing),
+        BinOp::Gt | BinOp::Ge => Some(Sense::Decreasing),
+        _ => None,
+    }
+}
+
+const fn op_text(op: BinOp) -> &'static str {
+    match op {
+        BinOp::Lt => "<",
+        BinOp::Le => "<=",
+        BinOp::Gt => ">",
+        BinOp::Ge => ">=",
+        BinOp::Eq => "=",
+        BinOp::Ne => "=/=",
+        BinOp::Add => "+",
+        BinOp::Sub => "-",
+        BinOp::Mul => "*",
+        BinOp::Div => "/",
+    }
 }
 
 /// `=` is here because every definition site consumes its own `=` first:

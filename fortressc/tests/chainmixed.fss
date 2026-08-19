@@ -1,0 +1,8 @@
+component chainmixed
+export Executable
+
+run(): () = do
+    if 0 <= 0 < 1 = 1 < 2 <= 2 then println("YES") else println("NO") end
+  end
+
+end
