@@ -272,10 +272,13 @@ What it has to prove:
 * `f():() = ()` called from `run` — a void call in statement position.
 * `(A)` resolves to `A`, checked by giving the parenthesised form and the bare
   form to the same overload and getting one symbol.
-* `f(x: ())` is refused with `VoidNotStorable`, and so are the field, element and
-  binding forms. Four refusals, not one.
+* `f(x: ())` is refused with `VoidNotStorable`. As built, the gate carries the
+  parameter position and the cargo tests carry the field, element and binding
+  ones -- the parameter is the position whose mutation reaches codegen and
+  produces malformed IR, which is the part cargo cannot see.
 * a tuple type, a tuple expression and an arrow type each produce a diagnostic
-  and exit 1, not a panic and not exit 70.
+  and exit 1, not a panic and not exit 70. Four negative fixtures in total, with
+  the void parameter.
 
 Mutations, and a gate is not trusted until it has refused:
 
