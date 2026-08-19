@@ -65,6 +65,11 @@ struct Signature {
     /// What codegen emits. A set of one keeps its bare Fortress name, so every
     /// symbol that existed before M3c is byte for byte what it was.
     symbol: String,
+    /// An over-approximated method stamp whose bound turned out not to hold.
+    /// Expansion guessed the receiver, the guess was wrong, and the program is
+    /// not at fault -- so the stamp leaves the language entirely rather than
+    /// refusing the component or, worse, staying as a dispatch target.
+    pruned: bool,
     span: Span,
 }
 
@@ -255,6 +260,14 @@ fn substitute_self(t: &TypeRef, owner: &str) -> TypeRef {
             span: *span,
         },
     }
+}
+
+/// A member of an overload set this call could still reach. A withdrawn stamp
+/// is not merely off the target list: it must not reach `agreed` either, or its
+/// wrongly instantiated parameter types poison the hint a literal takes and the
+/// program is blamed for a guess expansion made.
+fn live(signature: &Signature, arity: usize) -> bool {
+    !signature.pruned && signature.params.len() == arity
 }
 
 fn cartesian(domain: &[Vec<Type>]) -> Vec<Vec<Type>> {
@@ -550,13 +563,14 @@ impl Checker {
                     counts.get(&(owner, m.name.as_str())).copied().unwrap_or(0) > 1,
                 );
                 let set = self.methods.entry(m.name.clone()).or_default();
-                self.method_slots
-                    .insert((owner, index), (m.name.clone(), set.len()));
+                let slot = (m.name.clone(), set.len());
+                self.method_slots.insert((owner, index), slot);
                 set.push(Signature {
                     params,
                     returns,
-                    concrete: m.body.is_some(),
+                    concrete: !abstract_,
                     symbol,
+                    pruned: false,
                     span: m.span,
                 });
             }
@@ -653,6 +667,7 @@ impl Checker {
                     returns,
                     concrete: m.body.is_some(),
                     symbol,
+                    pruned: false,
                     span: m.span,
                 });
             }
@@ -705,6 +720,7 @@ impl Checker {
                 returns,
                 concrete: true,
                 symbol,
+                pruned: false,
                 span,
             });
         }
@@ -769,6 +785,9 @@ impl Checker {
                 if m.body.is_none() || !self.method_slots.contains_key(&(owner, index)) {
                     continue;
                 }
+                if self.pruned_method(owner, index) {
+                    continue;
+                }
                 functions.push(self.method(m, owner, index)?);
             }
         }
@@ -808,20 +827,61 @@ impl Checker {
     /// there -- subtyping needs the registry, and the registry is built from the
     /// component expansion produced -- so they are settled here, before a single
     /// body is checked.
-    fn discharge_bounds(&self, component: &Component) -> Checked<()> {
+    fn discharge_bounds(&mut self, component: &Component) -> Checked<()> {
         for obligation in &component.bounds {
-            let subject = self.registry.resolve(&obligation.subject)?;
-            let bound = self.registry.resolve(&obligation.bound)?;
-            if !self.registry.is_subtype(subject, bound) {
-                return Err(TypeError::BoundNotSatisfied {
+            let resolved = self
+                .registry
+                .resolve(&obligation.subject)
+                .and_then(|subject| Ok((subject, self.registry.resolve(&obligation.bound)?)));
+            let failure = match resolved {
+                Ok((subject, bound)) if self.registry.is_subtype(subject, bound) => continue,
+                Ok((subject, bound)) => Some(TypeError::BoundNotSatisfied {
                     span: obligation.span,
                     parameter: obligation.parameter.clone(),
                     subject,
                     bound,
-                });
+                }),
+                Err(e) => Some(e),
+            };
+            // A speculative obligation belongs to a stamp expansion guessed at,
+            // and it runs here -- before any body is checked and before any
+            // dispatch table is memoised -- precisely so the guess can be
+            // withdrawn without refusing the program. A call whose receiver
+            // domain includes the pruned type then fails the exactly-one-winner
+            // check M3c already runs, which is the closed-world answer.
+            if let Some((owner, method)) = &obligation.speculative {
+                self.prune_stamp(owner, method);
+                continue;
+            }
+            if let Some(e) = failure {
+                return Err(e);
             }
         }
         Ok(())
+    }
+
+    fn prune_stamp(&mut self, owner: &str, method: &str) {
+        let receiver = if self.registry.is_object(owner) {
+            self.registry
+                .objects
+                .get_key_value(owner)
+                .map(|(n, _)| Type::Object(n))
+        } else {
+            self.registry
+                .traits
+                .get_key_value(owner)
+                .map(|(n, _)| Type::Trait(n))
+        };
+        let Some(receiver) = receiver else { return };
+        let Some(set) = self.methods.get_mut(method) else {
+            return;
+        };
+        for signature in set.iter_mut() {
+            if signature.params.first() == Some(&receiver) {
+                signature.pruned = true;
+                signature.concrete = false;
+            }
+        }
     }
 
     fn object(&mut self, o: &ObjectDecl) -> Checked<TypedObject> {
@@ -946,6 +1006,16 @@ impl Checker {
             body,
             span: f.span,
         })
+    }
+
+    /// A stamp withdrawn by `discharge_bounds`. Its body is never checked:
+    /// nothing can reach it, and it was written under a substitution the
+    /// program never asked for.
+    fn pruned_method(&self, owner: &'static str, index: usize) -> bool {
+        self.method_slots
+            .get(&(owner, index))
+            .and_then(|(set, slot)| self.methods.get(set).and_then(|v| v.get(*slot)))
+            .is_some_and(|signature| signature.pruned)
     }
 
     /// One dotted method body, lifted to a `TypedFn` whose first parameter is
@@ -1148,11 +1218,7 @@ impl Checker {
             });
         };
         let arity = args.len() + 1;
-        let candidates: Vec<Signature> = all
-            .iter()
-            .filter(|s| s.params.len() == arity)
-            .cloned()
-            .collect();
+        let candidates: Vec<Signature> = all.iter().filter(|s| live(s, arity)).cloned().collect();
         if candidates.is_empty() {
             return Err(TypeError::ArityMismatch {
                 span,
@@ -1171,7 +1237,7 @@ impl Checker {
 
         let statics: Vec<Type> = typed.iter().map(|t| t.ty).collect();
         let refs: Vec<&Signature> = candidates.iter().collect();
-        let applicable = self.applicable(&refs, &statics);
+        let applicable = self.typing_candidates(&refs, &statics);
         if applicable.is_empty() {
             return Err(TypeError::NoApplicableDeclaration {
                 span,
@@ -2083,7 +2149,7 @@ impl Checker {
         };
         let candidates: Vec<Signature> = all
             .iter()
-            .filter(|s| s.params.len() == args.len())
+            .filter(|s| live(s, args.len()))
             .cloned()
             .collect();
         if candidates.is_empty() {
@@ -2112,7 +2178,7 @@ impl Checker {
 
         let statics: Vec<Type> = typed.iter().map(|t| t.ty).collect();
         let refs: Vec<&Signature> = candidates.iter().collect();
-        let applicable = self.applicable(&refs, &statics);
+        let applicable = self.typing_candidates(&refs, &statics);
         if applicable.is_empty() {
             return Err(TypeError::NoApplicableDeclaration {
                 span,
@@ -2138,22 +2204,50 @@ impl Checker {
         })
     }
 
+    /// Applicable to one argument tuple. `targets_only` is what separates the
+    /// two questions M3i's design note already distinguished but the code did
+    /// not: a bodiless declaration TYPES a call and names its return, and can
+    /// never BE a dispatch target.
     fn applicable<'s>(
         &self,
         candidates: &[&'s Signature],
         arguments: &[Type],
+        targets_only: bool,
     ) -> Vec<&'s Signature> {
         candidates
             .iter()
             .copied()
             .filter(|c| {
-                c.concrete
+                (c.concrete || !targets_only)
                     && c.params
                         .iter()
                         .zip(arguments)
                         .all(|(p, a)| self.registry.is_subtype(*a, *p))
             })
             .collect()
+    }
+
+    /// What types the call. Implementations first, and a bodiless declaration
+    /// only when there is no implementation at all -- which is the whole of the
+    /// rule "a requirement types a call and never wins one".
+    ///
+    /// Both halves are load bearing. Taking targets only made `o.f()` on a
+    /// trait-typed `o` refuse whenever the trait declared `f` abstractly and
+    /// the objects beneath it implemented it -- ordinary Fortress, and the
+    /// shape `compiler_tests/Compiled15.fss` is written in. Taking everything
+    /// made an inherited implementation tie with an inherited *requirement*
+    /// and reported an ambiguity that is not one, which is
+    /// `long_term_not_working/abstract/DiamondInheritance7.fss`.
+    fn typing_candidates<'s>(
+        &self,
+        candidates: &[&'s Signature],
+        arguments: &[Type],
+    ) -> Vec<&'s Signature> {
+        let targets = self.applicable(candidates, arguments, true);
+        if targets.is_empty() {
+            return self.applicable(candidates, arguments, false);
+        }
+        targets
     }
 
     /// The single most specific applicable declaration. Specification 1.0 would
@@ -2216,10 +2310,15 @@ impl Checker {
     ) -> Checked<Target> {
         // One candidate is one winner in every cell, so there is nothing to
         // enumerate and no size to bound. This is the whole pre-M3c language.
+        // It has to be a real target: a lone bodiless declaration would give
+        // codegen a symbol nothing defines, which is a link failure rather
+        // than a diagnostic.
         if let [only] = candidates {
-            return Ok(Target::UserFn {
-                name: only.symbol.clone(),
-            });
+            if only.concrete {
+                return Ok(Target::UserFn {
+                    name: only.symbol.clone(),
+                });
+            }
         }
 
         let domain: Vec<Vec<Type>> = statics
@@ -2250,7 +2349,7 @@ impl Checker {
         let refs: Vec<&Signature> = candidates.iter().collect();
         let mut table: Vec<(Vec<Type>, String)> = Vec::with_capacity(cells);
         for tuple in cartesian(&domain) {
-            let applicable = self.applicable(&refs, &tuple);
+            let applicable = self.applicable(&refs, &tuple, true);
             let winner = self.winner(name, &applicable, &tuple, span)?;
             if !self.registry.is_subtype(winner.returns, returns) {
                 return Err(TypeError::ReturnTypeNotCovariant {

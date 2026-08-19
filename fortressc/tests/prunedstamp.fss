@@ -1,0 +1,42 @@
+component prunedstamp
+export Executable
+
+(* The over-approximation withdrawing a guess. `B.m[\String\]()` stamps `m` at
+   String into BOTH types declaring a generic `m` of that arity, because
+   expansion cannot see that the receiver is B. A's copy carries A's bound,
+   `String extends Num` does not hold, and that bound failing means the GUESS
+   was wrong -- not the program.
+
+   So A's stamp is pruned and B's runs. Refusing the component here would make
+   an over-approximating compiler unusable, and keeping A's stamp as a target
+   would dispatch to a body instantiated at a type its declaration forbids. *)
+trait Num end
+object Two extends Num end
+
+object A
+   m[\S extends Num\](): ZZ32 = 1
+end
+
+object B
+   m[\S\](): ZZ32 = 2
+end
+
+(* And it has to leave the candidate set entirely, not merely stop being a
+   dispatch target. `C`'s stamp is pruned; if it were still a candidate, the
+   two declarations would disagree on parameter 1 and the literal `5` would
+   take no hint, default to ZZ32, and the program would be blamed for a guess
+   expansion made. *)
+object C
+   n[\S extends Num\](x: ZZ32): ZZ32 = x
+end
+
+object D
+   n[\S\](x: ZZ64): ZZ32 = 3
+end
+
+run(): () = do
+   println(A.m[\Two\]())
+   println(B.m[\String\]())
+   println(D.n[\String\](5))
+end
+end

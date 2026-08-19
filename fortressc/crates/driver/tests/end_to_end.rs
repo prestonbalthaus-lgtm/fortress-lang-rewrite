@@ -884,3 +884,37 @@ fn a_functional_method_symbol_is_owner_qualified() {
         assert!(ir.contains(symbol), "missing {symbol}:\n{ir}");
     }
 }
+
+/// Generic dotted methods, by over-approximation. Expansion has no types, so
+/// `o.f[\ZZ32\]()` stamps `f` into every type declaring a generic `f` of
+/// matching arity; the five numbers are the receiver deciding, twice of it at
+/// run time through a trait.
+#[test]
+fn a_generic_dotted_method_dispatches_on_its_receiver() {
+    let binary = compile_fixture("genericmethod.fss", "genericmethod");
+    let out = run(&binary);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "1\n2\n1\n2\n6\n");
+    assert_eq!(out.status.code(), Some(0));
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// The over-approximation, stated in symbols rather than in prose. `Unused`
+/// never appears at a call site and still gets both stamps, because the pass
+/// that makes them cannot see a receiver; `Spare` declares `f` at an arity
+/// nothing demands and gets none.
+#[test]
+fn a_stamp_lands_on_every_matching_type_and_no_other() {
+    let ir = emit_ir("genericmethod.fss");
+    for symbol in [
+        r#"@"O$m$f$ZZ32$e""#,
+        r#"@"P$m$f$ZZ32$e""#,
+        r#"@"Unused$m$f$ZZ32$e""#,
+        r#"@"Unused$m$f$String$e""#,
+    ] {
+        assert!(ir.contains(symbol), "missing {symbol}:\n{ir}");
+    }
+    assert!(
+        !ir.contains(r#"@"Spare$m$f"#),
+        "an arity that matches nothing must take no stamp:\n{ir}"
+    );
+}

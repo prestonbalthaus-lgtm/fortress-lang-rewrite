@@ -86,9 +86,10 @@ pub struct ObjectDecl {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Member {
     Field(FieldDecl),
-    /// A dotted method. Parsed, never checked: the specification gives dotted
-    /// and functional methods separate namespaces, and desugaring one into the
-    /// other would have to be unbuilt later.
+    /// A method. The specification gives dotted and functional methods
+    /// separate namespaces -- `x.f(y)` is not `f(x, y)` -- so which one this
+    /// is comes from whether it declares a `self` parameter, and it is never
+    /// desugared into the other.
     Method(MethodDecl),
 }
 
@@ -198,6 +199,13 @@ pub struct BoundObligation {
     pub bound: TypeRef,
     /// The static parameter this came from, for the diagnostic.
     pub parameter: String,
+    /// `(owner type, mangled method name)` when the obligation came from an
+    /// over-approximated method stamp. A generic dotted method is stamped into
+    /// every type declaring one of that name, because expansion cannot see the
+    /// receiver's type; a bound failing on such a stamp means the guess was
+    /// wrong, not that the program is. The checker prunes that stamp instead of
+    /// refusing the component.
+    pub speculative: Option<(String, String)>,
     pub span: Span,
 }
 

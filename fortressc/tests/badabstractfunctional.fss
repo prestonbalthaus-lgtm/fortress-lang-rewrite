@@ -1,0 +1,22 @@
+component badabstractfunctional
+export Executable
+
+(* The functional half of badabstract.fss. Rock extends Animal and does not
+   implement `noise`, and a bodiless declaration is never a dispatch target, so
+   Rock's tag has no winner. Same rule as the dotted case and the same
+   diagnostic -- which is the point: a functional method is a member of the
+   top-level overload set and nothing about it is special. *)
+trait Animal
+   noise(self): ZZ32
+end
+
+object Dog extends Animal
+   noise(self): ZZ32 = 1
+end
+
+object Rock extends Animal end
+
+speak(a: Animal): ZZ32 = noise(a)
+
+run(): () = do println(speak(Dog)) end
+end

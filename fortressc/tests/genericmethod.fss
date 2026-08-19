@@ -1,0 +1,44 @@
+component genericmethod
+export Executable
+
+(* A generic dotted method. Expansion has no types, so it cannot know what the
+   receiver of `o.f[\ZZ32\]()` is; it stamps `f` at the written arguments into
+   EVERY type declaring a generic `f` of matching arity and lets M3c's dispatch
+   choose by receiver.
+
+   `Unused` is the over-approximation made visible: it declares `f[\S\]`, takes
+   a stamp, and nothing ever calls it. `Spare` declares one at an arity nothing
+   demands, so it takes no stamp at all. *)
+trait T
+   f[\S\](): ZZ32
+   g[\S, U\](): ZZ32
+end
+
+object O extends T
+   f[\S\](): ZZ32 = 1
+   g[\S, U\](): ZZ32 = f[\S\]() + 5
+end
+
+object P extends T
+   f[\S\](): ZZ32 = 2
+   g[\S, U\](): ZZ32 = 20
+end
+
+object Unused
+   f[\S\](): ZZ32 = 7
+end
+
+object Spare
+   f[\S\](k: ZZ32): ZZ32 = k
+end
+
+pick(n: ZZ32): T = if n === 0 then O else P end
+
+run(): () = do
+   println(O.f[\ZZ32\]())
+   println(P.f[\String\]())
+   println(pick(0).f[\ZZ32\]())
+   println(pick(1).f[\ZZ32\]())
+   println(O.g[\ZZ32, String\]())
+end
+end

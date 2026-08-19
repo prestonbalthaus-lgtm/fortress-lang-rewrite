@@ -282,8 +282,12 @@ MUTATIONS=(
 )
 
 mutate() {
-    if ! git -C "$repo" diff --quiet -- fortressc/crates; then
-        printf 'refusing to mutate: fortressc/crates has unstaged changes\n' >&2
+    # Against HEAD, not against the index, and the restore below matches. A
+    # gate that rewinds to the index will faithfully put a DEFECT back if
+    # anything staged during the run -- and the worktree and the index would
+    # then agree with each other while both are wrong.
+    if ! git -C "$repo" diff --quiet HEAD -- fortressc/crates; then
+        printf 'refusing to mutate: fortressc/crates differs from HEAD\n' >&2
         exit 2
     fi
 
@@ -326,7 +330,7 @@ PY
                 survived=$((survived + 1))
             fi
         fi
-        git -C "$repo" checkout -- "fortressc/$file"
+        git -C "$repo" checkout HEAD -- "fortressc/$file"
     done
 
     ( cd "$repo/fortressc" && cargo build --workspace >/dev/null 2>&1 )

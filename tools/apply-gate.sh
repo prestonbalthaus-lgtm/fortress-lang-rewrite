@@ -27,11 +27,12 @@ export LLVM_SYS_221_PREFIX=${LLVM_SYS_221_PREFIX:-$HOME/.local/opt/llvm22-root/u
 export CPATH=${CPATH:-$HOME/.local/opt/gc-root/usr/include}
 export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 
-# Measured 2026-08-19 at the end of M3h, not taken from the design document.
-# M3f left this at 187, M3h took it to 205. M3i's dotted methods take it to 222,
-# net of six files that stop compiling because their method bodies are now
-# checked at all -- see the M3i design note.
-COMPILE_FLOOR=222
+# Measured 2026-08-19 at the end of M3j, not taken from the design document.
+# M3f left this at 187, M3h took it to 205, M3i to 222. M3j takes it to 242:
+# +2 from substituting a ground method whole, +5 net from functional methods,
+# +13 net from generic dotted methods. Two files stop compiling, and both are
+# the legacy suite's own negative tests for `comprises` -- see the M3j note.
+COMPILE_FLOOR=242
 
 passed=0
 failed=0
@@ -208,8 +209,12 @@ MUTATIONS=(
 )
 
 mutate() {
-    if ! git -C "$repo" diff --quiet -- fortressc/crates; then
-        printf 'refusing to mutate: fortressc/crates has unstaged changes\n' >&2
+    # Against HEAD, not against the index, and the restore below matches. A
+    # gate that rewinds to the index will faithfully put a DEFECT back if
+    # anything staged during the run -- and the worktree and the index would
+    # then agree with each other while both are wrong.
+    if ! git -C "$repo" diff --quiet HEAD -- fortressc/crates; then
+        printf 'refusing to mutate: fortressc/crates differs from HEAD\n' >&2
         exit 2
     fi
 
@@ -248,7 +253,7 @@ PY
                 survived=$((survived + 1))
             fi
         fi
-        git -C "$repo" checkout -- "fortressc/$file"
+        git -C "$repo" checkout HEAD -- "fortressc/$file"
     done
 
     ( cd "$repo/fortressc" && cargo build --workspace >/dev/null 2>&1 )
