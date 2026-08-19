@@ -171,7 +171,9 @@ compile_metric() {
 import os, subprocess, collections
 files = []
 for d, ds, fs in os.walk('.'):
-    ds[:] = [x for x in ds if x not in ('.git', 'target', 'fortressc')]
+    # `.claude` holds agent worktrees, which are FULL REPO COPIES. Counting
+    # one would read the corpus at several times its real size.
+    ds[:] = [x for x in ds if x not in ('.git', 'target', 'fortressc', '.claude')]
     files += [os.path.join(d, f) for f in fs if f.endswith(('.fss', '.fsi'))]
 files.sort()
 c = collections.Counter()
