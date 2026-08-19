@@ -365,6 +365,7 @@ impl<'a> Expander<'a> {
                     Some(b) => Some(self.expr(b, subst)?),
                     None => None,
                 },
+                value_binding: f.value_binding,
                 span: f.span,
             }),
             Decl::Trait(t) => Decl::Trait(TraitDecl {

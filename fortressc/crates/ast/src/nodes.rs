@@ -46,6 +46,13 @@ pub struct FnDecl {
     pub return_type: Option<TypeRef>,
     /// `None` only inside an `api`, where a declaration is a signature.
     pub body: Option<Expr>,
+    /// True when the source wrote a component-level value binding (`pi: RR64 =
+    /// 3.14`) rather than a function. Both parse into this node because there
+    /// is no value declaration node yet, and the checker refuses the binding: a
+    /// value's initializer runs at component initialization, while a nullary
+    /// function's body runs when it is called -- which, for a name nothing can
+    /// reference, is never.
+    pub value_binding: bool,
     pub span: Span,
 }
 

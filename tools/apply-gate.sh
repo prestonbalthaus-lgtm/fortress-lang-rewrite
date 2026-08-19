@@ -27,8 +27,11 @@ export LLVM_SYS_221_PREFIX=${LLVM_SYS_221_PREFIX:-$HOME/.local/opt/llvm22-root/u
 export CPATH=${CPATH:-$HOME/.local/opt/gc-root/usr/include}
 export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 
-# Measured 2026-08-19 at the end of M3f, not taken from the design document.
-COMPILE_FLOOR=187
+# Measured 2026-08-19 at the end of M3h, not taken from the design document.
+# M3f left this at 187. M3h's bundle parses 138 more files and 18 of them go all
+# the way through, with the component-level value bindings among them refused
+# rather than counted -- see the M3h design note.
+COMPILE_FLOOR=205
 
 passed=0
 failed=0
@@ -154,6 +157,7 @@ juxtnary|a juxtaposition of 3 elements led by a function is not implemented
 juxtsingleton|neither multiplication nor concatenation
 localfn|a local function declaration is not implemented
 badchainsense|chained ordering operators must have the same sense
+badvaluebinding|a component-level value declaration is parsed but not implemented
 CASES
 }
 
@@ -200,6 +204,7 @@ MUTATIONS=(
   'crates/parser/src/lib.rs|if is_literal(operand) {|if true {|duplicate every chain operand instead of binding it'
   'crates/parser/src/lib.rs|Some((seen, earlier)) if seen != this => {|Some((seen, earlier)) if false => {|drop the chain sense check'
   'crates/parser/src/lib.rs|&& self.glued_left(self.pos + 1)|&& false|drop the local function declaration guard'
+  'crates/types/src/lib.rs|if f.value_binding {|if false {|carry a component-level value binding as a nullary function'
 )
 
 mutate() {
