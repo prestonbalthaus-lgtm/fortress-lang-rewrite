@@ -65,6 +65,11 @@ struct Signature {
     /// What codegen emits. A set of one keeps its bare Fortress name, so every
     /// symbol that existed before M3c is byte for byte what it was.
     symbol: String,
+    /// An over-approximated method stamp whose bound turned out not to hold.
+    /// Expansion guessed the receiver, the guess was wrong, and the program is
+    /// not at fault -- so the stamp leaves the language entirely rather than
+    /// refusing the component or, worse, staying as a dispatch target.
+    pruned: bool,
     span: Span,
 }
 
@@ -91,11 +96,23 @@ struct Checker {
     /// Every name declared `getter` or `setter` anywhere in the component, so a
     /// read of one is reported as an accessor rather than as a missing field.
     accessors: HashSet<String>,
+    /// Every functional method that takes static parameters. It is not lifted,
+    /// so a call reaches an empty overload set; naming the mechanism is what
+    /// keeps the file out of the `unknown name` bucket.
+    generic_functional: HashSet<String>,
     /// Which member of which method set each declaration is, keyed by the
-    /// declaration's start offset, which is unique per declaration. Positional
-    /// indices desynchronise the moment
-    /// signature building skips a member that the body pass does not.
-    method_slots: HashMap<usize, (String, usize)>,
+    /// owner and the member's index in that owner's member list. The pair is
+    /// unique by construction and reads the same in both passes, so it cannot
+    /// desynchronise the way a running positional index would.
+    ///
+    /// The start offset this used to be keyed by is NOT unique: two
+    /// instantiations of one generic type clone the same members, so
+    /// `Cell[\ZZ32\].get` and `Cell[\String\].get` carry the same span and
+    /// the second silently overwrote the first.
+    method_slots: HashMap<(&'static str, usize), (String, usize)>,
+    /// The same, for functional methods, whose slots index into `functions`
+    /// rather than `methods` because that is the set 1.0 lifts them into.
+    functional_slots: HashMap<(&'static str, usize), (String, usize)>,
     self_ctx: Option<SelfCtx>,
     /// Which member of which overload set each function declaration is, in
     /// declaration order. Backpatching an inferred return type by name alone
@@ -141,6 +158,21 @@ fn mangle(name: &str, params: &[Type]) -> String {
     out
 }
 
+/// A functional method lifts into the TOP-LEVEL overload set of its name, so
+/// its symbol has to be one `mangle` cannot produce: `mangle` joins with a
+/// single `$`, so `$f$` is unreachable and a real top-level `f` is safe.
+///
+/// Always owner qualified, never bare -- a bare one collides with that top
+/// level `f` outright.
+fn functional_symbol(owner: &str, name: &str, params: &[Type], overloaded: bool) -> String {
+    let base = format!("{owner}$f${name}");
+    if overloaded {
+        mangle(&base, params)
+    } else {
+        base
+    }
+}
+
 fn constructor_symbol(name: &str) -> String {
     format!("{name}$new")
 }
@@ -161,6 +193,81 @@ fn strictly_below(a: &[Type], b: &[Type], registry: &Registry) -> bool {
 
 fn more_specific(a: &Signature, b: &Signature, registry: &Registry) -> bool {
     strictly_below(&a.params, &b.params, registry)
+}
+
+fn members_of(decl: &Decl) -> &[Member] {
+    match decl {
+        Decl::Trait(t) => &t.members,
+        Decl::Object(o) => &o.members,
+        Decl::Function(_) => &[],
+    }
+}
+
+/// A member with a `self` parameter, which is what makes it a *functional*
+/// method: 1.0 invokes it `f(x, y)` and never `x.f(y)`. A generic one is not
+/// lifted, so it is not one of these.
+fn is_functional(m: &MethodDecl) -> bool {
+    !m.accessor && m.static_params.is_empty() && m.params.iter().any(|p| p.name == "self")
+}
+
+/// How many declarations share each functional name. Top-level declarations
+/// and functional methods are ONE overload set, so the count has to span both:
+/// counting only the top-level ones gave two members one symbol, and codegen
+/// defined the second against the first's declaration.
+fn overload_counts(component: &Component) -> HashMap<String, usize> {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for decl in &component.decls {
+        if let Decl::Function(f) = decl {
+            *counts.entry(f.name.clone()).or_default() += 1;
+            continue;
+        }
+        for member in members_of(decl) {
+            let Member::Method(m) = member else { continue };
+            if is_functional(m) {
+                *counts.entry(m.name.clone()).or_default() += 1;
+            }
+        }
+    }
+    counts
+}
+
+/// `Self` inside a member stands for the type that declares it. For an object
+/// owner that is the object; for a trait owner it is the trait, which is what
+/// closed-world dispatch supports and is a stated deviation from 1.0, where
+/// `Self` is the run-time type of the receiver.
+fn substitute_self(t: &TypeRef, owner: &str) -> TypeRef {
+    match t {
+        TypeRef::Named { name, args, span } if name == "Self" && args.is_empty() => {
+            TypeRef::Named {
+                name: owner.to_owned(),
+                args: Vec::new(),
+                span: *span,
+            }
+        }
+        TypeRef::Named { name, args, span } => TypeRef::Named {
+            name: name.clone(),
+            args: args.iter().map(|a| substitute_self(a, owner)).collect(),
+            span: *span,
+        },
+        TypeRef::Unit { .. } => t.clone(),
+        TypeRef::Tuple { elems, span } => TypeRef::Tuple {
+            elems: elems.iter().map(|e| substitute_self(e, owner)).collect(),
+            span: *span,
+        },
+        TypeRef::Arrow { from, to, span } => TypeRef::Arrow {
+            from: Box::new(substitute_self(from, owner)),
+            to: Box::new(substitute_self(to, owner)),
+            span: *span,
+        },
+    }
+}
+
+/// A member of an overload set this call could still reach. A withdrawn stamp
+/// is not merely off the target list: it must not reach `agreed` either, or its
+/// wrongly instantiated parameter types poison the hint a literal takes and the
+/// program is blamed for a guess expansion made.
+fn live(signature: &Signature, arity: usize) -> bool {
+    !signature.pruned && signature.params.len() == arity
 }
 
 fn cartesian(domain: &[Vec<Type>]) -> Vec<Vec<Type>> {
@@ -232,7 +339,9 @@ impl Checker {
             functions: HashMap::new(),
             methods: HashMap::new(),
             accessors: HashSet::new(),
+            generic_functional: HashSet::new(),
             method_slots: HashMap::new(),
+            functional_slots: HashMap::new(),
             self_ctx: None,
             slots: Vec::new(),
             scopes: Vec::new(),
@@ -240,8 +349,10 @@ impl Checker {
             dispatches: BTreeMap::new(),
             object_init: false,
         };
+        let counts = overload_counts(component);
         checker.build_hierarchy(component)?;
-        checker.build_signatures(component, &declared)?;
+        checker.build_signatures(component, &declared, &counts)?;
+        checker.build_functional_signatures(component, &counts)?;
         checker.build_method_signatures(component)?;
         Ok(checker)
     }
@@ -398,7 +509,7 @@ impl Checker {
             } else {
                 Type::Trait(owner)
             };
-            for member in members {
+            for (index, member) in members.iter().enumerate() {
                 let Member::Method(m) = member else { continue };
                 if m.accessor
                     || m.params.iter().any(|p| p.name == "self")
@@ -415,7 +526,11 @@ impl Checker {
                 let mut params = vec![receiver];
                 let mut unresolved = false;
                 for p in &m.params {
-                    match self.storable(&p.ty, "a parameter") {
+                    // `Self` stands for the declaring type here exactly as it
+                    // does in a functional method. The two kinds disagreeing
+                    // about it would be a difference with no reason behind it.
+                    let written = substitute_self(&p.ty, owner);
+                    match self.storable(&written, "a parameter") {
                         Ok(ty) => params.push(ty),
                         Err(_) if abstract_ => {
                             unresolved = true;
@@ -428,7 +543,7 @@ impl Checker {
                     continue;
                 }
                 let returns = match &m.return_type {
-                    Some(t) => match self.registry.resolve(t) {
+                    Some(t) => match self.registry.resolve(&substitute_self(t, owner)) {
                         Ok(ty) => ty,
                         Err(_) if abstract_ => continue,
                         Err(e) => return Err(e),
@@ -452,13 +567,111 @@ impl Checker {
                     counts.get(&(owner, m.name.as_str())).copied().unwrap_or(0) > 1,
                 );
                 let set = self.methods.entry(m.name.clone()).or_default();
-                self.method_slots
-                    .insert(m.span.start, (m.name.clone(), set.len()));
+                let slot = (m.name.clone(), set.len());
+                self.method_slots.insert((owner, index), slot);
+                set.push(Signature {
+                    params,
+                    returns,
+                    concrete: !abstract_,
+                    symbol,
+                    pruned: false,
+                    span: m.span,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Lift every functional method into the top-level overload set of its
+    /// name. That is the namespace 1.0 puts it in, and it is *not* the dotted
+    /// one: `x.f(y)` and `f(x, y)` are different declarations.
+    ///
+    /// `self` keeps its WRITTEN position. `area(self, k: ZZ32)` lifts to
+    /// `(Owner, ZZ32)` and `foo(x: ZZ32, self)` to `(ZZ32, Owner)`; symmetric
+    /// dispatch does not care which column holds the interesting type, so
+    /// forcing the receiver to position 0 would be code with a chance of being
+    /// wrong and no chance of being right in a new way.
+    fn build_functional_signatures(
+        &mut self,
+        component: &Component,
+        counts: &HashMap<String, usize>,
+    ) -> Checked<()> {
+        for decl in &component.decls {
+            let owner = match decl {
+                Decl::Trait(t) => intern(&t.name),
+                Decl::Object(o) => intern(&o.name),
+                Decl::Function(_) => continue,
+            };
+            for (index, member) in members_of(decl).iter().enumerate() {
+                let Member::Method(m) = member else { continue };
+                if m.accessor || !m.params.iter().any(|p| p.name == "self") {
+                    continue;
+                }
+                if !m.static_params.is_empty() {
+                    self.generic_functional.insert(m.name.clone());
+                    continue;
+                }
+                // Same concession as the dotted set: an abstract declaration
+                // may mention a type this pass cannot resolve, and it
+                // contributes no dispatch target, so it is skipped rather than
+                // refusing a program for a signature nothing calls.
+                let abstract_ = m.body.is_none();
+                let mut params = Vec::with_capacity(m.params.len());
+                let mut unresolved = false;
+                // The parser gives the `self` parameter the written type
+                // `Self`, so it needs no case of its own: one substitution
+                // covers the receiver, `x: Self` in another position, and the
+                // return type alike.
+                for p in &m.params {
+                    let written = substitute_self(&p.ty, owner);
+                    match self.storable(&written, "a parameter") {
+                        Ok(ty) => params.push(ty),
+                        Err(_) if abstract_ => {
+                            unresolved = true;
+                            break;
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+                if unresolved {
+                    continue;
+                }
+                let returns = match &m.return_type {
+                    Some(t) => {
+                        let written = substitute_self(t, owner);
+                        match self.registry.resolve(&written) {
+                            Ok(ty) => ty,
+                            Err(_) if abstract_ => continue,
+                            Err(e) => return Err(e),
+                        }
+                    }
+                    None => Type::Void,
+                };
+                if self
+                    .functions
+                    .get(&m.name)
+                    .is_some_and(|set| set.iter().any(|other| other.params == params))
+                {
+                    return Err(TypeError::DuplicateDefinition {
+                        span: m.span,
+                        name: m.name.clone(),
+                    });
+                }
+                let symbol = functional_symbol(
+                    owner,
+                    &m.name,
+                    &params,
+                    counts.get(&m.name).copied().unwrap_or(0) > 1,
+                );
+                let set = self.functions.entry(m.name.clone()).or_default();
+                self.functional_slots
+                    .insert((owner, index), (m.name.clone(), set.len()));
                 set.push(Signature {
                     params,
                     returns,
                     concrete: m.body.is_some(),
                     symbol,
+                    pruned: false,
                     span: m.span,
                 });
             }
@@ -470,9 +683,9 @@ impl Checker {
         &mut self,
         component: &Component,
         declared: &HashMap<&'static str, Span>,
+        counts: &HashMap<String, usize>,
     ) -> Checked<()> {
         let mut raw: Vec<(String, Vec<Type>, Type, Span)> = Vec::new();
-        let mut counts: HashMap<String, usize> = HashMap::new();
         for decl in &component.decls {
             let Decl::Function(f) = decl else { continue };
             if declared.contains_key(intern(&f.name)) {
@@ -481,17 +694,15 @@ impl Checker {
                     name: f.name.clone(),
                 });
             }
-            let params = f
-                .params
-                .iter()
-                .map(|p| self.storable(&p.ty, "a parameter"))
-                .collect::<Checked<Vec<Type>>>()?;
+            let mut params = Vec::with_capacity(f.params.len());
+            for p in &f.params {
+                params.push(self.storable(&p.ty, "a parameter")?);
+            }
             let returns = match &f.return_type {
                 Some(t) => self.registry.resolve(t)?,
                 // Inferred in pass two; Void until then, and overwritten there.
                 None => Type::Void,
             };
-            *counts.entry(f.name.clone()).or_default() += 1;
             raw.push((f.name.clone(), params, returns, f.span));
         }
 
@@ -512,6 +723,7 @@ impl Checker {
                 returns,
                 concrete: true,
                 symbol,
+                pruned: false,
                 span,
             });
         }
@@ -565,7 +777,7 @@ impl Checker {
                 Decl::Object(o) => (intern(&o.name), &o.members),
                 Decl::Function(_) => continue,
             };
-            for member in members {
+            for (index, member) in members.iter().enumerate() {
                 let Member::Method(m) = member else { continue };
                 if m.accessor
                     || m.params.iter().any(|p| p.name == "self")
@@ -573,10 +785,34 @@ impl Checker {
                 {
                     continue;
                 }
-                if m.body.is_none() || !self.method_slots.contains_key(&m.span.start) {
+                if m.body.is_none() || !self.method_slots.contains_key(&(owner, index)) {
                     continue;
                 }
-                functions.push(self.method(m, owner)?);
+                if self.pruned_method(owner, index) {
+                    continue;
+                }
+                functions.push(self.method(m, owner, index)?);
+            }
+        }
+
+        // And functional methods, which are members of the top-level overload
+        // set rather than of a namespace of their own. Same lift, same reason
+        // codegen needed no change: what comes out is a `TypedFn`.
+        for decl in &component.decls {
+            let owner = match decl {
+                Decl::Trait(t) => intern(&t.name),
+                Decl::Object(o) => intern(&o.name),
+                Decl::Function(_) => continue,
+            };
+            for (index, member) in members_of(decl).iter().enumerate() {
+                let Member::Method(m) = member else { continue };
+                if !is_functional(m) {
+                    continue;
+                }
+                if m.body.is_none() || !self.functional_slots.contains_key(&(owner, index)) {
+                    continue;
+                }
+                functions.push(self.functional_method(m, owner, index)?);
             }
         }
 
@@ -594,20 +830,61 @@ impl Checker {
     /// there -- subtyping needs the registry, and the registry is built from the
     /// component expansion produced -- so they are settled here, before a single
     /// body is checked.
-    fn discharge_bounds(&self, component: &Component) -> Checked<()> {
+    fn discharge_bounds(&mut self, component: &Component) -> Checked<()> {
         for obligation in &component.bounds {
-            let subject = self.registry.resolve(&obligation.subject)?;
-            let bound = self.registry.resolve(&obligation.bound)?;
-            if !self.registry.is_subtype(subject, bound) {
-                return Err(TypeError::BoundNotSatisfied {
+            let resolved = self
+                .registry
+                .resolve(&obligation.subject)
+                .and_then(|subject| Ok((subject, self.registry.resolve(&obligation.bound)?)));
+            let failure = match resolved {
+                Ok((subject, bound)) if self.registry.is_subtype(subject, bound) => continue,
+                Ok((subject, bound)) => Some(TypeError::BoundNotSatisfied {
                     span: obligation.span,
                     parameter: obligation.parameter.clone(),
                     subject,
                     bound,
-                });
+                }),
+                Err(e) => Some(e),
+            };
+            // A speculative obligation belongs to a stamp expansion guessed at,
+            // and it runs here -- before any body is checked and before any
+            // dispatch table is memoised -- precisely so the guess can be
+            // withdrawn without refusing the program. A call whose receiver
+            // domain includes the pruned type then fails the exactly-one-winner
+            // check M3c already runs, which is the closed-world answer.
+            if let Some((owner, method)) = &obligation.speculative {
+                self.prune_stamp(owner, method);
+                continue;
+            }
+            if let Some(e) = failure {
+                return Err(e);
             }
         }
         Ok(())
+    }
+
+    fn prune_stamp(&mut self, owner: &str, method: &str) {
+        let receiver = if self.registry.is_object(owner) {
+            self.registry
+                .objects
+                .get_key_value(owner)
+                .map(|(n, _)| Type::Object(n))
+        } else {
+            self.registry
+                .traits
+                .get_key_value(owner)
+                .map(|(n, _)| Type::Trait(n))
+        };
+        let Some(receiver) = receiver else { return };
+        let Some(set) = self.methods.get_mut(method) else {
+            return;
+        };
+        for signature in set.iter_mut() {
+            if signature.params.first() == Some(&receiver) {
+                signature.pruned = true;
+                signature.concrete = false;
+            }
+        }
     }
 
     fn object(&mut self, o: &ObjectDecl) -> Checked<TypedObject> {
@@ -734,17 +1011,27 @@ impl Checker {
         })
     }
 
+    /// A stamp withdrawn by `discharge_bounds`. Its body is never checked:
+    /// nothing can reach it, and it was written under a substitution the
+    /// program never asked for.
+    fn pruned_method(&self, owner: &'static str, index: usize) -> bool {
+        self.method_slots
+            .get(&(owner, index))
+            .and_then(|(set, slot)| self.methods.get(set).and_then(|v| v.get(*slot)))
+            .is_some_and(|signature| signature.pruned)
+    }
+
     /// One dotted method body, lifted to a `TypedFn` whose first parameter is
     /// the receiver. Codegen needs no new node: a lifted method is a function,
     /// and a method call is a `DispatchFn` over its tuple.
-    fn method(&mut self, m: &MethodDecl, owner: &'static str) -> Checked<TypedFn> {
+    fn method(&mut self, m: &MethodDecl, owner: &'static str, index: usize) -> Checked<TypedFn> {
         let Some(source) = &m.body else {
             return Err(TypeError::MissingBody {
                 span: m.span,
                 name: m.name.clone(),
             });
         };
-        let Some((set, slot)) = self.method_slots.get(&m.span.start).cloned() else {
+        let Some((set, slot)) = self.method_slots.get(&(owner, index)).cloned() else {
             return Err(TypeError::UnknownName {
                 span: m.span,
                 name: m.name.clone(),
@@ -818,6 +1105,90 @@ impl Checker {
         })
     }
 
+    /// One functional method body, lifted to a `TypedFn` whose parameters are
+    /// exactly what was written -- `self` included, in the position the source
+    /// put it in.
+    fn functional_method(
+        &mut self,
+        m: &MethodDecl,
+        owner: &'static str,
+        index: usize,
+    ) -> Checked<TypedFn> {
+        let Some(source) = &m.body else {
+            return Err(TypeError::MissingBody {
+                span: m.span,
+                name: m.name.clone(),
+            });
+        };
+        let Some((set, slot)) = self.functional_slots.get(&(owner, index)).cloned() else {
+            return Err(TypeError::UnknownName {
+                span: m.span,
+                name: m.name.clone(),
+            });
+        };
+        let Some(signature) = self.functions.get(&set).and_then(|v| v.get(slot)) else {
+            return Err(TypeError::UnknownName {
+                span: m.span,
+                name: m.name.clone(),
+            });
+        };
+        let symbol = signature.symbol.clone();
+        let declared = m.return_type.is_some().then_some(signature.returns);
+        let types = signature.params.clone();
+
+        let mut receiver = None;
+        let mut params = Vec::with_capacity(m.params.len());
+        let mut scope = HashMap::new();
+        for (p, ty) in m.params.iter().zip(types) {
+            if p.name == "self" {
+                receiver = Some(ty);
+            }
+            scope.insert(p.name.clone(), Local { ty, mutable: false });
+            params.push(TypedParam {
+                name: p.name.clone(),
+                ty,
+                span: p.span,
+            });
+        }
+        let Some(receiver) = receiver else {
+            return Err(TypeError::UnknownName {
+                span: m.span,
+                name: m.name.clone(),
+            });
+        };
+
+        // An object's method sees its fields, whichever namespace it lifts
+        // into. `f(self): S = x` reading the constructor parameter `x` is
+        // ordinary Fortress and it is what `compiler_tests/Compiled17.fss`
+        // writes.
+        let fields = self
+            .registry
+            .objects
+            .get(owner)
+            .map_or_else(Vec::new, |o| o.fields.clone());
+        let previous = self.self_ctx.replace(SelfCtx {
+            ty: receiver,
+            fields,
+        });
+        self.scopes.push(scope);
+        let body = self.expr(source, declared);
+        self.scopes.pop();
+        self.self_ctx = previous;
+        let body = body?;
+
+        let return_type = declared.unwrap_or(body.ty);
+        if let Some(sig) = self.functions.get_mut(&set).and_then(|v| v.get_mut(slot)) {
+            sig.returns = return_type;
+        }
+        Ok(TypedFn {
+            name: symbol,
+            params,
+            return_type,
+            body,
+            span: m.span,
+        })
+    }
+
     /// `o.m(y)`. The receiver is checked first and becomes argument 0, after
     /// which this is an ordinary overload resolution over the method namespace.
     fn method_call(
@@ -850,11 +1221,7 @@ impl Checker {
             });
         };
         let arity = args.len() + 1;
-        let candidates: Vec<Signature> = all
-            .iter()
-            .filter(|s| s.params.len() == arity)
-            .cloned()
-            .collect();
+        let candidates: Vec<Signature> = all.iter().filter(|s| live(s, arity)).cloned().collect();
         if candidates.is_empty() {
             return Err(TypeError::ArityMismatch {
                 span,
@@ -873,7 +1240,7 @@ impl Checker {
 
         let statics: Vec<Type> = typed.iter().map(|t| t.ty).collect();
         let refs: Vec<&Signature> = candidates.iter().collect();
-        let applicable = self.applicable(&refs, &statics);
+        let applicable = self.typing_candidates(&refs, &statics);
         if applicable.is_empty() {
             return Err(TypeError::NoApplicableDeclaration {
                 span,
@@ -1772,6 +2139,12 @@ impl Checker {
             return self.self_call(name, args, span, callee_span, expected);
         }
         let Some(all) = self.functions.get(name) else {
+            if self.generic_functional.contains(name) {
+                return Err(TypeError::GenericFunctionalMethodUnsupported {
+                    span: callee_span,
+                    name: name.to_owned(),
+                });
+            }
             return Err(TypeError::UnknownName {
                 span: callee_span,
                 name: name.to_owned(),
@@ -1779,7 +2152,7 @@ impl Checker {
         };
         let candidates: Vec<Signature> = all
             .iter()
-            .filter(|s| s.params.len() == args.len())
+            .filter(|s| live(s, args.len()))
             .cloned()
             .collect();
         if candidates.is_empty() {
@@ -1808,7 +2181,7 @@ impl Checker {
 
         let statics: Vec<Type> = typed.iter().map(|t| t.ty).collect();
         let refs: Vec<&Signature> = candidates.iter().collect();
-        let applicable = self.applicable(&refs, &statics);
+        let applicable = self.typing_candidates(&refs, &statics);
         if applicable.is_empty() {
             return Err(TypeError::NoApplicableDeclaration {
                 span,
@@ -1834,22 +2207,50 @@ impl Checker {
         })
     }
 
+    /// Applicable to one argument tuple. `targets_only` is what separates the
+    /// two questions M3i's design note already distinguished but the code did
+    /// not: a bodiless declaration TYPES a call and names its return, and can
+    /// never BE a dispatch target.
     fn applicable<'s>(
         &self,
         candidates: &[&'s Signature],
         arguments: &[Type],
+        targets_only: bool,
     ) -> Vec<&'s Signature> {
         candidates
             .iter()
             .copied()
             .filter(|c| {
-                c.concrete
+                (c.concrete || !targets_only)
                     && c.params
                         .iter()
                         .zip(arguments)
                         .all(|(p, a)| self.registry.is_subtype(*a, *p))
             })
             .collect()
+    }
+
+    /// What types the call. Implementations first, and a bodiless declaration
+    /// only when there is no implementation at all -- which is the whole of the
+    /// rule "a requirement types a call and never wins one".
+    ///
+    /// Both halves are load bearing. Taking targets only made `o.f()` on a
+    /// trait-typed `o` refuse whenever the trait declared `f` abstractly and
+    /// the objects beneath it implemented it -- ordinary Fortress, and the
+    /// shape `compiler_tests/Compiled15.fss` is written in. Taking everything
+    /// made an inherited implementation tie with an inherited *requirement*
+    /// and reported an ambiguity that is not one, which is
+    /// `long_term_not_working/abstract/DiamondInheritance7.fss`.
+    fn typing_candidates<'s>(
+        &self,
+        candidates: &[&'s Signature],
+        arguments: &[Type],
+    ) -> Vec<&'s Signature> {
+        let targets = self.applicable(candidates, arguments, true);
+        if targets.is_empty() {
+            return self.applicable(candidates, arguments, false);
+        }
+        targets
     }
 
     /// The single most specific applicable declaration. Specification 1.0 would
@@ -1912,10 +2313,15 @@ impl Checker {
     ) -> Checked<Target> {
         // One candidate is one winner in every cell, so there is nothing to
         // enumerate and no size to bound. This is the whole pre-M3c language.
+        // It has to be a real target: a lone bodiless declaration would give
+        // codegen a symbol nothing defines, which is a link failure rather
+        // than a diagnostic.
         if let [only] = candidates {
-            return Ok(Target::UserFn {
-                name: only.symbol.clone(),
-            });
+            if only.concrete {
+                return Ok(Target::UserFn {
+                    name: only.symbol.clone(),
+                });
+            }
         }
 
         let domain: Vec<Vec<Type>> = statics
@@ -1946,7 +2352,7 @@ impl Checker {
         let refs: Vec<&Signature> = candidates.iter().collect();
         let mut table: Vec<(Vec<Type>, String)> = Vec::with_capacity(cells);
         for tuple in cartesian(&domain) {
-            let applicable = self.applicable(&refs, &tuple);
+            let applicable = self.applicable(&refs, &tuple, true);
             let winner = self.winner(name, &applicable, &tuple, span)?;
             if !self.registry.is_subtype(winner.returns, returns) {
                 return Err(TypeError::ReturnTypeNotCovariant {

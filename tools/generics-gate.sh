@@ -222,6 +222,7 @@ refusals() {
     local name pattern err status
     for entry in \
         "polyrec|$LIMIT|polymorphic recursion stops at the ceiling" \
+        "stampceiling|$LIMIT|a generic method that stamps itself larger stops there too" \
         "badoverload|uniformly generic or uniformly ground|a mixed overload set is refused" \
         "badbound|does not satisfy|an unsatisfied bound is refused"; do
         IFS='|' read -r name pattern label <<<"$entry"
@@ -274,7 +275,7 @@ overload_set() {
 # --------------------------------------------------------------- mutations
 
 MUTATIONS=(
-  'crates/types/src/mono.rs|for instance in self.instances.values() {|for instance in self.instances.values().rev() {|emit instantiations in reverse name order'
+  'crates/types/src/mono.rs|for ((mangled, slot), instance) in &self.instances {|for ((mangled, slot), instance) in self.instances.iter().rev() {|emit instantiations in reverse name order'
   'crates/types/src/mono.rs|check_uniformity(component)?;|let _ = check_uniformity(component);|stop enforcing the uniformity rule'
   'crates/types/src/lib.rs|self.discharge_bounds(component)?;|let _ = self.discharge_bounds(component);|stop discharging bound obligations'
   'crates/types/src/mono.rs|if instance.origin == name && instance.member == member {|if instance.origin == name {|emit every instance once per source declaration of its name'
@@ -282,8 +283,12 @@ MUTATIONS=(
 )
 
 mutate() {
-    if ! git -C "$repo" diff --quiet -- fortressc/crates; then
-        printf 'refusing to mutate: fortressc/crates has unstaged changes\n' >&2
+    # Against HEAD, not against the index, and the restore below matches. A
+    # gate that rewinds to the index will faithfully put a DEFECT back if
+    # anything staged during the run -- and the worktree and the index would
+    # then agree with each other while both are wrong.
+    if ! git -C "$repo" diff --quiet HEAD -- fortressc/crates; then
+        printf 'refusing to mutate: fortressc/crates differs from HEAD\n' >&2
         exit 2
     fi
 
@@ -326,7 +331,7 @@ PY
                 survived=$((survived + 1))
             fi
         fi
-        git -C "$repo" checkout -- "fortressc/$file"
+        git -C "$repo" checkout HEAD -- "fortressc/$file"
     done
 
     ( cd "$repo/fortressc" && cargo build --workspace >/dev/null 2>&1 )

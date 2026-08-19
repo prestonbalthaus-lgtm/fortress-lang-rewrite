@@ -174,14 +174,18 @@ CASES
 # file, and the tree has to be clean first. Restored either way.
 
 MUTATIONS=(
-  'crates/types/src/lib.rs|self.storable(&p.ty, "a parameter")|self.registry.resolve(&p.ty)|drop the void guard on parameters'
+  'crates/types/src/lib.rs|params.push(self.storable(&p.ty, "a parameter")?);|params.push(self.registry.resolve(&p.ty)?);|drop the void guard on parameters'
   'crates/parser/src/lib.rs|if elems.len() == 1 {|if false {|fold a one-element parenthesised type into Tuple'
   'crates/parser/src/lib.rs|return Ok(TypeRef::Tuple { elems, span });|return Ok(TypeRef::Named { name: "ZZ32".to_owned(), args: Vec::new(), span });|make a tuple type silently become ZZ32'
 )
 
 mutate() {
-    if ! git -C "$repo" diff --quiet -- fortressc/crates; then
-        printf 'refusing to mutate: fortressc/crates has unstaged changes\n' >&2
+    # Against HEAD, not against the index, and the restore below matches. A
+    # gate that rewinds to the index will faithfully put a DEFECT back if
+    # anything staged during the run -- and the worktree and the index would
+    # then agree with each other while both are wrong.
+    if ! git -C "$repo" diff --quiet HEAD -- fortressc/crates; then
+        printf 'refusing to mutate: fortressc/crates differs from HEAD\n' >&2
         exit 2
     fi
 
@@ -221,7 +225,7 @@ PY
                 survived=$((survived + 1))
             fi
         fi
-        git -C "$repo" checkout -- "fortressc/$file"
+        git -C "$repo" checkout HEAD -- "fortressc/$file"
     done
 
     ( cd "$repo/fortressc" && cargo build --workspace >/dev/null 2>&1 )

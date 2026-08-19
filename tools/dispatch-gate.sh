@@ -170,7 +170,8 @@ preflight() {
 compile() {
     printf '== compile ==\n'
     local name
-    for name in dispatch specificity dottedmethod; do
+    for name in dispatch specificity dottedmethod genericowner functionalmethod \
+                genericmethod prunedstamp; do
         if "$fortressc" "$repo/fortressc/tests/$name.fss" -o "$build/$name" 2>"$build/$name.err"; then
             ok "$name.fss compiles and links"
         else
@@ -324,17 +325,122 @@ methods() {
     fi
 }
 
+# M3j. Three shapes the M3c matrix now has to carry, and the whole point is
+# that it carries them with no rule of its own:
+#
+#  * a GENERIC dotted method, stamped into every type declaring one of that
+#    name because expansion cannot see the receiver, then decided by receiver;
+#  * a FUNCTIONAL method, which lifts into the TOP-LEVEL overload set with the
+#    receiver in the column the source wrote it in;
+#  * a stamp whose bound does not hold, which is withdrawn rather than fatal --
+#    and withdrawn from the candidate set entirely, not merely from the targets.
+m3j() {
+    printf '== generic and functional methods ==\n'
+
+    local out want
+    if have "$build/genericowner" 'a method on a generic owner'; then
+        out=$("$build/genericowner" 2>&1)
+        want=$(printf '7\nhi\n7\nhi\n')
+        if [[ $out == "$want" ]]; then
+            ok "each instantiation gets its own method: $(printf '%s' "$out" | tr '\n' ' ')"
+        else
+            bad 'a method on a generic owner is substituted per instantiation' \
+                "want: $(printf '%s' "$want" | tr '\n' ' ') | got: $(printf '%s' "$out" | tr '\n' ' ')"
+        fi
+    fi
+
+    if have "$build/genericmethod" 'a generic dotted method dispatches on its receiver'; then
+        out=$("$build/genericmethod" 2>&1)
+        want=$(printf '1\n2\n1\n2\n6\n')
+        if [[ $out == "$want" ]]; then
+            ok "a generic dotted method dispatches by receiver: $(printf '%s' "$out" | tr '\n' ' ')"
+        else
+            bad 'a generic dotted method dispatches on its receiver' \
+                "want: $(printf '%s' "$want" | tr '\n' ' ') | got: $(printf '%s' "$out" | tr '\n' ' ')"
+        fi
+    fi
+
+    if have "$build/functionalmethod" 'a functional method joins the top-level set'; then
+        out=$("$build/functionalmethod" 2>&1)
+        want=$(printf '16\n0\n107\n15\n9\n0\n')
+        if [[ $out == "$want" ]]; then
+            ok "self lifts at its written position: $(printf '%s' "$out" | tr '\n' ' ')"
+        else
+            bad 'a functional method joins the top-level overload set' \
+                "want: $(printf '%s' "$want" | tr '\n' ' ') | got: $(printf '%s' "$out" | tr '\n' ' ')"
+        fi
+    fi
+
+    if have "$build/prunedstamp" 'a stamp whose bound fails is withdrawn'; then
+        out=$("$build/prunedstamp" 2>&1)
+        want=$(printf '1\n2\n3\n')
+        if [[ $out == "$want" ]]; then
+            ok "a wrong guess is withdrawn, not fatal: $(printf '%s' "$out" | tr '\n' ' ')"
+        else
+            bad 'a stamp whose bound fails is withdrawn' \
+                "want: $(printf '%s' "$want" | tr '\n' ' ') | got: $(printf '%s' "$out" | tr '\n' ' ')"
+        fi
+    fi
+
+    # The over-approximation, read off the object rather than taken on trust.
+    # `Unused` is never a receiver anywhere and still carries both stamps.
+    local ir
+    ir=$("$fortressc" "$repo/fortressc/tests/genericmethod.fss" --emit-ir 2>/dev/null)
+    if [[ $ir == *'@"Unused$m$f$ZZ32$e"'* && $ir == *'@"Unused$m$f$String$e"'* ]]; then
+        ok 'a stamp lands on every type of matching arity, called or not'
+    else
+        bad 'a stamp lands on every type of matching arity' 'Unused took no stamp'
+    fi
+    if [[ $ir != *'@"Spare$m$f'* ]]; then
+        ok 'an arity nothing demands takes no stamp'
+    else
+        bad 'an arity nothing demands takes no stamp' 'Spare was stamped'
+    fi
+
+    # A generic functional method is refused BY ITS OWN NAME. The name exists;
+    # the lifting does not, and `unknown name` would file it under the wrong
+    # blocker -- which is how the wrong milestone gets chosen.
+    local err status
+    err=$("$fortressc" "$repo/fortressc/tests/genericfunctional.fss" --emit-obj -o /dev/null 2>&1 >/dev/null)
+    status=$?
+    if [[ $status -eq 1 && $err == *"is a generic functional method"* ]]; then
+        ok 'a generic functional method is refused by its own name (exit 1)'
+    else
+        bad 'a generic functional method is refused by its own name' "status $status: $err"
+    fi
+
+    err=$("$fortressc" "$repo/fortressc/tests/badabstractfunctional.fss" \
+          --emit-obj -o /dev/null 2>&1 >/dev/null)
+    status=$?
+    if [[ $status -eq 1 && $err == *"no declaration of \`noise\` applies to (Rock)"* ]]; then
+        ok 'an unimplemented abstract FUNCTIONAL method has no winner either (exit 1)'
+    else
+        bad 'an unimplemented abstract functional method is refused' "status $status: $err"
+    fi
+}
+
 MUTATIONS=(
   'crates/types/src/lib.rs|strictly_below(&a.params, &b.params, registry)|strictly_below(&b.params, &a.params, registry)|invert the specificity comparison'
   'crates/codegen/src/lib.rs|.build_switch(tag, fail, &cases)|.build_switch(tag, fail, &cases[..cases.len().saturating_sub(1)])|drop the last case from every switch'
   'crates/types/src/lib.rs|if maximal.len() != 1 {|if false {|accept a tie instead of reporting it'
-  'crates/types/src/lib.rs|concrete: m.body.is_some(),|concrete: true,|let a bodiless declaration be a dispatch target'
+  'crates/types/src/lib.rs|concrete: !abstract_,|concrete: true,|let a bodiless dotted declaration be a dispatch target'
   'crates/types/src/lib.rs|let ty = field.ty;|let ty = Type::Void;|stop giving a receiver field its real type in a method body'
+  'crates/types/src/lib.rs|self.method_slots.insert((owner, index), slot);|self.method_slots.insert((owner, m.span.start), slot);|file a method slot under its span, which two instantiations share'
+  'crates/types/src/lib.rs|concrete: m.body.is_some(),|concrete: true,|let a bodiless functional declaration be a dispatch target'
+  'crates/types/src/mono.rs|if !self.generic_methods.contains(&name) {|if true {|stamp no generic method anywhere'
+  'crates/types/src/mono.rs|for (param, arg) in template.decl.static_params.iter().zip(&request.args) {|for (param, arg) in template.decl.static_params.iter().skip(1).zip(&request.args) {|drop the first static argument of every stamp'
+  'crates/types/src/lib.rs|self.prune_stamp(owner, method);|let _ = (owner, method);|refuse the component instead of withdrawing a wrong stamp'
+  'crates/types/src/lib.rs|!signature.pruned && signature.params.len() == arity|signature.params.len() == arity|leave a withdrawn stamp in the candidate set'
+  'crates/types/src/lib.rs|if targets.is_empty() {|if false {|let a requirement tie with an implementation'
 )
 
 mutate() {
-    if ! git -C "$repo" diff --quiet -- fortressc/crates; then
-        printf 'refusing to mutate: fortressc/crates has unstaged changes\n' >&2
+    # Against HEAD, not against the index, and the restore below matches. A
+    # gate that rewinds to the index will faithfully put a DEFECT back if
+    # anything staged during the run -- and the worktree and the index would
+    # then agree with each other while both are wrong.
+    if ! git -C "$repo" diff --quiet HEAD -- fortressc/crates; then
+        printf 'refusing to mutate: fortressc/crates differs from HEAD\n' >&2
         exit 2
     fi
 
@@ -366,7 +472,7 @@ PY
             rm -rf "$build"; mkdir -p "$build"
             passed=0; failed=0
             compile >/dev/null 2>&1
-            matrix; runtime_type_wins; ambiguity; shape; methods
+            matrix; runtime_type_wins; ambiguity; shape; methods; m3j
             if [[ $failed -gt 0 ]]; then
                 printf 'REFUSED  %d check(s) failed, which is the point\n' "$failed"
                 if [[ $label == drop* ]]; then
@@ -377,7 +483,7 @@ PY
                 survived=$((survived + 1))
             fi
         fi
-        git -C "$repo" checkout -- "fortressc/$file"
+        git -C "$repo" checkout HEAD -- "fortressc/$file"
     done
 
     ( cd "$repo/fortressc" && cargo build --workspace >/dev/null 2>&1 )
@@ -421,6 +527,7 @@ case "${1:-}" in
         ambiguity
         shape
         methods
+        m3j
         ;;
 esac
 

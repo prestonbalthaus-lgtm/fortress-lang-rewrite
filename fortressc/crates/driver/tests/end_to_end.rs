@@ -726,6 +726,28 @@ fn polymorphic_recursion_is_refused_rather_than_compiled_or_hung_on() {
     );
 }
 
+/// The same ceiling on the stamp path, which had no witness of its own. The
+/// failure this pins is a HANG rather than a wrong answer: a generic method
+/// demanding itself at a strictly larger type generates stamps without end.
+#[test]
+fn a_generic_method_that_stamps_itself_larger_stops_at_the_ceiling() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture("stampceiling.fss"))
+        .arg("--emit-ir")
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "a ceiling is a user diagnostic, not a compiler bug:\n{message}"
+    );
+    assert!(
+        message.contains("4096"),
+        "the limit must be named:\n{message}"
+    );
+}
+
 /// Tags are switch keys, and switch arms follow tag order. If instantiations
 /// were numbered as a worklist discovered them, the emitted module would depend
 /// on traversal order rather than on the source.
@@ -820,4 +842,101 @@ fn a_chain_mixing_equivalence_with_one_sense_is_true() {
     let out = run(&binary);
     assert_eq!(String::from_utf8_lossy(&out.stdout), "YES\n");
     let _ = std::fs::remove_file(&binary);
+}
+
+// -------------------------------- M3j: methods on and of generic types
+
+/// A ground method on a generic owner. Two things had to be fixed for this to
+/// compile at all, and both are visible in the output rather than in a comment:
+/// the return type is substituted (`unknown type T` before), and the slot map
+/// is no longer keyed by span -- two instantiations of one template are clones
+/// and share it, so `get` resolved to one signature for both cells.
+#[test]
+fn a_method_on_a_generic_owner_is_substituted_per_instantiation() {
+    let binary = compile_fixture("genericowner.fss", "genericowner");
+    let out = run(&binary);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "7\nhi\n7\nhi\n");
+    assert_eq!(out.status.code(), Some(0));
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// The same fixture, seen from the object side: the two instantiations really
+/// are two functions over two layouts, which is what a shared slot destroyed.
+#[test]
+fn each_instantiation_of_a_method_gets_its_own_symbol() {
+    let ir = emit_ir("genericowner.fss");
+    assert!(
+        ir.contains(r#"define i32 @"Cell$ZZ32$e$m$get""#),
+        "the ZZ32 cell needs its own method returning i32:\n{ir}"
+    );
+    assert!(
+        ir.contains(r#"define ptr @"Cell$String$e$m$get""#),
+        "the String cell needs its own method returning ptr:\n{ir}"
+    );
+}
+
+/// A `self` parameter lifts a member into the TOP-LEVEL overload set of its
+/// name, alongside a real top-level declaration of it. Six numbers, and each
+/// one is a different rule: the override, the inherited default, the top-level
+/// member of the same set, `self` written second, and dispatch deciding on the
+/// run-time type twice.
+#[test]
+fn a_functional_method_joins_the_top_level_overload_set() {
+    let binary = compile_fixture("functionalmethod.fss", "functionalmethod");
+    let out = run(&binary);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "16\n0\n107\n15\n9\n0\n"
+    );
+    assert_eq!(out.status.code(), Some(0));
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// The symbol rule. A functional method is owner qualified and never bare,
+/// because the set it joins may already hold a real top-level `area`; and the
+/// overload count has to span both kinds or two members take one symbol.
+#[test]
+fn a_functional_method_symbol_is_owner_qualified() {
+    let ir = emit_ir("functionalmethod.fss");
+    for symbol in [
+        r#"@"Square$f$area$Square""#,
+        r#"@"Shape$f$area$Shape""#,
+        r#"@"area$zz32""#,
+    ] {
+        assert!(ir.contains(symbol), "missing {symbol}:\n{ir}");
+    }
+}
+
+/// Generic dotted methods, by over-approximation. Expansion has no types, so
+/// `o.f[\ZZ32\]()` stamps `f` into every type declaring a generic `f` of
+/// matching arity; the five numbers are the receiver deciding, twice of it at
+/// run time through a trait.
+#[test]
+fn a_generic_dotted_method_dispatches_on_its_receiver() {
+    let binary = compile_fixture("genericmethod.fss", "genericmethod");
+    let out = run(&binary);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "1\n2\n1\n2\n6\n");
+    assert_eq!(out.status.code(), Some(0));
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// The over-approximation, stated in symbols rather than in prose. `Unused`
+/// never appears at a call site and still gets both stamps, because the pass
+/// that makes them cannot see a receiver; `Spare` declares `f` at an arity
+/// nothing demands and gets none.
+#[test]
+fn a_stamp_lands_on_every_matching_type_and_no_other() {
+    let ir = emit_ir("genericmethod.fss");
+    for symbol in [
+        r#"@"O$m$f$ZZ32$e""#,
+        r#"@"P$m$f$ZZ32$e""#,
+        r#"@"Unused$m$f$ZZ32$e""#,
+        r#"@"Unused$m$f$String$e""#,
+    ] {
+        assert!(ir.contains(symbol), "missing {symbol}:\n{ir}");
+    }
+    assert!(
+        !ir.contains(r#"@"Spare$m$f"#),
+        "an arity that matches nothing must take no stamp:\n{ir}"
+    );
 }

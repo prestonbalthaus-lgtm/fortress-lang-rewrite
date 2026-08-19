@@ -1,0 +1,16 @@
+component genericfunctional
+export Executable
+
+(* A functional method that takes static parameters. It parses, and it is not
+   lifted: choosing what to instantiate needs the receiver's type, and
+   expansion runs before anything is typed.
+
+   The point of the fixture is the DIAGNOSTIC. `foo` is declared three lines
+   up, so `unknown name` would be false and would file this under the wrong
+   blocker -- and milestones are chosen off those buckets. *)
+object O
+   foo[\T\](self, x: T): T = x
+end
+
+run(): () = do println(foo[\ZZ32\](O, 17)) end
+end
