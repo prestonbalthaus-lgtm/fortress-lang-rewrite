@@ -14,7 +14,20 @@
  * allocator built on GC_malloc instead, or the collector will free the objects
  * it points at while it is still holding them.
  */
+/*
+ * M4: the collector must know about every thread that allocates. Defining
+ * GC_THREADS before <gc.h> is what makes gc.h pull in gc_pthread_redirects.h,
+ * which redefines pthread_create as GC_pthread_create -- so a plain
+ * pthread_create below registers the thread transparently.
+ *
+ * Without it the program aborts with the collector's own "Collecting from
+ * unknown thread", every run. That is not a documented risk, it is a measured
+ * one, and tools/parallel-gate.sh mutates this line to show it.
+ */
+#define GC_THREADS
+
 #include <math.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,7 +51,13 @@ void fortress_runtime_init(void) {}
 
 /* Generated main calls this before anything else, so the collector is up
  * before the first allocation. */
-void fortress_runtime_init(void) { GC_INIT(); }
+void fortress_runtime_init(void) {
+    GC_INIT();
+    /* Starts the marker threads. Until this runs GC_get_parallel() reports 0
+     * even on a collector built with --enable-parallel-mark, which is what
+     * made an early measurement of this claim wrong. */
+    GC_allow_register_threads();
+}
 #endif
 
 static void *checked(void *p) {

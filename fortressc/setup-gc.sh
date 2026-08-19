@@ -1,34 +1,66 @@
 #!/usr/bin/env bash
 # Builds a private Boehm GC prefix for linking Fortress programs, without root.
 #
-# Fedora splits it the same way it splits LLVM: `gc` ships libgc.so.1, `gc-devel`
-# ships gc.h and the unversioned .so symlink the linker needs. This unpacks
-# gc-devel into ~/.local and points its symlink at the already-installed runtime
-# library. With root you would just `dnf install gc-devel` instead.
+# M4 made this a SOURCE build. The distribution package is a shared library with
+# the distribution's own configure flags; a parallel language needs to own three
+# decisions about its collector, and none of them are ours to make from an RPM:
+#
+#   --enable-parallel-mark        mark with every core, not one
+#   --enable-thread-local-alloc   per-thread allocation, not one global lock
+#   --enable-static --disable-shared
+#
+# The last is the one that matters operationally. A shared collector in a
+# private prefix means every Fortress binary needs LD_LIBRARY_PATH set to run,
+# including under `srun` on a compute node. Linked statically the binary carries
+# its collector and needs no environment at all.
 set -euo pipefail
+
+VERSION=8.2.8
+SHA256=7649020621cb26325e1fb5c8742590d92fb48ce5c259b502faf7d9fb5dabb160
+URL="https://github.com/bdwgc/bdwgc/releases/download/v${VERSION}/gc-${VERSION}.tar.gz"
 
 ROOT="${HOME}/.local/opt/gc-root"
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
 
-# Restricted to the distribution repositories: a third party repo that wants a
-# GPG key imported will otherwise stop and wait for an answer.
-echo "downloading gc-devel..."
-( cd "${WORK}" && dnf download --repo=fedora --repo=updates gc-devel >/dev/null )
+echo "downloading gc-${VERSION}..."
+curl -sSL -o "${WORK}/gc.tar.gz" "${URL}"
 
-echo "unpacking into ${ROOT}"
-rm -rf "${ROOT}"; mkdir -p "${ROOT}"
-( cd "${ROOT}" && rpm2cpio "${WORK}"/gc-devel-*.x86_64.rpm | cpio -idm --quiet )
+# Verified before it is unpacked, not after. A tarball that fetched cleanly is
+# not the same fact as a tarball that is the one we meant to build.
+echo "${SHA256}  ${WORK}/gc.tar.gz" | sha256sum -c - >/dev/null
+echo "sha256 ok"
 
-# gc-devel's libgc.so points at a file that lives in the `gc` package, so
-# unpacked on its own it dangles. Repoint it at the installed runtime.
-runtime="$(ls -1 /usr/lib64/libgc.so.* 2>/dev/null | grep -E '\.so\.[0-9]+$' | sort -V | tail -1)"
-[ -n "${runtime}" ] || { echo "no /usr/lib64/libgc.so.*; dnf install gc" >&2; exit 1; }
-ln -sf "${runtime}" "${ROOT}/usr/lib64/libgc.so"
+tar xzf "${WORK}/gc.tar.gz" -C "${WORK}"
 
+cd "${WORK}/gc-${VERSION}"
+./configure \
+    --prefix="${ROOT}/usr" \
+    --libdir="${ROOT}/usr/lib64" \
+    --enable-parallel-mark \
+    --enable-thread-local-alloc \
+    --enable-threads=posix \
+    --enable-static --disable-shared \
+    --disable-cplusplus --disable-docs \
+    --with-libatomic-ops=none \
+    > "${WORK}/configure.log" 2>&1
+
+make -j"$(nproc)" > "${WORK}/make.log" 2>&1
+
+rm -rf "${ROOT}"
+make install > "${WORK}/install.log" 2>&1
+
+# Asserted, not assumed: a configure flag that was accepted and then silently
+# dropped is exactly the failure this build exists to avoid.
+grep -q '#define PARALLEL_MARK 1'      include/config.h
+grep -q '#define THREAD_LOCAL_ALLOC 1' include/config.h
+test -f "${ROOT}/usr/lib64/libgc.a"
 test -f "${ROOT}/usr/include/gc.h"
+! test -f "${ROOT}/usr/lib64/libgc.so"
+
 echo
-echo "ok. export these before building or linking:"
+echo "ok: static libgc.a with parallel marking and thread-local allocation."
+echo "export these before building or linking:"
 echo
 echo "  export CPATH=${ROOT}/usr/include\${CPATH:+:\${CPATH}}"
 echo "  export LIBRARY_PATH=${ROOT}/usr/lib64\${LIBRARY_PATH:+:\${LIBRARY_PATH}}"

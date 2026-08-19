@@ -12,18 +12,47 @@ From: rockylinux/rockylinux:9
     set -eux
     dnf -y install dnf-plugins-core
     dnf config-manager --set-enabled crb
-    dnf -y install gcc binutils openmpi openmpi-devel gc gc-devel
+    # No `curl`: the base image ships curl-minimal, which provides the binary
+    # and conflicts with the full package.
+    dnf -y install gcc binutils make tar gzip openmpi openmpi-devel
     dnf clean all
     rm -rf /var/cache/dnf
+
+    # M4: the image builds the SAME collector the host build script does, from
+    # the same tarball and the same three flags. Rocky's `gc` package is a
+    # shared library with the distribution's configure choices; a language whose
+    # loops are parallel cannot let its collector be whatever the distribution
+    # picked. Built here rather than copied in because a static archive is
+    # linked against the glibc it was compiled against, and this image's is not
+    # the build host's -- copying one in fails at link with an undefined
+    # `__isoc23_strtol`, which is exactly how this was found.
+    curl -sSL -o /tmp/gc.tar.gz \
+        https://github.com/bdwgc/bdwgc/releases/download/v8.2.8/gc-8.2.8.tar.gz
+    echo "7649020621cb26325e1fb5c8742590d92fb48ce5c259b502faf7d9fb5dabb160  /tmp/gc.tar.gz" \
+        | sha256sum -c -
+    tar xzf /tmp/gc.tar.gz -C /tmp
+    cd /tmp/gc-8.2.8
+    ./configure --prefix=/opt/gc-root/usr --libdir=/opt/gc-root/usr/lib64 \
+        --enable-parallel-mark --enable-thread-local-alloc --enable-threads=posix \
+        --enable-static --disable-shared --disable-cplusplus --disable-docs \
+        --with-libatomic-ops=none
+    make -j"$(nproc)"
+    make install
+    grep -q '#define PARALLEL_MARK 1'      include/config.h
+    grep -q '#define THREAD_LOCAL_ALLOC 1' include/config.h
+    cd / && rm -rf /tmp/gc-8.2.8 /tmp/gc.tar.gz
 
     # Rocky puts the MPI toolchain outside the default paths and expects an
     # environment module to add it. There are no modules in here, so the paths
     # are fixed in %environment and asserted at build time.
     test -x /usr/lib64/openmpi/bin/mpicc
     test -x /usr/lib64/openmpi/bin/mpirun
-    # runtime/shims.c includes <gc.h> and every Fortress binary links -lgc, so
-    # the collector is part of the link toolchain, not an optional extra.
-    test -f /usr/include/gc.h
+    # The collector the image just built, not the distribution's. Every Fortress
+    # binary links -lgc, so this is part of the link toolchain rather than an
+    # optional extra, and tools/mpicc-in-image.sh points the in-image link at
+    # this prefix so the HOST's archive never leaks in over the bind mount.
+    test -f /opt/gc-root/usr/include/gc.h
+    test -f /opt/gc-root/usr/lib64/libgc.a
     # M3k gave `^` a float shim, so the runtime calls pow() and every link
     # takes -lm. glibc folds libm into libc, but the header has to be here for
     # the same reason gc.h does: the link is not optional.
@@ -31,6 +60,8 @@ From: rockylinux/rockylinux:9
 
 %environment
     export PATH=/usr/lib64/openmpi/bin:$PATH
+    export CPATH=/opt/gc-root/usr/include
+    export LIBRARY_PATH=/opt/gc-root/usr/lib64
     export LD_LIBRARY_PATH=/usr/lib64/openmpi/lib:$LD_LIBRARY_PATH
     # Cross memory attach needs ptrace on the peer process, which Yama blocks
     # between unrelated processes on most hosts. Without this, shared memory

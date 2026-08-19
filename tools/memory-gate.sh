@@ -116,22 +116,33 @@ symbols() {
     have "$build/soak-gc" 'allocation goes through the collector' || return
     have "$build/soak-malloc" 'the control allocates with malloc and nothing else' || return
 
-    if nm -u "$build/soak-gc" | grep -q 'GC_malloc_atomic'; then
+    # DEFINED, not undefined. M4 made the collector a static archive, so its
+    # symbols are inside the binary rather than left for the loader -- `nm -u`
+    # finds nothing and would have reported a collected build as uncollected.
+    # COUNTED, not `grep -q`. Under `set -o pipefail` a `grep -q` exits on the
+    # first match, `nm` takes SIGPIPE, and the pipeline reports failure even
+    # though the symbol was found. The old form survived only because `nm -u`
+    # produced few enough lines to fit in the pipe buffer; a static collector's
+    # symbol table does not.
+    if [[ $(nm "$build/soak-gc" | grep -cE '^[0-9a-f]+ [TtWw] GC_malloc_atomic') -gt 0 ]]; then
         ok 'allocation goes through the collector'
     else
-        bad 'allocation goes through the collector' "$(nm -u "$build/soak-gc" | tr '\n' ' ')"
+        bad 'allocation goes through the collector' 'no GC_malloc_atomic defined in the binary'
     fi
 
-    if nm -u "$build/soak-malloc" | grep -q 'GC_'; then
+    if [[ $(nm "$build/soak-malloc" 2>/dev/null | grep -cE ' [TtWwU] GC_') -gt 0 ]]; then
         bad 'the control allocates with malloc and nothing else' 'the control is collected too'
     else
         ok 'the control allocates with malloc and nothing else'
     fi
 
-    if ldd "$build/soak-gc" | grep -q 'libgc\.so'; then
-        ok 'the collected build links libgc'
+    # A statically linked collector is the point, not an accident: a Fortress
+    # binary carries its collector and needs no LD_LIBRARY_PATH to run, which is
+    # what makes it launchable under srun on a compute node.
+    if [[ $(ldd "$build/soak-gc" | grep -c 'libgc') -gt 0 ]]; then
+        bad 'the collector is linked statically' "$(ldd "$build/soak-gc" | tr '\n' ' ')"
     else
-        bad 'the collected build links libgc' "$(ldd "$build/soak-gc" | tr '\n' ' ')"
+        ok 'the collector is linked statically, so the binary needs no library path'
     fi
 }
 
