@@ -467,11 +467,11 @@ impl<'t, 'a> Parser<'t, 'a> {
     /// and never checked, so their bodies may say anything the grammar allows.
     fn member(&mut self) -> Parsed<Member> {
         let start = self.span_here();
-        // `getter f(): T = e` and `setter f(x: T) = e`. Consumed and dropped:
-        // the modifier changes how the member is *invoked* (`x.f` rather than
-        // `x.f()`), and nothing downstream invokes a method at all yet, so
-        // recording it would be recording a fact no pass can act on.
-        if self.at(&Kind::KwGetter) || self.at(&Kind::KwSetter) {
+        // `getter f(): T = e` and `setter f(x: T) = e`. The modifier changes
+        // how the member is *invoked* -- `x.f` rather than `x.f()` -- so it is
+        // recorded and M3i leaves accessors out of the dotted method sets.
+        let accessor = self.at(&Kind::KwGetter) || self.at(&Kind::KwSetter);
+        if accessor {
             self.pos += 1;
         }
         let mutable = if self.at(&Kind::KwVar) {
@@ -505,6 +505,7 @@ impl<'t, 'a> Parser<'t, 'a> {
                 params,
                 return_type,
                 body,
+                accessor,
                 span: Span::new(start.start, end.end),
             }));
         }

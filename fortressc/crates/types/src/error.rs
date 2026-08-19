@@ -163,6 +163,11 @@ pub enum TypeError {
         span: Span,
         name: String,
     },
+    /// A `getter`/`setter` member read as a field. It parses; it is not read.
+    AccessorUnsupported {
+        span: Span,
+        name: String,
+    },
     MutableFieldUnsupported {
         span: Span,
         name: String,
@@ -303,6 +308,7 @@ impl TypeError {
             | Self::ReturnTypeNotCovariant { span, .. }
             | Self::DispatchTableTooLarge { span, .. }
             | Self::NotPrintable { span, .. }
+            | Self::AccessorUnsupported { span, .. }
             | Self::ValueBindingUnsupported { span, .. }
             | Self::StaticArgumentsRequired { span, .. }
             | Self::NotGeneric { span, .. }
@@ -444,6 +450,11 @@ impl core::fmt::Display for TypeError {
                 "`{name}`: a component-level value declaration is parsed but \
                  not implemented; its initializer would have to run at \
                  component initialization, and it is not a nullary function"
+            ),
+            Self::AccessorUnsupported { name, .. } => write!(
+                f,
+                "`{name}` is a getter or setter; accessors parse but are not \
+                 implemented, and `{name}` is read rather than called"
             ),
             Self::MutableFieldUnsupported { name, .. } => {
                 write!(f, "`var {name}`: mutable fields are not implemented")

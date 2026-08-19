@@ -170,7 +170,7 @@ preflight() {
 compile() {
     printf '== compile ==\n'
     local name
-    for name in dispatch specificity; do
+    for name in dispatch specificity dottedmethod; do
         if "$fortressc" "$repo/fortressc/tests/$name.fss" -o "$build/$name" 2>"$build/$name.err"; then
             ok "$name.fss compiles and links"
         else
@@ -285,10 +285,51 @@ shape() {
 # real source, the compiler is rebuilt, the gate is run, and the run is required
 # to FAIL. The tree has to be clean first, and it is restored either way.
 
+
+# A dotted method lifts to a function whose parameter 0 is the receiver, so
+# single dispatch is M3c's symmetric dispatch with nothing added. Three facts
+# fall out of that and are asserted here rather than assumed: an override beats
+# an inherited default because Object <: Trait; an unimplemented abstract method
+# has no winner for its tag; and a method never collides with a function of the
+# same name, because the two namespaces are separate.
+methods() {
+    printf '== dotted methods ==\n'
+    have "$build/dottedmethod" 'a dotted method dispatches on its receiver' || return
+
+    local out want
+    out=$("$build/dottedmethod" 2>&1)
+    want=$(printf '1\n0\n7\n14\n')
+    if [[ $out == "$want" ]]; then
+        ok "override beats default and a method reads its fields: $(printf '%s' "$out" | tr '\n' ' ')"
+    else
+        bad 'a dotted method dispatches on its receiver' \
+            "want: $(printf '%s' "$want" | tr '\n' ' ') | got: $(printf '%s' "$out" | tr '\n' ' ')"
+    fi
+
+    local err status
+    err=$("$fortressc" "$repo/fortressc/tests/badabstract.fss" --emit-obj -o /dev/null 2>&1 >/dev/null)
+    status=$?
+    if [[ $status -eq 1 && $err == *"no declaration of \`noise\` applies"* ]]; then
+        ok 'an unimplemented abstract method has no winner for its tag (exit 1)'
+    else
+        bad 'an unimplemented abstract method is refused' "status $status: $err"
+    fi
+
+    err=$("$fortressc" "$repo/fortressc/tests/baddiamond.fss" --emit-obj -o /dev/null 2>&1 >/dev/null)
+    status=$?
+    if [[ $status -eq 1 && $err == *"is ambiguous for (Cat)"* ]]; then
+        ok 'two defaulted methods with no most specific one are refused by name (exit 1)'
+    else
+        bad 'an ambiguous diamond is refused' "status $status: $err"
+    fi
+}
+
 MUTATIONS=(
   'crates/types/src/lib.rs|strictly_below(&a.params, &b.params, registry)|strictly_below(&b.params, &a.params, registry)|invert the specificity comparison'
   'crates/codegen/src/lib.rs|.build_switch(tag, fail, &cases)|.build_switch(tag, fail, &cases[..cases.len().saturating_sub(1)])|drop the last case from every switch'
   'crates/types/src/lib.rs|if maximal.len() != 1 {|if false {|accept a tie instead of reporting it'
+  'crates/types/src/lib.rs|concrete: m.body.is_some(),|concrete: true,|let a bodiless declaration be a dispatch target'
+  'crates/types/src/lib.rs|let ty = field.ty;|let ty = Type::Void;|stop giving a receiver field its real type in a method body'
 )
 
 mutate() {
@@ -325,7 +366,7 @@ PY
             rm -rf "$build"; mkdir -p "$build"
             passed=0; failed=0
             compile >/dev/null 2>&1
-            matrix; runtime_type_wins; ambiguity; shape
+            matrix; runtime_type_wins; ambiguity; shape; methods
             if [[ $failed -gt 0 ]]; then
                 printf 'REFUSED  %d check(s) failed, which is the point\n' "$failed"
                 if [[ $label == drop* ]]; then
@@ -379,6 +420,7 @@ case "${1:-}" in
         runtime_type_wins
         ambiguity
         shape
+        methods
         ;;
 esac
 

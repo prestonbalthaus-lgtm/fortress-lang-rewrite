@@ -108,6 +108,10 @@ pub struct MethodDecl {
     pub params: Vec<Param>,
     pub return_type: Option<TypeRef>,
     pub body: Option<Expr>,
+    /// Declared `getter` or `setter`. An accessor is reached by `o.size`, not
+    /// by `o.size()`, so it is not a dotted method call and is left out of the
+    /// dispatch sets -- keeping M3h's position that it parses and is not read.
+    pub accessor: bool,
     pub span: Span,
 }
 

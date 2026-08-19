@@ -418,6 +418,7 @@ impl<'a> Expander<'a> {
                     },
                     return_type: m.return_type.clone(),
                     body: m.body.clone(),
+                    accessor: m.accessor,
                     span: m.span,
                 }),
             });

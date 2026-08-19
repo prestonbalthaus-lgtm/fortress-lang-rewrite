@@ -1,0 +1,20 @@
+component badabstract
+export Executable
+
+(* Rock extends Animal and does not implement `noise`. A bodiless declaration
+   is never a dispatch target, so the tag for Rock has no winner and the
+   exactly-one-winner check M3c already runs refuses it. No new rule. *)
+trait Animal
+  noise(): ZZ32
+end
+
+object Dog extends Animal
+  noise(): ZZ32 = 1
+end
+
+object Rock extends Animal end
+
+speak(a: Animal): ZZ32 = a.noise()
+
+run(): () = do println(speak(Dog)) end
+end
