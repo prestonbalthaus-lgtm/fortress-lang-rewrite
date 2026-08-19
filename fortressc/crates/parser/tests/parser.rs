@@ -520,3 +520,18 @@ fn a_parenthesised_type_is_the_type_itself() {
         other => panic!("expected the inner named type, got {other:?}"),
     }
 }
+
+#[test]
+fn two_or_more_types_in_parentheses_are_a_tuple() {
+    match return_type("f(): (ZZ32, String) = 1") {
+        TypeRef::Tuple { elems, .. } => {
+            assert_eq!(elems.len(), 2);
+            assert_eq!(elems.first().map(TypeRef::written), Some("ZZ32".to_owned()));
+            assert_eq!(
+                elems.get(1).map(TypeRef::written),
+                Some("String".to_owned())
+            );
+        }
+        other => panic!("expected a tuple type, got {other:?}"),
+    }
+}

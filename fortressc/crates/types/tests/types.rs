@@ -1153,3 +1153,11 @@ fn a_unit_array_element_is_refused() {
         other => panic!("expected VoidNotStorable, got {other:?}"),
     }
 }
+
+#[test]
+fn a_tuple_type_is_refused_with_a_diagnostic() {
+    match type_error("component t\nf(): (ZZ32, String) = 1\nend\n") {
+        TypeError::TypeNotImplemented { form, .. } => assert_eq!(form, "a tuple type"),
+        other => panic!("expected TypeNotImplemented, got {other:?}"),
+    }
+}

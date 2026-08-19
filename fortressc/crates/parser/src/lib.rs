@@ -583,10 +583,22 @@ impl<'t, 'a> Parser<'t, 'a> {
                     span: Span::new(start, end),
                 });
             }
-            let inner = self.type_ref()?;
+            let mut elems = vec![self.type_ref()?];
             self.skip_newlines();
+            while self.at(&Kind::Comma) {
+                self.pos += 1;
+                self.skip_newlines();
+                elems.push(self.type_ref()?);
+                self.skip_newlines();
+            }
             let end = self.expect(&Kind::RParen, "`)`")?.span.end;
-            return Ok(widen(inner, Span::new(start, end)));
+            let span = Span::new(start, end);
+            // Two or more is the whole definition of a tuple, and this is the
+            // only place the invariant is enforced.
+            if elems.len() == 1 {
+                return Ok(widen(elems.remove(0), span));
+            }
+            return Ok(TypeRef::Tuple { elems, span });
         }
         let (name, span) = self.identifier("a type name")?;
         if !self.at(&Kind::LGeneric) {
