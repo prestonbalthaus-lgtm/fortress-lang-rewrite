@@ -14,6 +14,7 @@
  * allocator built on GC_malloc instead, or the collector will free the objects
  * it points at while it is still holding them.
  */
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -72,6 +73,71 @@ void println_zz64(long long v) { printf("%lld\n", v); }
 void println_rr64(double v) { printf("%g\n", v); }
 void println_boolean(int v) { puts(v ? "true" : "false"); }
 void println_void(void) { puts(""); }
+
+/*
+ * `print` is `println` without the newline. Separate shims rather than a flag,
+ * because a flag would be one more thing generated code has to get right and
+ * these are four lines each.
+ */
+/*
+ * `^`. There is no integer power instruction, so this is a shim rather than
+ * inline IR -- and being a shim is what keeps the negative-exponent rule in one
+ * place. A negative exponent on an integer has no integer answer, so it halts
+ * the way an out of bounds subscript does rather than inventing zero.
+ *
+ * Exponentiation by squaring: the loop is O(log b), and it is the same shape
+ * for both integer widths.
+ */
+long long pow_zz64_zz64(long long a, long long b) {
+    if (b < 0) {
+        fortress_halt("negative exponent has no integer result", a, b);
+    }
+    long long result = 1;
+    long long base = a;
+    while (b > 0) {
+        if (b & 1) {
+            result *= base;
+        }
+        b >>= 1;
+        if (b > 0) {
+            base *= base;
+        }
+    }
+    return result;
+}
+
+int pow_zz32_zz32(int a, int b) { return (int)pow_zz64_zz64(a, b); }
+
+/*
+ * The mixed pairs. 1.0 declares `^` on every base-exponent combination and
+ * expTest.fss asserts all four, so all nine exist rather than a rule about
+ * which ones are allowed. A real anywhere makes the answer real.
+ */
+double pow_rr64_rr64(double a, double b) { return pow(a, b); }
+double pow_rr64_zz32(double a, int b) { return pow(a, (double)b); }
+double pow_rr64_zz64(double a, long long b) { return pow(a, (double)b); }
+double pow_zz32_rr64(int a, double b) { return pow((double)a, b); }
+double pow_zz64_rr64(long long a, double b) { return pow((double)a, b); }
+int pow_zz32_zz64(int a, long long b) { return (int)pow_zz64_zz64(a, b); }
+long long pow_zz64_zz32(long long a, int b) { return pow_zz64_zz64(a, b); }
+
+void print_string(const char *s) { fputs(s, stdout); }
+void print_zz32(int v) { printf("%d", v); }
+void print_zz64(long long v) { printf("%lld", v); }
+void print_rr64(double v) { printf("%g", v); }
+void print_boolean(int v) { fputs(v ? "true" : "false", stdout); }
+void print_void(void) {}
+
+/*
+ * A failed `assert`. Fortress 1.0 throws; there are no exceptions here, so it
+ * halts the way an out of bounds subscript does -- a diagnostic on stderr and
+ * exit 1, never a silent continue.
+ */
+void fortress_assert_failed(const char *message) {
+    fflush(stdout);
+    fprintf(stderr, "fortress: assertion failed: %s\n", message);
+    exit(1);
+}
 
 char *to_string_zz32(int v) {
     int n = snprintf(NULL, 0, "%d", v);

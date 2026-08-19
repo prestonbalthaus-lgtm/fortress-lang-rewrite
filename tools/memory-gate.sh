@@ -96,7 +96,7 @@ builds() {
     # The negative control: the same object, linked against the allocator M1
     # shipped. Same program, same work, no collector.
     if "$fortressc" "$repo/fortressc/tests/gcsoak.fss" --emit-obj -o "$build/soak.o" 2>"$build/obj.err" &&
-        cc "$build/soak.o" "$repo/fortressc/runtime/shims.c" -DFORTRESS_NO_GC -o "$build/soak-malloc" 2>"$build/ctl.err"; then
+        cc "$build/soak.o" "$repo/fortressc/runtime/shims.c" -DFORTRESS_NO_GC -lm -o "$build/soak-malloc" 2>"$build/ctl.err"; then
         ok 'the leaking control links from the same object'
     else
         bad 'the leaking control links from the same object' "$(cat "$build/obj.err" "$build/ctl.err")"

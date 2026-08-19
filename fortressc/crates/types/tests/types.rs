@@ -1255,3 +1255,62 @@ fn a_functional_method_keeps_the_position_self_was_written_in() {
             .collect::<Vec<_>>()
     );
 }
+
+// ----------------------------- M3k: operators and builtins
+
+/// The operand is named against the OPERATOR. Reporting it as an `if` whose
+/// condition is wrong is what desugaring in the parser would have produced,
+/// and it is how files land in the wrong blocker bucket.
+#[test]
+fn a_non_boolean_and_operand_is_named_against_the_operator() {
+    match body_error("f(): Boolean = do\n  n: ZZ32 = 1\n  n AND true\nend") {
+        TypeError::LogicalOperandNotBoolean { op, found, .. } => {
+            assert_eq!(op, "AND");
+            assert_eq!(found, Type::ZZ32);
+        }
+        other => panic!("expected LogicalOperandNotBoolean, got {other:?}"),
+    }
+}
+
+/// Equality is defined on Boolean; ordering is not, and inventing one would be
+/// a silently wrong answer rather than a missing feature.
+#[test]
+fn ordering_on_boolean_is_refused_and_equality_is_not() {
+    match body_error("f(): Boolean = true < false") {
+        TypeError::BooleanNotOrdered { op, .. } => assert_eq!(op, "<"),
+        other => panic!("expected BooleanNotOrdered, got {other:?}"),
+    }
+    let b = body("f(): Boolean = true = false");
+    assert_eq!(b.ty, Type::Boolean);
+}
+
+/// `^` is the one operator whose operands may disagree: 1.0 declares it on
+/// every base-exponent pair, and the result is real if either side is.
+#[test]
+fn exponentiation_takes_a_mixed_pair_and_widens_the_result() {
+    let b = body("f(): RR64 = do\n  x: RR64 = 2.0\n  n: ZZ32 = 3\n  x^n\nend");
+    assert_eq!(b.ty, Type::RR64);
+    let i = body("f(): ZZ32 = do\n  n: ZZ32 = 3\n  n^n\nend");
+    assert_eq!(i.ty, Type::ZZ32);
+}
+
+/// An assert is an `if` over `=`, so it can only compare what `=` compares.
+#[test]
+fn assert_is_only_as_strong_as_equality_is() {
+    match body_error("f(): () = assert(\"a\", \"b\")") {
+        TypeError::NotComparable { found, .. } => assert_eq!(found, Type::String),
+        other => panic!("expected NotComparable, got {other:?}"),
+    }
+}
+
+/// AND becomes an `if`, which is where the branch comes from. Asserting the
+/// SHAPE here is what makes the codegen-unchanged claim checkable.
+#[test]
+fn and_becomes_an_if_so_that_codegen_needs_no_new_node() {
+    let b = body("f(a: Boolean, b: Boolean): Boolean = a AND b");
+    assert!(
+        matches!(b.kind, TypedExprKind::If { .. }),
+        "AND must lower to an If: {:?}",
+        b.kind
+    );
+}

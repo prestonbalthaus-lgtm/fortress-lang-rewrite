@@ -10,7 +10,7 @@ use std::path::Path;
 use fortress_types::{
     ArithOp, AssignTarget, CompareOp, DispatchFn, DispatchNode, Elem, Target, Type, TypedBlockItem,
     TypedComponent, TypedExpr, TypedExprKind, TypedFn, TypedObject, ARRAY_ALLOC, ARRAY_LENGTH,
-    ARRAY_SLOT, DISPATCH_FAILED, OBJECT_ALLOC,
+    ARRAY_SLOT, ASSERT_FAILED, DISPATCH_FAILED, OBJECT_ALLOC,
 };
 use inkwell::attributes::AttributeLoc;
 use inkwell::builder::Builder;
@@ -213,13 +213,19 @@ impl<'ctx> Lowering<'ctx> {
         let ptr = self.ptr();
         let void = self.context.void_type();
 
-        let printlns: [(&str, Option<BasicMetadataTypeEnum<'ctx>>); 6] = [
+        let printlns: [(&str, Option<BasicMetadataTypeEnum<'ctx>>); 12] = [
             ("println_string", Some(ptr.into())),
             ("println_zz32", Some(i32t.into())),
             ("println_zz64", Some(i64t.into())),
             ("println_rr64", Some(f64t.into())),
             ("println_boolean", Some(i32t.into())),
             ("println_void", None),
+            ("print_string", Some(ptr.into())),
+            ("print_zz32", Some(i32t.into())),
+            ("print_zz64", Some(i64t.into())),
+            ("print_rr64", Some(f64t.into())),
+            ("print_boolean", Some(i32t.into())),
+            ("print_void", None),
         ];
         for (name, arg) in printlns {
             let ty = match arg {
@@ -238,6 +244,33 @@ impl<'ctx> Lowering<'ctx> {
         for (name, arg) in to_strings {
             let ty = ptr.fn_type(&[arg], false);
             self.module.add_function(name, ty, Some(Linkage::External));
+        }
+
+        // `^`, one shim per base-exponent pair. All nine exist because 1.0
+        // declares the operator on all of them, not because a rule was chosen
+        // about which combinations are allowed.
+        let powers: [(
+            &str,
+            BasicTypeEnum<'ctx>,
+            BasicMetadataTypeEnum<'ctx>,
+            BasicMetadataTypeEnum<'ctx>,
+        ); 9] = [
+            ("pow_zz32_zz32", i32t.into(), i32t.into(), i32t.into()),
+            ("pow_zz32_zz64", i32t.into(), i32t.into(), i64t.into()),
+            ("pow_zz32_rr64", f64t.into(), i32t.into(), f64t.into()),
+            ("pow_zz64_zz32", i64t.into(), i64t.into(), i32t.into()),
+            ("pow_zz64_zz64", i64t.into(), i64t.into(), i64t.into()),
+            ("pow_zz64_rr64", f64t.into(), i64t.into(), f64t.into()),
+            ("pow_rr64_zz32", f64t.into(), f64t.into(), i32t.into()),
+            ("pow_rr64_zz64", f64t.into(), f64t.into(), i64t.into()),
+            ("pow_rr64_rr64", f64t.into(), f64t.into(), f64t.into()),
+        ];
+        for (name, ret, base, exponent) in powers {
+            self.module.add_function(
+                name,
+                ret.fn_type(&[base, exponent], false),
+                Some(Linkage::External),
+            );
         }
 
         let concat = ptr.fn_type(&[ptr.into(), ptr.into()], false);
@@ -275,6 +308,14 @@ impl<'ctx> Lowering<'ctx> {
         self.module.add_function(
             DISPATCH_FAILED,
             void.fn_type(&[ptr.into(), i32t.into(), i32t.into()], false),
+            Some(Linkage::External),
+        );
+
+        // Declared unconditionally, like the dispatch halt: a failed assert
+        // is a clean exit with a diagnostic, never a silent continue.
+        self.module.add_function(
+            ASSERT_FAILED,
+            void.fn_type(&[ptr.into()], false),
             Some(Linkage::External),
         );
 
@@ -958,6 +999,16 @@ impl<'ctx> Lowering<'ctx> {
                 };
                 Ok(Some(out))
             }
+            // One `xor` against the i1 constant, which is what `build_not`
+            // emits. Nothing branches: `NOT` has no operand it can skip.
+            Target::Not => {
+                let value = self.one(args)?;
+                let out = self
+                    .builder
+                    .build_not(value.into_int_value(), "not")
+                    .map_err(CodegenError::from_builder)?;
+                Ok(Some(out.into()))
+            }
             Target::Widen { .. } => {
                 let value = self.one(args)?;
                 let out = self
@@ -981,6 +1032,30 @@ impl<'ctx> Lowering<'ctx> {
                 }
                 let value = self.one(args)?;
                 let value = self.widen_boolean_for_c(*ty, value)?;
+                self.call_runtime(&target.symbol(), &[value], false)
+            }
+            // Every base-exponent pair is a shim, so this is one call and no
+            // instruction selection at all.
+            Target::Pow { .. } => {
+                let [l, r] = self.two(args)?;
+                let symbol = target.symbol();
+                self.call_runtime(&symbol, &[l, r], true)?
+                    .ok_or_else(|| CodegenError::internal(format!("`{symbol}` returned no value")))
+                    .map(Some)
+            }
+            Target::Print { ty } => {
+                if *ty == Type::Void {
+                    return self.call_runtime("print_void", &[], false);
+                }
+                let value = self.one(args)?;
+                let value = self.widen_boolean_for_c(*ty, value)?;
+                self.call_runtime(&target.symbol(), &[value], false)
+            }
+            // The halt does not return, but the block it sits in is still
+            // terminated normally: an `if` needs both arms to reach its merge,
+            // and an unreachable branch there costs nothing.
+            Target::AssertFailed => {
+                let value = self.one(args)?;
                 self.call_runtime(&target.symbol(), &[value], false)
             }
             Target::Mpi(op) => self.call_runtime(&target.symbol(), &[], op.returns() != Type::Void),

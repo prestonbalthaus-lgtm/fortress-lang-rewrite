@@ -27,12 +27,13 @@ export LLVM_SYS_221_PREFIX=${LLVM_SYS_221_PREFIX:-$HOME/.local/opt/llvm22-root/u
 export CPATH=${CPATH:-$HOME/.local/opt/gc-root/usr/include}
 export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 
-# Measured 2026-08-19 at the end of M3j, not taken from the design document.
-# M3f left this at 187, M3h took it to 205, M3i to 222. M3j takes it to 242:
-# +2 from substituting a ground method whole, +5 net from functional methods,
-# +13 net from generic dotted methods. Two files stop compiling, and both are
-# the legacy suite's own negative tests for `comprises` -- see the M3j note.
-COMPILE_FLOOR=242
+# Measured 2026-08-19 at the end of M3k, not taken from the design document.
+# M3f left this at 187, M3h took it to 205, M3i to 222, M3j to 242. M3k takes
+# it to 262 in four measured steps: +9 for AND/OR/NOT and Boolean equality,
+# +5 for print/ignore/assert, +5 for `^`, and +1 more when `^` stopped
+# requiring its operands to agree. Zero regressions across the whole
+# milestone -- see the M3k note.
+COMPILE_FLOOR=262
 
 passed=0
 failed=0

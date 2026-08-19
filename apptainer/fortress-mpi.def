@@ -24,6 +24,10 @@ From: rockylinux/rockylinux:9
     # runtime/shims.c includes <gc.h> and every Fortress binary links -lgc, so
     # the collector is part of the link toolchain, not an optional extra.
     test -f /usr/include/gc.h
+    # M3k gave `^` a float shim, so the runtime calls pow() and every link
+    # takes -lm. glibc folds libm into libc, but the header has to be here for
+    # the same reason gc.h does: the link is not optional.
+    test -f /usr/include/math.h
 
 %environment
     export PATH=/usr/lib64/openmpi/bin:$PATH

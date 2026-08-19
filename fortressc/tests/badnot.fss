@@ -1,0 +1,13 @@
+component badnot
+export Executable
+
+(* NOT binds tighter than `<`, so this is `(NOT x) < y` and the refusal names
+   NOT and its operand rather than the comparison. The precedence is 1.0's --
+   prefix operators are above every infix operator -- and this fixture is what
+   pins it. *)
+run(): () = do
+   x: ZZ32 = 1
+   y: ZZ32 = 2
+   println(NOT x < y)
+end
+end

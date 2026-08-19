@@ -158,7 +158,7 @@ strings() {
 tracing() {
     printf '== the collector sees the elements ==\n'
     if ! cc -Wall -Wextra -std=c11 "$repo/fortressc/runtime/tests/array_trace.c" \
-        "$repo/fortressc/runtime/shims.c" -lgc -o "$build/array-trace" 2>"$build/trace.err"; then
+        "$repo/fortressc/runtime/shims.c" -lgc -lm -o "$build/array-trace" 2>"$build/trace.err"; then
         bad 'the tracing harness builds' "$(cat "$build/trace.err")"
         return
     fi

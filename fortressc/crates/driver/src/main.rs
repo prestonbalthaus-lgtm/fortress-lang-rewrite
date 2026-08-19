@@ -182,11 +182,14 @@ fn link(options: &Options, object: &Path, uses_mpi: bool) -> Result<(), Failure>
     for source in &sources {
         command.arg(&source.path);
     }
-    // The collector, last: a library has to follow the objects that need it.
+    // The libraries last, because a library has to follow the objects that
+    // need it. `-lm` is for the one shim that calls `pow`; glibc folds libm
+    // into libc, but the flag is what makes the link work anywhere else.
     let result = command
         .arg("-o")
         .arg(&options.output)
         .arg("-lgc")
+        .arg("-lm")
         .output()
         .map_err(|e| Failure::Internal(format!("could not run `{}`: {e}", options.cc)))?;
 

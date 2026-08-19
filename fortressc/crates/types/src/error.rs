@@ -33,6 +33,20 @@ pub enum TypeError {
     },
     /// Numeric juxtaposition or arithmetic across two different numeric types.
     /// Separate from `Mismatch` because neither side is "the required" one.
+    /// An operand of `AND`, `OR` or `NOT` that is not Boolean. Named after the
+    /// operator rather than reported as an `if` whose condition is wrong, which
+    /// is what desugaring in the parser would have produced.
+    LogicalOperandNotBoolean {
+        span: Span,
+        op: &'static str,
+        found: Type,
+    },
+    /// `<`, `>`, `<=`, `>=` on Boolean. Equality is defined on Boolean;
+    /// ordering is not, and inventing one would be a silently wrong answer.
+    BooleanNotOrdered {
+        span: Span,
+        op: &'static str,
+    },
     MixedNumericOperands {
         span: Span,
         left: Type,
@@ -224,6 +238,12 @@ pub enum TypeError {
         name: String,
         cells: usize,
     },
+    /// `assert(a, b)` on values `=` is not defined for. An assert is exactly
+    /// as strong as equality is, and no stronger.
+    NotComparable {
+        span: Span,
+        found: Type,
+    },
     NotPrintable {
         span: Span,
         found: Type,
@@ -285,6 +305,8 @@ impl TypeError {
             | Self::UnresolvableJuxtaposition { span, .. }
             | Self::JuxtapositionNotBinary { span, .. }
             | Self::MixedNumericOperands { span, .. }
+            | Self::LogicalOperandNotBoolean { span, .. }
+            | Self::BooleanNotOrdered { span, .. }
             | Self::UnknownName { span, .. }
             | Self::UnknownType { span, .. }
             | Self::TypeNotImplemented { span, .. }
@@ -318,6 +340,7 @@ impl TypeError {
             | Self::ReturnTypeNotCovariant { span, .. }
             | Self::DispatchTableTooLarge { span, .. }
             | Self::NotPrintable { span, .. }
+            | Self::NotComparable { span, .. }
             | Self::AccessorUnsupported { span, .. }
             | Self::GenericFunctionalMethodUnsupported { span, .. }
             | Self::ValueBindingUnsupported { span, .. }
@@ -358,6 +381,15 @@ impl core::fmt::Display for TypeError {
                 f,
                 "a juxtaposition of {found} elements led by a function is not implemented; \
                  parenthesise the application"
+            ),
+            Self::LogicalOperandNotBoolean { op, found, .. } => write!(
+                f,
+                "`{op}` takes Boolean operands; this one is {}",
+                found.name()
+            ),
+            Self::BooleanNotOrdered { op, .. } => write!(
+                f,
+                "`{op}` is not defined on Boolean; equality is, ordering is not"
             ),
             Self::MixedNumericOperands { left, right, .. } => write!(
                 f,
@@ -520,6 +552,12 @@ impl core::fmt::Display for TypeError {
                 f,
                 "the dispatch table for `{name}` would have {cells} cells; \
                  narrow the parameter types"
+            ),
+            Self::NotComparable { found, .. } => write!(
+                f,
+                "`assert` compares its arguments with `=`, which is not \
+                 defined on {}",
+                found.name()
             ),
             Self::NotPrintable { found, .. } => {
                 write!(f, "`println` does not accept {}", found.name())

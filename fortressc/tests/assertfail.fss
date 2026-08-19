@@ -1,0 +1,13 @@
+component assertfail
+export Executable
+
+(* A failed assert stops the program. 1.0 throws; there are no exceptions here,
+   so it halts the way an out of bounds subscript does -- a diagnostic on
+   stderr and exit 1. The `before` is what shows the halt happened at the
+   assert and not earlier. *)
+run(): () = do
+   println("before")
+   assert(2 + 2, 5, "arithmetic broke")
+   println("after")
+end
+end

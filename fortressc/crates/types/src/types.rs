@@ -264,6 +264,10 @@ impl MpiOp {
 /// The array runtime. Three entry points: one allocates, one reports the
 /// length, and one turns an index into the address of a slot after checking it.
 /// Everything else about an array is a typed load or store in generated code.
+/// The halt a failed `assert` calls. Named here so codegen and the checker
+/// cannot disagree about it.
+pub const ASSERT_FAILED: &str = "fortress_assert_failed";
+
 pub const ARRAY_ALLOC: &str = "fortress_array_alloc";
 pub const ARRAY_LENGTH: &str = "fortress_array_length";
 pub const ARRAY_SLOT: &str = "fortress_array_slot";
@@ -282,6 +286,19 @@ pub enum Target {
     Negate {
         ty: Type,
     },
+    /// `NOT`. One `xor` on an `i1`, and no branch: negation does not short
+    /// circuit, so it needs none.
+    Not,
+    /// `^`, and the one operator whose operands may differ in type: 1.0
+    /// declares it on every base-exponent pair, and
+    /// `ProjectFortress/tests/expTest.fss` exercises all four of them. It is a
+    /// C shim for every pair -- integers have no power instruction, and a loop
+    /// emitted inline would be a second place the negative-exponent rule
+    /// could be got wrong.
+    Pow {
+        base: Type,
+        exponent: Type,
+    },
     /// `widen`, the only numeric conversion, and it is never inserted implicitly.
     Widen {
         from: Type,
@@ -296,6 +313,13 @@ pub enum Target {
     Println {
         ty: Type,
     },
+    /// `print`: `println` without the newline.
+    Print {
+        ty: Type,
+    },
+    /// The halt a failed `assert` reaches. It takes the message and does not
+    /// return, so nothing downstream needs a value from it.
+    AssertFailed,
     /// A function declared in this component. `name` is already the mangled
     /// symbol: an overload set of one keeps its bare name, so nothing about
     /// pre-M3c generated code changes.
@@ -329,10 +353,16 @@ impl Target {
             Self::Arith { op, ty } => format!("{}_{}_{}", op.symbol(), ty.symbol(), ty.symbol()),
             Self::Compare { op, ty } => format!("{}_{}_{}", op.symbol(), ty.symbol(), ty.symbol()),
             Self::Negate { ty } => format!("neg_{}", ty.symbol()),
+            Self::Not => "not_boolean".to_owned(),
+            Self::Pow { base, exponent } => {
+                format!("pow_{}_{}", base.symbol(), exponent.symbol())
+            }
             Self::Widen { from, to } => format!("widen_{}_{}", from.symbol(), to.symbol()),
             Self::ToString { from } => format!("to_string_{}", from.symbol()),
             Self::Concat => "concat_string_string".to_owned(),
             Self::Println { ty } => format!("println_{}", ty.symbol()),
+            Self::Print { ty } => format!("print_{}", ty.symbol()),
+            Self::AssertFailed => ASSERT_FAILED.to_owned(),
             Self::UserFn { name } => name.clone(),
             Self::Dispatch { symbol } | Self::ObjectNew { symbol } => symbol.clone(),
             Self::Mpi(op) => op.symbol().to_owned(),

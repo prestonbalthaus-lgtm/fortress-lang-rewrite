@@ -22,7 +22,8 @@ pub use error::TypeError;
 pub use types::{
     intern, ArithOp, AssignTarget, CompareOp, DispatchFn, DispatchNode, Elem, MpiOp, Target, Type,
     TypedBlockItem, TypedComponent, TypedExpr, TypedExprKind, TypedField, TypedFn, TypedObject,
-    TypedParam, ARRAY_ALLOC, ARRAY_LENGTH, ARRAY_SLOT, DISPATCH_FAILED, FIRST_TAG, OBJECT_ALLOC,
+    TypedParam, ARRAY_ALLOC, ARRAY_LENGTH, ARRAY_SLOT, ASSERT_FAILED, DISPATCH_FAILED, FIRST_TAG,
+    OBJECT_ALLOC,
 };
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -268,6 +269,25 @@ fn substitute_self(t: &TypeRef, owner: &str) -> TypeRef {
 /// program is blamed for a guess expansion made.
 fn live(signature: &Signature, arity: usize) -> bool {
     !signature.pruned && signature.params.len() == arity
+}
+
+/// The operator as the source wrote it, for diagnostics.
+const fn op_name(op: BinOp) -> &'static str {
+    match op {
+        BinOp::Add => "+",
+        BinOp::Sub => "-",
+        BinOp::Mul => "*",
+        BinOp::Div => "/",
+        BinOp::Lt => "<",
+        BinOp::Gt => ">",
+        BinOp::Le => "<=",
+        BinOp::Ge => ">=",
+        BinOp::Eq => "=",
+        BinOp::Ne => "=/=",
+        BinOp::Pow => "^",
+        BinOp::And => "AND",
+        BinOp::Or => "OR",
+    }
 }
 
 fn cartesian(domain: &[Vec<Type>]) -> Vec<Vec<Type>> {
@@ -1686,6 +1706,9 @@ impl Checker {
         span: Span,
         expected: Option<Type>,
     ) -> Checked<TypedExpr> {
+        if op == UnOp::Not {
+            return self.negation(operand, span, expected);
+        }
         let inner = self.expr(operand, expected)?;
         if !inner.ty.is_numeric() {
             return Err(TypeError::Mismatch {
@@ -1710,7 +1733,168 @@ impl Checker {
                 ty,
                 span,
             }),
+            // Routed above, before the operand is checked against a numeric
+            // type it was never going to have.
+            UnOp::Not => Err(TypeError::LogicalOperandNotBoolean {
+                span,
+                op: "NOT",
+                found: ty,
+            }),
         }
+    }
+
+    /// `NOT b`. One `xor` and no branch: `NOT` does not short circuit, and
+    /// three basic blocks for one instruction is worse code at `-O0`, which is
+    /// where this project checks its claims.
+    fn negation(
+        &mut self,
+        operand: &Expr,
+        span: Span,
+        expected: Option<Type>,
+    ) -> Checked<TypedExpr> {
+        // Only `Mismatch` is rewritten. `LiteralNotApplicable` carries the
+        // type the slot REQUIRED, not the one the operand had, so reusing its
+        // payload here reported "this one is Boolean" about the literal `1`.
+        // Its own message already names the literal correctly.
+        let inner = self
+            .expr(operand, Some(Type::Boolean))
+            .map_err(|e| match e {
+                TypeError::Mismatch { span, found, .. } => TypeError::LogicalOperandNotBoolean {
+                    span,
+                    op: "NOT",
+                    found,
+                },
+                other => other,
+            })?;
+        if inner.ty != Type::Boolean {
+            return Err(TypeError::LogicalOperandNotBoolean {
+                span,
+                op: "NOT",
+                found: inner.ty,
+            });
+        }
+        self.require(Type::Boolean, expected, span)?;
+        Ok(TypedExpr {
+            kind: TypedExprKind::Apply {
+                target: Target::Not,
+                args: vec![inner],
+            },
+            ty: Type::Boolean,
+            span,
+        })
+    }
+
+    /// `a AND b` and `a OR b`, which SHORT CIRCUIT.
+    ///
+    /// The construct that already emits a conditional branch, two blocks and a
+    /// phi is `If`, so that is what these become -- after both operands are
+    /// checked as Boolean, so the diagnostic names the operator instead of
+    /// talking about an `if` the user did not write. Desugaring in the parser
+    /// would have been cheaper and would have reported the wrong mechanism.
+    fn logical(
+        &mut self,
+        op: BinOp,
+        lhs: &Expr,
+        rhs: &Expr,
+        span: Span,
+        expected: Option<Type>,
+    ) -> Checked<TypedExpr> {
+        let name = if op == BinOp::And { "AND" } else { "OR" };
+        let operand = |checker: &mut Self, e: &Expr| -> Checked<TypedExpr> {
+            let typed = checker
+                .expr(e, Some(Type::Boolean))
+                .map_err(|err| match err {
+                    TypeError::Mismatch { span, found, .. } => {
+                        TypeError::LogicalOperandNotBoolean {
+                            span,
+                            op: name,
+                            found,
+                        }
+                    }
+                    other => other,
+                })?;
+            if typed.ty == Type::Boolean {
+                return Ok(typed);
+            }
+            Err(TypeError::LogicalOperandNotBoolean {
+                span: typed.span,
+                op: name,
+                found: typed.ty,
+            })
+        };
+        let left = operand(self, lhs)?;
+        let right = operand(self, rhs)?;
+        let constant = |value: bool| TypedExpr {
+            kind: TypedExprKind::BoolConst(value),
+            ty: Type::Boolean,
+            span,
+        };
+        let (then_branch, else_branch) = if op == BinOp::And {
+            (right, constant(false))
+        } else {
+            (constant(true), right)
+        };
+        self.require(Type::Boolean, expected, span)?;
+        Ok(TypedExpr {
+            kind: TypedExprKind::If {
+                cond: Box::new(left),
+                then_branch: Box::new(then_branch),
+                else_branch: Some(Box::new(else_branch)),
+            },
+            ty: Type::Boolean,
+            span,
+        })
+    }
+
+    /// `a^b`, and the one place two numeric operands are allowed to disagree.
+    ///
+    /// 1.0 declares `^` on every base-exponent pair -- an integer raised to a
+    /// real is a real, a real raised to an integer is a real -- and
+    /// `ProjectFortress/tests/expTest.fss` is the corpus asserting all four.
+    /// Requiring agreement here would have been consistent with `+` and wrong
+    /// about the operator this milestone exists to add.
+    ///
+    /// The exponent takes no hint from context: in `x: RR64 = 2^10` the base
+    /// is pinned by the binding and the exponent is an ordinary ZZ32 literal.
+    fn power(
+        &mut self,
+        lhs: &Expr,
+        rhs: &Expr,
+        span: Span,
+        expected: Option<Type>,
+    ) -> Checked<TypedExpr> {
+        let hint = expected.filter(|t| t.is_numeric());
+        let base = self.expr(lhs, hint)?;
+        let exponent = self.expr(rhs, None)?;
+        for operand in [&base, &exponent] {
+            if !operand.ty.is_numeric() {
+                return Err(TypeError::Mismatch {
+                    span: operand.span,
+                    found: operand.ty,
+                    required: Type::ZZ64,
+                });
+            }
+        }
+        // A real anywhere makes the result real; two integers keep the base's
+        // width, because there is no implicit widening in this language.
+        let ty = if base.ty == Type::RR64 || exponent.ty == Type::RR64 {
+            Type::RR64
+        } else {
+            base.ty
+        };
+        let target = Target::Pow {
+            base: base.ty,
+            exponent: exponent.ty,
+        };
+        self.require(ty, expected, span)?;
+        Ok(TypedExpr {
+            kind: TypedExprKind::Apply {
+                target,
+                args: vec![base, exponent],
+            },
+            ty,
+            span,
+        })
     }
 
     fn infix(
@@ -1721,6 +1905,12 @@ impl Checker {
         span: Span,
         expected: Option<Type>,
     ) -> Checked<TypedExpr> {
+        if matches!(op, BinOp::And | BinOp::Or) {
+            return self.logical(op, lhs, rhs, span, expected);
+        }
+        if op == BinOp::Pow {
+            return self.power(lhs, rhs, span, expected);
+        }
         let comparison = matches!(
             op,
             BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge | BinOp::Eq | BinOp::Ne
@@ -1748,7 +1938,17 @@ impl Checker {
                 right: right.ty,
             });
         }
-        if !left.ty.is_numeric() {
+        // Equality is defined on Boolean and is the same `icmp` the numeric
+        // path emits. Ordering is not defined on it, and inventing one would
+        // be a silently wrong answer rather than a missing feature.
+        if left.ty == Type::Boolean {
+            if !matches!(op, BinOp::Eq | BinOp::Ne) {
+                return Err(TypeError::BooleanNotOrdered {
+                    span,
+                    op: op_name(op),
+                });
+            }
+        } else if !left.ty.is_numeric() {
             return Err(TypeError::Mismatch {
                 span,
                 found: left.ty,
@@ -1785,6 +1985,15 @@ impl Checker {
                 },
                 left.ty,
             ),
+            // Routed above: `^` is the one operator whose operands may
+            // differ in type, so it never reaches the agreement check.
+            BinOp::Pow => {
+                return Err(TypeError::MixedNumericOperands {
+                    span,
+                    left: left.ty,
+                    right: right.ty,
+                })
+            }
             BinOp::Lt => (
                 Target::Compare {
                     op: CompareOp::Lt,
@@ -1827,6 +2036,14 @@ impl Checker {
                 },
                 Type::Boolean,
             ),
+            // Routed above, before either operand is checked.
+            BinOp::And | BinOp::Or => {
+                return Err(TypeError::LogicalOperandNotBoolean {
+                    span,
+                    op: op_name(op),
+                    found: left.ty,
+                })
+            }
         };
         self.require(ty, expected, span)?;
         Ok(TypedExpr {
@@ -2049,7 +2266,10 @@ impl Checker {
         // before M3c; a user function named `println` is unreachable.
         match name.as_str() {
             "widen" => self.widen(args, span, expected),
-            "println" => self.println(args, span, expected),
+            "println" => self.println(args, span, expected, true),
+            "print" => self.println(args, span, expected, false),
+            "ignore" => self.ignore(args, span, expected),
+            "assert" => self.assert(args, span, expected),
             "array" => self.array_new(args, span, expected),
             "length" => self.array_length(args, span, expected),
             _ if self.registry.is_object(name) => {
@@ -2575,11 +2795,20 @@ impl Checker {
         })
     }
 
-    fn println(&mut self, args: &[Expr], span: Span, expected: Option<Type>) -> Checked<TypedExpr> {
+    /// `println` and `print`, which differ by one character in the shim they
+    /// reach and by nothing else.
+    fn println(
+        &mut self,
+        args: &[Expr],
+        span: Span,
+        expected: Option<Type>,
+        newline: bool,
+    ) -> Checked<TypedExpr> {
+        let name = if newline { "println" } else { "print" };
         let [arg] = args else {
             return Err(TypeError::ArityMismatch {
                 span,
-                name: "println".to_owned(),
+                name: name.to_owned(),
                 expected: 1,
                 found: args.len(),
             });
@@ -2594,10 +2823,173 @@ impl Checker {
         self.require(Type::Void, expected, span)?;
         Ok(TypedExpr {
             kind: TypedExprKind::Apply {
-                target: Target::Println { ty },
+                target: if newline {
+                    Target::Println { ty }
+                } else {
+                    Target::Print { ty }
+                },
                 args: vec![inner],
             },
             ty: Type::Void,
+            span,
+        })
+    }
+
+    /// `ignore(e)`: evaluate `e` for its effects and discard its value.
+    ///
+    /// A block whose only item is the expression and whose tail is absent is
+    /// exactly that, so this needs no target and no shim -- the discard is what
+    /// a block statement already does.
+    fn ignore(&mut self, args: &[Expr], span: Span, expected: Option<Type>) -> Checked<TypedExpr> {
+        let [arg] = args else {
+            return Err(TypeError::ArityMismatch {
+                span,
+                name: "ignore".to_owned(),
+                expected: 1,
+                found: args.len(),
+            });
+        };
+        let inner = self.expr(arg, None)?;
+        self.require(Type::Void, expected, span)?;
+        Ok(TypedExpr {
+            kind: TypedExprKind::Block {
+                items: vec![TypedBlockItem::Expr(inner)],
+                tail: None,
+            },
+            ty: Type::Void,
+            span,
+        })
+    }
+
+    /// `assert`, in the four shapes the corpus writes:
+    ///
+    /// ```text
+    /// assert(flag)                 assert(flag, message)
+    /// assert(actual, expected)     assert(actual, expected, message)
+    /// ```
+    ///
+    /// The two two-argument forms are told apart by the SECOND argument's
+    /// type. A message is a String, so a Boolean first argument followed by a
+    /// String is the flag-and-message form and anything else is the equality
+    /// form. `assert(s1, s2)` on two Strings is the equality form, and String
+    /// equality is not implemented, so it is refused by name rather than
+    /// quietly read as a message.
+    ///
+    /// It becomes an `if`, a call to the halt shim, and nothing else. The
+    /// comparison is the `Target::Compare` the language already has, so an
+    /// assert is exactly as strong as `=` is -- and no stronger.
+    fn assert(&mut self, args: &[Expr], span: Span, expected: Option<Type>) -> Checked<TypedExpr> {
+        let (condition, message) = match args {
+            [flag] => (self.assert_flag(flag, span)?, None),
+            [flag, second] => {
+                let first = self.expr(flag, None)?;
+                if first.ty == Type::Boolean {
+                    // Told apart by the second argument's TYPE, not by whether
+                    // it is a string LITERAL. `tst(s: String, a: Boolean) =
+                    // assert(a, s)` is the legacy library's own idiom --
+                    // `tests/intPrim.fss:16` -- and asking for a literal sent
+                    // it into the equality form, where the message was
+                    // reported as a Boolean that was not one.
+                    //
+                    // It takes no hint, because there is nothing to hint at
+                    // yet: which form this is has not been decided.
+                    let right = self.expr(second, None)?;
+                    if right.ty == Type::String {
+                        (first, Some(right))
+                    } else {
+                        (self.assert_equal(first, right, span)?, None)
+                    }
+                } else {
+                    // Not a flag, so this is the equality form and the second
+                    // operand takes the first's type -- which is what pins a
+                    // bare literal in `assert(x, 17)`.
+                    let right = self.expr(second, Some(first.ty))?;
+                    (self.assert_equal(first, right, span)?, None)
+                }
+            }
+            [actual, wanted, message] => {
+                let left = self.expr(actual, None)?;
+                let right = self.expr(wanted, Some(left.ty))?;
+                let message = self.expr(message, Some(Type::String))?;
+                (self.assert_equal(left, right, span)?, Some(message))
+            }
+            _ => {
+                return Err(TypeError::ArityMismatch {
+                    span,
+                    name: "assert".to_owned(),
+                    expected: 3,
+                    found: args.len(),
+                })
+            }
+        };
+        let message = message.unwrap_or(TypedExpr {
+            kind: TypedExprKind::StrConst("assertion failed".to_owned()),
+            ty: Type::String,
+            span,
+        });
+        self.require(Type::Void, expected, span)?;
+        Ok(TypedExpr {
+            kind: TypedExprKind::If {
+                cond: Box::new(condition),
+                then_branch: Box::new(TypedExpr {
+                    kind: TypedExprKind::Unit,
+                    ty: Type::Void,
+                    span,
+                }),
+                else_branch: Some(Box::new(TypedExpr {
+                    kind: TypedExprKind::Apply {
+                        target: Target::AssertFailed,
+                        args: vec![message],
+                    },
+                    ty: Type::Void,
+                    span,
+                })),
+            },
+            ty: Type::Void,
+            span,
+        })
+    }
+
+    fn assert_flag(&mut self, flag: &Expr, span: Span) -> Checked<TypedExpr> {
+        let typed = self.expr(flag, Some(Type::Boolean))?;
+        if typed.ty != Type::Boolean {
+            return Err(TypeError::LogicalOperandNotBoolean {
+                span,
+                op: "assert",
+                found: typed.ty,
+            });
+        }
+        Ok(typed)
+    }
+
+    fn assert_equal(
+        &mut self,
+        left: TypedExpr,
+        right: TypedExpr,
+        span: Span,
+    ) -> Checked<TypedExpr> {
+        if left.ty != right.ty {
+            return Err(TypeError::MixedNumericOperands {
+                span,
+                left: left.ty,
+                right: right.ty,
+            });
+        }
+        if !left.ty.is_numeric() && left.ty != Type::Boolean {
+            return Err(TypeError::NotComparable {
+                span,
+                found: left.ty,
+            });
+        }
+        Ok(TypedExpr {
+            kind: TypedExprKind::Apply {
+                target: Target::Compare {
+                    op: CompareOp::Eq,
+                    ty: left.ty,
+                },
+                args: vec![left, right],
+            },
+            ty: Type::Boolean,
             span,
         })
     }

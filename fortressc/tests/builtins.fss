@@ -1,0 +1,32 @@
+component builtins
+export Executable
+
+(* `print` is `println` without the newline, `ignore` evaluates and discards,
+   and `assert` is an `if` and a halt -- so it is exactly as strong as `=` is
+   and no stronger. `side` printing is what shows `ignore` evaluated it. *)
+side(): ZZ32 = do
+   println("SIDE")
+   7
+end
+
+(* The legacy library's own idiom -- tests/intPrim.fss:16 writes exactly this.
+   The message reaches `assert` as a String VARIABLE, so telling the two
+   two-argument forms apart by whether the second is a string LITERAL sent it
+   into the equality form and reported the message as a Boolean it was not. *)
+flagged(a: Boolean, s: String): () = assert(a, s)
+
+run(): () = do
+   print("a")
+   print("b")
+   print(1)
+   print(true)
+   println("")
+   ignore(side())
+   assert(true)
+   assert(1 < 2, "one is less than two")
+   assert(3, 3)
+   assert(2 + 2, 4, "arithmetic still works")
+   flagged(1 < 2, "the message is a variable, not a literal")
+   println("done")
+end
+end
