@@ -22,6 +22,17 @@ use fortress_lexer::{Kind, Token};
 
 type Parsed<T> = Result<T, ParseError>;
 
+/// A parenthesised type is the type itself, but its span covers the
+/// parentheses, so a diagnostic points at what was written.
+fn widen(t: TypeRef, span: Span) -> TypeRef {
+    match t {
+        TypeRef::Named { name, args, .. } => TypeRef::Named { name, args, span },
+        TypeRef::Unit { .. } => TypeRef::Unit { span },
+        TypeRef::Tuple { elems, .. } => TypeRef::Tuple { elems, span },
+        TypeRef::Arrow { from, to, .. } => TypeRef::Arrow { from, to, span },
+    }
+}
+
 pub fn parse(tokens: &[Token<'_>]) -> Parsed<Component> {
     Parser { tokens, pos: 0 }.component()
 }
@@ -566,10 +577,16 @@ impl<'t, 'a> Parser<'t, 'a> {
         if self.at(&Kind::LParen) {
             let start = self.expect(&Kind::LParen, "`(`")?.span.start;
             self.skip_newlines();
+            if self.at(&Kind::RParen) {
+                let end = self.expect(&Kind::RParen, "`)`")?.span.end;
+                return Ok(TypeRef::Unit {
+                    span: Span::new(start, end),
+                });
+            }
+            let inner = self.type_ref()?;
+            self.skip_newlines();
             let end = self.expect(&Kind::RParen, "`)`")?.span.end;
-            return Ok(TypeRef::Unit {
-                span: Span::new(start, end),
-            });
+            return Ok(widen(inner, Span::new(start, end)));
         }
         let (name, span) = self.identifier("a type name")?;
         if !self.at(&Kind::LGeneric) {

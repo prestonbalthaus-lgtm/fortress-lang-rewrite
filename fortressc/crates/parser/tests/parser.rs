@@ -512,3 +512,11 @@ fn empty_parentheses_are_the_unit_type() {
         other => panic!("expected the unit type, got {other:?}"),
     }
 }
+
+#[test]
+fn a_parenthesised_type_is_the_type_itself() {
+    match return_type("f(): (ZZ32) = 1") {
+        TypeRef::Named { name, .. } => assert_eq!(name, "ZZ32"),
+        other => panic!("expected the inner named type, got {other:?}"),
+    }
+}
