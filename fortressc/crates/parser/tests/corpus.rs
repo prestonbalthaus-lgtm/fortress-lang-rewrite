@@ -19,7 +19,14 @@ fn repo_root() -> PathBuf {
         .unwrap_or_default()
 }
 
-fn collect_sources(dir: &Path, out: &mut Vec<PathBuf>) {
+/// `examples/` at the repository ROOT is hand-written demo code rather than
+/// corpus. It is skipped by path and not by name: `SpecData/examples` IS
+/// corpus, and skipping the name took 137 legacy files out of the metric.
+fn is_demo_directory(root: &Path, path: &Path) -> bool {
+    path == root.join("examples")
+}
+
+fn collect_sources_from(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
@@ -34,7 +41,10 @@ fn collect_sources(dir: &Path, out: &mut Vec<PathBuf>) {
             {
                 continue;
             }
-            collect_sources(&path, out);
+            if is_demo_directory(root, &path) {
+                continue;
+            }
+            collect_sources_from(root, &path, out);
         } else if path.extension().is_some_and(|e| e == "fss" || e == "fsi") {
             out.push(path);
         }
@@ -44,7 +54,8 @@ fn collect_sources(dir: &Path, out: &mut Vec<PathBuf>) {
 #[test]
 fn parses_what_it_can_of_the_corpus_without_panicking() {
     let mut files = Vec::new();
-    collect_sources(&repo_root(), &mut files);
+    let root = repo_root();
+    collect_sources_from(&root, &root, &mut files);
     files.sort();
     assert!(
         files.len() > 1800,
@@ -125,8 +136,12 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
     // M3k's `^` took it 614 -> 625, and it is the only part of that milestone
     // that moves this number: AND, OR and NOT already parsed as identifiers
     // and died in the checker, where `^` died here.
+    // M4's `for` production took it 625 -> 637. `for` was one of the 66
+    // reserved words the lexer keeps out of the identifier namespace, and it is
+    // intercepted in the parser rather than given a token, so no file in the
+    // corpus lexes differently than it did.
     assert!(
-        parsed >= 625,
-        "parser corpus regressed: {parsed} files parse, floor is 625"
+        parsed >= 637,
+        "parser corpus regressed: {parsed} files parse, floor is 637"
     );
 }

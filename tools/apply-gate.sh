@@ -33,7 +33,10 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # +5 for print/ignore/assert, +5 for `^`, and +1 more when `^` stopped
 # requiring its operands to agree. Zero regressions across the whole
 # milestone -- see the M3k note.
-COMPILE_FLOOR=262
+# M4's parallel `for` takes it to 266: four legacy files whose first blocker was
+# the reserved word `for`. The milestone's evidence is tools/parallel-gate.sh,
+# not this number.
+COMPILE_FLOOR=266
 
 passed=0
 failed=0
@@ -175,6 +178,11 @@ for d, ds, fs in os.walk('.'):
     # `.claude` holds agent worktrees, which are FULL REPO COPIES. Counting
     # one would read the corpus at several times its real size.
     ds[:] = [x for x in ds if x not in ('.git', 'target', 'fortressc', '.claude')]
+    # `examples/` at the ROOT is hand-written demo code, not corpus. Pruned by
+    # path and not by name, because SpecData/examples IS corpus -- pruning the
+    # name took 137 legacy files out of the metric.
+    if d == '.':
+        ds[:] = [x for x in ds if x != 'examples']
     files += [os.path.join(d, f) for f in fs if f.endswith(('.fss', '.fsi'))]
 files.sort()
 c = collections.Counter()
