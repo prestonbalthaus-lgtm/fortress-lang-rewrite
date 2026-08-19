@@ -761,3 +761,38 @@ fn a_void_function_compiles_links_and_runs() {
         "hello from a void function\n"
     );
 }
+
+/// M3f: an identifier with no local binding, juxtaposed with one operand, is a
+/// function application. This is the whole reason `println "Hello"` is 48 files
+/// of the missing-name histogram.
+#[test]
+fn juxtaposition_of_a_function_is_application() {
+    let binary = compile_fixture("juxtapply.fss", "juxtapply");
+    let out = run(&binary);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "Hello\n42\n");
+    assert_eq!(out.status.code(), Some(0));
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// The guard. A parameter that shadows a function name is a value, so `f y` is
+/// multiplication and not a call. Dropping the `lookup` test silently changes
+/// what this program computes, which is why it is a test and not a comment.
+#[test]
+fn a_shadowed_function_name_is_not_application() {
+    let binary = compile_fixture("juxtshadow.fss", "juxtshadow");
+    let out = run(&binary);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "12\n");
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// An integer literal that takes RR64 from context is a float constant. Typed
+/// RR64 but lowered as an i64 it reached `arith`, which requires a float value,
+/// and the compiler panicked on `halve(x: RR64): RR64 = x/2` -- ordinary
+/// Fortress, and two corpus files. Found by the full driver sweep.
+#[test]
+fn an_integer_literal_in_float_position_is_a_float_constant() {
+    let binary = compile_fixture("rr64literal.fss", "rr64literal");
+    let out = run(&binary);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "1.75\n");
+    let _ = std::fs::remove_file(&binary);
+}

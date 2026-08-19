@@ -1,0 +1,11 @@
+component juxtapply
+export Executable
+
+double(x: ZZ64): ZZ64 = x 2
+
+run(): () = do
+    println "Hello"
+    println(double 21)
+  end
+
+end

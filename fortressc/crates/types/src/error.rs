@@ -23,6 +23,14 @@ pub enum TypeError {
         left: Type,
         right: Type,
     },
+    /// A juxtaposition led by a function element with more than two elements.
+    /// The specification's reassociation rules (`juxtameaning.tex:70-111`) are
+    /// not implemented, and were measured at zero corpus files, so this refuses
+    /// rather than guesses.
+    JuxtapositionNotBinary {
+        span: Span,
+        found: usize,
+    },
     /// Numeric juxtaposition or arithmetic across two different numeric types.
     /// Separate from `Mismatch` because neither side is "the required" one.
     MixedNumericOperands {
@@ -253,6 +261,7 @@ impl TypeError {
             Self::ImplicitWideningRejected { span, .. }
             | Self::Mismatch { span, .. }
             | Self::UnresolvableJuxtaposition { span, .. }
+            | Self::JuxtapositionNotBinary { span, .. }
             | Self::MixedNumericOperands { span, .. }
             | Self::UnknownName { span, .. }
             | Self::UnknownType { span, .. }
@@ -319,6 +328,11 @@ impl core::fmt::Display for TypeError {
                 "juxtaposition of {} and {} is neither multiplication nor concatenation",
                 left.name(),
                 right.name()
+            ),
+            Self::JuxtapositionNotBinary { found, .. } => write!(
+                f,
+                "a juxtaposition of {found} elements led by a function is not implemented; \
+                 parenthesise the application"
             ),
             Self::MixedNumericOperands { left, right, .. } => write!(
                 f,

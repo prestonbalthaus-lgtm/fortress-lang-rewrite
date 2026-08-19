@@ -1,0 +1,8 @@
+component juxtnary
+export Executable
+
+g(x: ZZ64): ZZ64 = x
+
+run(): () = println(g 1 2)
+
+end
