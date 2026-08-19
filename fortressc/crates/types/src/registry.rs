@@ -96,45 +96,67 @@ impl Registry {
     /// before any type is resolved, so a forward reference to an object
     /// declared later in the file works.
     pub(crate) fn resolve(&self, t: &TypeRef) -> Result<Type, TypeError> {
-        if t.name == "Array" {
-            let [argument] = t.args.as_slice() else {
+        let (name, args, span) = match t {
+            TypeRef::Named { name, args, span } => (name, args, *span),
+            TypeRef::Unit { .. } => return Ok(Type::Void),
+            TypeRef::Tuple { span, .. } => {
+                return Err(TypeError::TypeNotImplemented {
+                    span: *span,
+                    form: "a tuple type",
+                })
+            }
+            TypeRef::Arrow { span, .. } => {
+                return Err(TypeError::TypeNotImplemented {
+                    span: *span,
+                    form: "an arrow type",
+                })
+            }
+        };
+        if name == "Array" {
+            let [argument] = args.as_slice() else {
                 return Err(TypeError::UnsupportedElementType {
-                    span: t.span,
+                    span,
                     name: "Array".to_owned(),
                 });
             };
             let inner = self.resolve(argument)?;
+            if inner == Type::Void {
+                return Err(TypeError::VoidNotStorable {
+                    span: argument.span(),
+                    position: "an array element",
+                });
+            }
             return Elem::of(inner).map(Type::Array).ok_or_else(|| {
                 TypeError::UnsupportedElementType {
-                    span: argument.span,
+                    span: argument.span(),
                     name: inner.name().to_owned(),
                 }
             });
         }
         // Anything else carrying static arguments here means a generic survived
         // expansion, which cannot happen: `check` runs `expand` first.
-        if !t.args.is_empty() {
+        if !args.is_empty() {
             return Err(TypeError::UnknownType {
-                span: t.span,
-                name: t.name.clone(),
+                span,
+                name: name.clone(),
             });
         }
-        match t.name.as_str() {
+        match name.as_str() {
             "ZZ32" => Ok(Type::ZZ32),
             "ZZ64" => Ok(Type::ZZ64),
             "RR64" => Ok(Type::RR64),
             "Boolean" => Ok(Type::Boolean),
             "String" => Ok(Type::String),
-            name => {
-                if let Some((interned, _)) = self.traits.get_key_value(name) {
+            other => {
+                if let Some((interned, _)) = self.traits.get_key_value(other) {
                     return Ok(Type::Trait(interned));
                 }
-                if let Some((interned, _)) = self.objects.get_key_value(name) {
+                if let Some((interned, _)) = self.objects.get_key_value(other) {
                     return Ok(Type::Object(interned));
                 }
                 Err(TypeError::UnknownType {
-                    span: t.span,
-                    name: t.name.clone(),
+                    span,
+                    name: name.clone(),
                 })
             }
         }

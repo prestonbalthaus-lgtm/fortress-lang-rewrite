@@ -2,7 +2,7 @@
 // integration test is its own crate, so the workspace denies apply here.
 #![allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 
-use fortress_ast::{BinOp, BlockItem, Component, Decl, Expr, Fixity, UnOp};
+use fortress_ast::{BinOp, BlockItem, Component, Decl, Expr, Fixity, TypeRef, UnOp};
 use fortress_parser::{parse, ParseError};
 
 fn component(src: &str) -> Component {
@@ -201,7 +201,7 @@ fn a_typed_local_binding_parses() {
             Expr::Block { items, .. } => match items.first() {
                 Some(BlockItem::Binding(b)) => {
                     assert_eq!(b.name, "j");
-                    assert_eq!(b.ty.as_ref().map(|t| t.name.as_str()), Some("ZZ64"));
+                    assert_eq!(b.ty.as_ref().map(TypeRef::written), Some("ZZ64".to_owned()));
                 }
                 other => panic!("expected a binding, got {other:?}"),
             },
@@ -258,10 +258,13 @@ fn the_m1_acceptance_program_parses() {
     };
     assert_eq!(f.name, "f");
     assert_eq!(f.params.len(), 1);
-    assert_eq!(f.params.first().map(|p| p.ty.name.as_str()), Some("ZZ64"));
     assert_eq!(
-        f.return_type.as_ref().map(|t| t.name.as_str()),
-        Some("ZZ64")
+        f.params.first().map(|p| p.ty.written()),
+        Some("ZZ64".to_owned())
+    );
+    assert_eq!(
+        f.return_type.as_ref().map(TypeRef::written),
+        Some("ZZ64".to_owned())
     );
 
     // The body is the if, whose else branch is the recursive juxtaposition.
@@ -355,10 +358,9 @@ fn a_static_argument_is_parsed_as_the_type_it_names() {
         panic!("no decl")
     };
     let param = f.params.into_iter().next().expect("a parameter");
-    assert_eq!(param.ty.name, "Array");
     assert_eq!(
-        param.ty.args.first().map(|t| t.name.clone()),
-        Some("ZZ64".to_owned()),
+        param.ty.written(),
+        "Array[\\ZZ64\\]",
         "the element type must survive parsing"
     );
 }
@@ -474,4 +476,129 @@ fn imports_and_exports_may_come_in_either_order() {
     let b = component("component t\nexport E\nimport L.{...}\nrun() = 1\nend\n");
     assert_eq!(a.imports.len(), b.imports.len());
     assert_eq!(a.exports, b.exports);
+}
+
+// ------------------------------------------------------------- type syntax
+
+fn return_type(decl: &str) -> TypeRef {
+    let src = format!("component t\n{decl}\nend\n");
+    match component(&src).decls.into_iter().next() {
+        Some(Decl::Function(f)) => f.return_type.expect("a declared return type"),
+        other => panic!("expected a function, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_plain_name_is_a_named_type() {
+    match return_type("f(): ZZ32 = 1") {
+        TypeRef::Named { name, args, .. } => {
+            assert_eq!(name, "ZZ32");
+            assert!(args.is_empty());
+        }
+        other => panic!("expected a named type, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_named_type_renders_its_static_arguments() {
+    let written = return_type("f(): Array[\\ZZ64\\] = 1").written();
+    assert_eq!(written, "Array[\\ZZ64\\]");
+}
+
+#[test]
+fn empty_parentheses_are_the_unit_type() {
+    match return_type("f(): () = println(\"hi\")") {
+        TypeRef::Unit { .. } => {}
+        other => panic!("expected the unit type, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_parenthesised_type_is_the_type_itself() {
+    match return_type("f(): (ZZ32) = 1") {
+        TypeRef::Named { name, .. } => assert_eq!(name, "ZZ32"),
+        other => panic!("expected the inner named type, got {other:?}"),
+    }
+}
+
+#[test]
+fn two_or_more_types_in_parentheses_are_a_tuple() {
+    match return_type("f(): (ZZ32, String) = 1") {
+        TypeRef::Tuple { elems, .. } => {
+            assert_eq!(elems.len(), 2);
+            assert_eq!(elems.first().map(TypeRef::written), Some("ZZ32".to_owned()));
+            assert_eq!(
+                elems.get(1).map(TypeRef::written),
+                Some("String".to_owned())
+            );
+        }
+        other => panic!("expected a tuple type, got {other:?}"),
+    }
+}
+
+/// The parse error from a whole declaration, for grammar cases that cannot be
+/// expressed as a bare expression.
+fn decl_error(decl: &str) -> ParseError {
+    let src = format!("component t\n{decl}\nend\n");
+    let tokens = fortress_lexer::lex(&src).unwrap_or_else(|e| panic!("lex failed: {e}"));
+    match parse(&tokens) {
+        Ok(_) => panic!("expected {decl:?} to fail to parse"),
+        Err(e) => e,
+    }
+}
+
+#[test]
+fn a_glued_minus_greater_is_an_arrow_type() {
+    match return_type("f(): ZZ32 -> String = 1") {
+        TypeRef::Arrow { from, to, .. } => {
+            assert_eq!(from.written(), "ZZ32");
+            assert_eq!(to.written(), "String");
+        }
+        other => panic!("expected an arrow type, got {other:?}"),
+    }
+}
+
+#[test]
+fn arrow_types_are_right_associative() {
+    assert_eq!(
+        return_type("f(): ZZ32 -> String -> Boolean = 1").written(),
+        "ZZ32 -> String -> Boolean"
+    );
+    match return_type("f(): ZZ32 -> String -> Boolean = 1") {
+        TypeRef::Arrow { to, .. } => match *to {
+            TypeRef::Arrow { .. } => {}
+            other => panic!("expected the right side to be the nested arrow, got {other:?}"),
+        },
+        other => panic!("expected an arrow type, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_spaced_minus_greater_is_not_an_arrow() {
+    let e = decl_error("f(): ZZ32 - > String = 1");
+    assert!(matches!(e, ParseError::UnexpectedToken { .. }), "got {e:?}");
+}
+
+#[test]
+fn an_arrow_may_appear_inside_parentheses() {
+    match return_type("f(): (ZZ32 -> String) = 1") {
+        TypeRef::Arrow { .. } => {}
+        other => panic!("expected an arrow type, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_comma_separated_parenthesised_expression_is_a_tuple() {
+    match expr("(1, 2)") {
+        Expr::Tuple { items, .. } => assert_eq!(items.len(), 2),
+        other => panic!("expected a tuple expression, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_single_parenthesised_expression_is_not_a_tuple() {
+    assert!(
+        !matches!(expr("(1)"), Expr::Tuple { .. }),
+        "a one-element parenthesised expression is not a tuple"
+    );
 }

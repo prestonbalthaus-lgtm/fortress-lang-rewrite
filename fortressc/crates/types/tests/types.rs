@@ -1086,12 +1086,12 @@ fn an_array_of_objects_cannot_be_made_uninitialised() {
 #[test]
 fn mangling_distinguishes_nesting_from_arity() {
     use fortress_ast::{Span, TypeRef};
-    let bare = |n: &str| TypeRef {
+    let bare = |n: &str| TypeRef::Named {
         name: n.to_owned(),
         args: Vec::new(),
         span: Span::new(0, 0),
     };
-    let nested = TypeRef {
+    let nested = TypeRef::Named {
         name: "List".to_owned(),
         args: vec![bare("B")],
         span: Span::new(0, 0),
@@ -1101,4 +1101,104 @@ fn mangling_distinguishes_nesting_from_arity() {
         fortress_types::mangle_static("Foo", &[nested]),
         fortress_types::mangle_static("Foo", &[bare("List"), bare("B")])
     );
+}
+
+// ------------------------------------------------------- void is not storable
+
+#[test]
+fn a_void_valued_binding_is_a_diagnostic_not_an_internal_error() {
+    match body_error("f(): ZZ32 = do\n  x = println(\"hi\")\n  0\nend") {
+        TypeError::VoidNotStorable { position, .. } => assert_eq!(position, "a binding"),
+        other => panic!("expected VoidNotStorable, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_binding_of_a_void_while_is_refused_too() {
+    match body_error(
+        "f(): ZZ32 = do\n  y: ZZ32 := 0\n  x = while y < 0 do y := y + 1 end\n  0\nend",
+    ) {
+        TypeError::VoidNotStorable { .. } => {}
+        other => panic!("expected VoidNotStorable, got {other:?}"),
+    }
+}
+
+#[test]
+fn the_unit_type_resolves_to_void() {
+    let c = typed("component t\nf(): () = println(\"hi\")\nend\n");
+    assert_eq!(c.functions.first().map(|f| f.return_type), Some(Type::Void));
+}
+
+#[test]
+fn a_unit_parameter_is_refused() {
+    match type_error("component t\nf(x: ()): ZZ32 = 1\nend\n") {
+        TypeError::VoidNotStorable { position, .. } => assert_eq!(position, "a parameter"),
+        other => panic!("expected VoidNotStorable, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_unit_field_is_refused() {
+    match type_error("component t\nobject O(x: ()) end\nf(): ZZ32 = 1\nend\n") {
+        TypeError::VoidNotStorable { position, .. } => assert_eq!(position, "a field"),
+        other => panic!("expected VoidNotStorable, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_unit_array_element_is_refused() {
+    match type_error("component t\nf(): ZZ32 = do\n  a: Array[\\()\\] = array(1)\n  1\nend\nend\n")
+    {
+        TypeError::VoidNotStorable { position, .. } => assert_eq!(position, "an array element"),
+        other => panic!("expected VoidNotStorable, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_tuple_type_is_refused_with_a_diagnostic() {
+    match type_error("component t\nf(): (ZZ32, String) = 1\nend\n") {
+        TypeError::TypeNotImplemented { form, .. } => assert_eq!(form, "a tuple type"),
+        other => panic!("expected TypeNotImplemented, got {other:?}"),
+    }
+}
+
+#[test]
+fn an_arrow_type_is_refused_with_a_diagnostic() {
+    match type_error("component t\nf(): ZZ32 -> String = 1\nend\n") {
+        TypeError::TypeNotImplemented { form, .. } => assert_eq!(form, "an arrow type"),
+        other => panic!("expected TypeNotImplemented, got {other:?}"),
+    }
+}
+
+#[test]
+fn the_unit_expression_has_type_void() {
+    let b = body("f(): () = ()");
+    assert_eq!(b.ty, Type::Void);
+    assert!(matches!(b.kind, TypedExprKind::Unit), "got {:?}", b.kind);
+}
+
+#[test]
+fn a_unit_binding_is_refused() {
+    match body_error("f(): ZZ32 = do\n  x: () = ()\n  0\nend") {
+        TypeError::VoidNotStorable { position, .. } => assert_eq!(position, "a binding"),
+        other => panic!("expected VoidNotStorable, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_tuple_expression_is_refused_with_a_diagnostic() {
+    match body_error("f(): ZZ32 = do\n  x = (1, 2)\n  0\nend") {
+        TypeError::TypeNotImplemented { form, .. } => assert_eq!(form, "a tuple expression"),
+        other => panic!("expected TypeNotImplemented, got {other:?}"),
+    }
+}
+
+#[test]
+fn an_entry_point_with_parameters_is_refused() {
+    // Codegen's generated `main` calls `run` with no arguments, so this was
+    // "LLVM rejected the generated module", exit 70, on two corpus files.
+    match type_error("component t\nrun(args: String): () = ()\nend\n") {
+        TypeError::EntryPointTakesArguments { found, .. } => assert_eq!(found, 1),
+        other => panic!("expected EntryPointTakesArguments, got {other:?}"),
+    }
 }

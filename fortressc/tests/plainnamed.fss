@@ -1,0 +1,8 @@
+component plainnamed
+export Executable
+
+f(x: ZZ32): ZZ32 = x
+
+run(): () = println(f(7))
+
+end

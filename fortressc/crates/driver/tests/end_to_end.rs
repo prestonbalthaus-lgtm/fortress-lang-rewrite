@@ -749,3 +749,15 @@ fn two_builds_of_a_generic_program_are_byte_identical() {
     let _ = std::fs::remove_file(&first);
     let _ = std::fs::remove_file(&second);
 }
+
+/// The most common function shape in the corpus, and it had never compiled.
+#[test]
+fn a_void_function_compiles_links_and_runs() {
+    let binary = compile_fixture("unitvoid.fss", "unitvoid");
+    let out = run(&binary);
+    assert!(out.status.success(), "exited {:?}", out.status);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "hello from a void function\n"
+    );
+}

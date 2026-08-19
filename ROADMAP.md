@@ -49,10 +49,33 @@ The lesson is recorded rather than buried: count what the compiler actually does
 not what the blocker histogram implies. The same estimate done by counting was
 wrong by an order of magnitude one milestone earlier.
 
+5. **The unit type `()`, with syntax for tuples and arrows.**
+   `specs/2026-08-19-m3e-unit-tuple-arrow-design.md`. `()` full stack onto the
+   `Type::Void` that already existed; tuple types, tuple expressions and arrow
+   types parsed and refused with a diagnostic, so `Type` stays `Copy`.
+
+**And the lesson paid for itself a third time.** "Tuple and arrow types" was
+billed here as the top parser blocker, at 536 files. It was the right number
+attached to the wrong name: 485 of those 536 were `()`, the unit type, which the
+type system already had. Measured by construct rather than by first-blocker
+count -- spike it, run the real driver, revert -- unit was worth +232, tuples
++15, arrows +13.
+
+Parser 168 -> 428 of the 1780 files that lex, 9.4% -> 24.0%, the largest single
+parser move in the project. Files that compile end to end 52 -> 151, which the
+design document had predicted would barely move.
+
+Two things fell out of the sweep that runs over all 1956 files with the real
+driver. A void-valued binding (`x = println("hi")`) typechecked and then died in
+codegen as an internal error, exit 70, on ordinary source. And `run(args:String)`
+generated a module LLVM rejected, because the generated `main` calls `run` with
+no arguments. Both are diagnostics now. Neither was reachable before, because
+every file carrying them died at the parser on `()` first.
+
 **What is in front now**, in rough order of what the corpus is waiting on:
-tuple and arrow types (the top parser blocker), `getter`/`setter` and `opr`
-declarations, then enclosing operators, which need the precedence map that `<|`,
-`|>` and `|x|` were tokenised without.
+`getter`/`setter` (126 files) and `opr` declarations (79), then enclosing
+operators, which need the precedence map that `<|`, `|>` and `|x|` were
+tokenised without.
 
 ## Phases
 

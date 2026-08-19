@@ -22,6 +22,17 @@ use fortress_lexer::{Kind, Token};
 
 type Parsed<T> = Result<T, ParseError>;
 
+/// A parenthesised type is the type itself, but its span covers the
+/// parentheses, so a diagnostic points at what was written.
+fn widen(t: TypeRef, span: Span) -> TypeRef {
+    match t {
+        TypeRef::Named { name, args, .. } => TypeRef::Named { name, args, span },
+        TypeRef::Unit { .. } => TypeRef::Unit { span },
+        TypeRef::Tuple { elems, .. } => TypeRef::Tuple { elems, span },
+        TypeRef::Arrow { from, to, .. } => TypeRef::Arrow { from, to, span },
+    }
+}
+
 pub fn parse(tokens: &[Token<'_>]) -> Parsed<Component> {
     Parser { tokens, pos: 0 }.component()
 }
@@ -435,7 +446,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         self.expect(&Kind::Colon, "`:` or `(`")?;
         let ty = self.type_ref()?;
         let init = self.optional_definition()?;
-        let end = init.as_ref().map_or(ty.span, Expr::span);
+        let end = init.as_ref().map_or_else(|| ty.span(), Expr::span);
         Ok(Member::Field(FieldDecl {
             name,
             ty,
@@ -550,7 +561,7 @@ impl<'t, 'a> Parser<'t, 'a> {
             let (name, name_span) = self.identifier("a parameter name")?;
             self.expect(&Kind::Colon, "`:`")?;
             let ty = self.type_ref()?;
-            let span = Span::new(name_span.start, ty.span.end);
+            let span = Span::new(name_span.start, ty.span().end);
             params.push(Param { name, ty, span });
             self.skip_newlines();
             if !self.at(&Kind::Comma) {
@@ -562,10 +573,60 @@ impl<'t, 'a> Parser<'t, 'a> {
         Ok(params)
     }
 
+    /// `A -> B`, right associative. `->` is not a token: it is `Minus` glued to
+    /// `Gt`, decided by span adjacency the same way operator fixity is, so the
+    /// lexer does not have to learn a token that would change how every `->` in
+    /// the corpus lexes.
     fn type_ref(&mut self) -> Parsed<TypeRef> {
+        let from = self.type_atom()?;
+        if !(self.at(&Kind::Minus)
+            && self.glued_right(self.pos)
+            && matches!(self.peek_ahead(1), Some(Kind::Gt)))
+        {
+            return Ok(from);
+        }
+        let start = from.span().start;
+        self.pos += 2;
+        self.skip_newlines();
+        let to = self.type_ref()?;
+        let end = to.span().end;
+        Ok(TypeRef::Arrow {
+            from: Box::new(from),
+            to: Box::new(to),
+            span: Span::new(start, end),
+        })
+    }
+
+    fn type_atom(&mut self) -> Parsed<TypeRef> {
+        if self.at(&Kind::LParen) {
+            let start = self.expect(&Kind::LParen, "`(`")?.span.start;
+            self.skip_newlines();
+            if self.at(&Kind::RParen) {
+                let end = self.expect(&Kind::RParen, "`)`")?.span.end;
+                return Ok(TypeRef::Unit {
+                    span: Span::new(start, end),
+                });
+            }
+            let mut elems = vec![self.type_ref()?];
+            self.skip_newlines();
+            while self.at(&Kind::Comma) {
+                self.pos += 1;
+                self.skip_newlines();
+                elems.push(self.type_ref()?);
+                self.skip_newlines();
+            }
+            let end = self.expect(&Kind::RParen, "`)`")?.span.end;
+            let span = Span::new(start, end);
+            // Two or more is the whole definition of a tuple, and this is the
+            // only place the invariant is enforced.
+            if elems.len() == 1 {
+                return Ok(widen(elems.remove(0), span));
+            }
+            return Ok(TypeRef::Tuple { elems, span });
+        }
         let (name, span) = self.identifier("a type name")?;
         if !self.at(&Kind::LGeneric) {
-            return Ok(TypeRef {
+            return Ok(TypeRef::Named {
                 name,
                 args: Vec::new(),
                 span,
@@ -574,7 +635,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         self.pos += 1;
         let args = self.type_args()?;
         let close = self.expect(&Kind::RGeneric, "`\\]`")?.span;
-        Ok(TypeRef {
+        Ok(TypeRef::Named {
             name,
             args,
             span: Span::new(span.start, close.end),
@@ -910,8 +971,28 @@ impl<'t, 'a> Parser<'t, 'a> {
             Kind::LParen => {
                 self.pos += 1;
                 self.skip_newlines();
+                if self.at(&Kind::RParen) {
+                    let close = self.expect(&Kind::RParen, "`)`")?.span;
+                    return Ok(Expr::Unit {
+                        span: Span::new(span.start, close.end),
+                    });
+                }
                 let inner = self.expr()?;
                 self.skip_newlines();
+                if self.at(&Kind::Comma) {
+                    let mut items = vec![inner];
+                    while self.at(&Kind::Comma) {
+                        self.pos += 1;
+                        self.skip_newlines();
+                        items.push(self.expr()?);
+                        self.skip_newlines();
+                    }
+                    let close = self.expect(&Kind::RParen, "`)`")?.span;
+                    return Ok(Expr::Tuple {
+                        items,
+                        span: Span::new(span.start, close.end),
+                    });
+                }
                 self.expect(&Kind::RParen, "`)`")?;
                 Ok(inner)
             }

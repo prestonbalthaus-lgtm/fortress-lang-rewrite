@@ -196,12 +196,26 @@ impl Checker {
         Ok(checker)
     }
 
+    /// Resolve a type that has to occupy storage. `basic_type(Void)` is `None`,
+    /// so a Void here would build a signature or a layout with a hole in it and
+    /// fail as an internal error rather than as a diagnostic.
+    fn storable(&self, t: &TypeRef, position: &'static str) -> Checked<Type> {
+        let ty = self.registry.resolve(t)?;
+        if ty == Type::Void {
+            return Err(TypeError::VoidNotStorable {
+                span: t.span(),
+                position,
+            });
+        }
+        Ok(ty)
+    }
+
     fn supertrait(&self, reference: &TypeRef) -> Checked<&'static str> {
         match self.registry.resolve(reference)? {
             Type::Trait(name) => Ok(name),
             _ => Err(TypeError::NotATrait {
-                span: reference.span,
-                name: reference.name.clone(),
+                span: reference.span(),
+                name: reference.written(),
             }),
         }
     }
@@ -250,7 +264,7 @@ impl Checker {
         for p in o.params.iter().flatten() {
             fields.push(TypedField {
                 name: p.name.clone(),
-                ty: self.registry.resolve(&p.ty)?,
+                ty: self.storable(&p.ty, "a field")?,
             });
         }
         for member in &o.members {
@@ -269,7 +283,7 @@ impl Checker {
             }
             fields.push(TypedField {
                 name: f.name.clone(),
-                ty: self.registry.resolve(&f.ty)?,
+                ty: self.storable(&f.ty, "a field")?,
             });
         }
         for (index, field) in fields.iter().enumerate() {
@@ -305,7 +319,7 @@ impl Checker {
             let params = f
                 .params
                 .iter()
-                .map(|p| self.registry.resolve(&p.ty))
+                .map(|p| self.storable(&p.ty, "a parameter"))
                 .collect::<Checked<Vec<Type>>>()?;
             let returns = match &f.return_type {
                 Some(t) => self.registry.resolve(t)?,
@@ -343,6 +357,15 @@ impl Checker {
             return Err(TypeError::ApiNotExecutable {
                 span: component.span,
             });
+        }
+        for decl in &component.decls {
+            let Decl::Function(f) = decl else { continue };
+            if f.name == "run" && !f.params.is_empty() {
+                return Err(TypeError::EntryPointTakesArguments {
+                    span: f.span,
+                    found: f.params.len(),
+                });
+            }
         }
         self.discharge_bounds(component)?;
 
@@ -534,6 +557,18 @@ impl Checker {
     /// checked against; it is never used to convert anything.
     fn expr(&mut self, e: &Expr, expected: Option<Type>) -> Checked<TypedExpr> {
         match e {
+            Expr::Unit { span } => {
+                self.require(Type::Void, expected, *span)?;
+                Ok(TypedExpr {
+                    kind: TypedExprKind::Unit,
+                    ty: Type::Void,
+                    span: *span,
+                })
+            }
+            Expr::Tuple { span, .. } => Err(TypeError::TypeNotImplemented {
+                span: *span,
+                form: "a tuple expression",
+            }),
             Expr::IntLit { digits, span } => self.int_literal(digits, *span, expected),
             Expr::FloatLit {
                 int_digits,
@@ -1795,6 +1830,12 @@ impl Checker {
                     };
                     let value = self.expr(&b.value, declared)?;
                     let ty = declared.unwrap_or(value.ty);
+                    if ty == Type::Void {
+                        return Err(TypeError::VoidNotStorable {
+                            span: b.span,
+                            position: "a binding",
+                        });
+                    }
                     self.declare(b.name.clone(), ty, b.mutable);
                     typed.push(TypedBlockItem::Binding {
                         name: b.name.clone(),

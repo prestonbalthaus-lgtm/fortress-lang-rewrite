@@ -443,6 +443,8 @@ pub struct TypedExpr {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypedExprKind {
+    /// `()`. Typed as `Void`, and lowers to no value at all.
+    Unit,
     /// Already pinned to a concrete integer type by its context.
     IntConst(i128),
     FloatConst(f64),

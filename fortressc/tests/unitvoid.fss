@@ -1,0 +1,8 @@
+component unitvoid
+export Executable
+
+greet(): () = println("hello from a void function")
+
+run(): () = greet()
+
+end

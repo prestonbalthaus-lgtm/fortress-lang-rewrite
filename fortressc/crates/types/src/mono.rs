@@ -219,42 +219,66 @@ impl<'a> Expander<'a> {
     // ------------------------------------------------------------- types
 
     fn ty(&mut self, t: &TypeRef, subst: &Subst) -> Result<TypeRef, TypeError> {
-        if t.args.is_empty() {
-            if let Some(replacement) = subst.get(&t.name) {
+        // The three non-nominal forms substitute structurally. None of them can
+        // ever be an instantiation request, so none of them reaches `request`.
+        let (name, args, span) = match t {
+            TypeRef::Named { name, args, span } => (name, args, *span),
+            TypeRef::Unit { .. } => return Ok(t.clone()),
+            TypeRef::Tuple { elems, span } => {
+                let mut out = Vec::with_capacity(elems.len());
+                for e in elems {
+                    out.push(self.ty(e, subst)?);
+                }
+                return Ok(TypeRef::Tuple {
+                    elems: out,
+                    span: *span,
+                });
+            }
+            TypeRef::Arrow { from, to, span } => {
+                return Ok(TypeRef::Arrow {
+                    from: Box::new(self.ty(from, subst)?),
+                    to: Box::new(self.ty(to, subst)?),
+                    span: *span,
+                })
+            }
+        };
+
+        if args.is_empty() {
+            if let Some(replacement) = subst.get(name) {
                 return Ok(replacement.clone());
             }
-            if self.generics.contains_key(&t.name) {
+            if self.generics.contains_key(name) {
                 return Err(TypeError::StaticArgumentsRequired {
-                    span: t.span,
-                    name: t.name.clone(),
+                    span,
+                    name: name.clone(),
                 });
             }
             return Ok(t.clone());
         }
 
-        let mut args = Vec::with_capacity(t.args.len());
-        for a in &t.args {
-            args.push(self.ty(a, subst)?);
+        let mut expanded = Vec::with_capacity(args.len());
+        for a in args {
+            expanded.push(self.ty(a, subst)?);
         }
-        if BUILTIN_CONSTRUCTORS.contains(&t.name.as_str()) {
-            return Ok(TypeRef {
-                name: t.name.clone(),
-                args,
-                span: t.span,
+        if BUILTIN_CONSTRUCTORS.contains(&name.as_str()) {
+            return Ok(TypeRef::Named {
+                name: name.clone(),
+                args: expanded,
+                span,
             });
         }
-        if !self.generics.contains_key(&t.name) {
+        if !self.generics.contains_key(name) {
             return Err(TypeError::UnknownType {
-                span: t.span,
-                name: t.name.clone(),
+                span,
+                name: name.clone(),
             });
         }
-        let mangled = mangle_static(&t.name, &args);
-        self.request(&t.name, args, &mangled, t.span);
-        Ok(TypeRef {
+        let mangled = mangle_static(name, &expanded);
+        self.request(name, expanded, &mangled, span);
+        Ok(TypeRef::Named {
             name: mangled,
             args: Vec::new(),
-            span: t.span,
+            span,
         })
     }
 
@@ -374,7 +398,8 @@ impl<'a> Expander<'a> {
 
     fn expr(&mut self, e: &Expr, subst: &Subst) -> Result<Expr, TypeError> {
         Ok(match e {
-            Expr::IntLit { .. }
+            Expr::Unit { .. }
+            | Expr::IntLit { .. }
             | Expr::FloatLit { .. }
             | Expr::StrLit { .. }
             | Expr::BoolLit { .. } => e.clone(),
@@ -460,6 +485,12 @@ impl<'a> Expander<'a> {
                 items: self.exprs(items, subst)?,
                 span: *span,
             },
+            // Refused by the checker, but expansion runs first and its elements
+            // can still name a static parameter.
+            Expr::Tuple { items, span } => Expr::Tuple {
+                items: self.exprs(items, subst)?,
+                span: *span,
+            },
             Expr::Index { base, index, span } => Expr::Index {
                 base: Box::new(self.expr(base, subst)?),
                 index: Box::new(self.expr(index, subst)?),
@@ -523,10 +554,31 @@ pub fn mangle_static(name: &str, args: &[TypeRef]) -> String {
     let mut out = String::from(name);
     for a in args {
         out.push('$');
-        out.push_str(&mangle_static(&a.name, &a.args));
+        out.push_str(&mangle_type(a));
     }
     out.push_str("$e");
     out
+}
+
+/// `$` cannot appear in a source identifier, so the three non-nominal forms
+/// take a `$`-led name and no user type can collide with one.
+fn mangle_type(t: &TypeRef) -> String {
+    match t {
+        TypeRef::Named { name, args, .. } => mangle_static(name, args),
+        TypeRef::Unit { .. } => "$unit".to_owned(),
+        TypeRef::Tuple { elems, .. } => {
+            let mut out = String::from("$tuple");
+            for e in elems {
+                out.push('$');
+                out.push_str(&mangle_type(e));
+            }
+            out.push_str("$e");
+            out
+        }
+        TypeRef::Arrow { from, to, .. } => {
+            format!("$arrow${}${}$e", mangle_type(from), mangle_type(to))
+        }
+    }
 }
 
 /// Specification 1.0 `basic/overloading.tex:100-108`: two declarations of one
