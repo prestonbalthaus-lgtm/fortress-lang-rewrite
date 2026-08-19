@@ -1,0 +1,8 @@
+component rr64literal
+export Executable
+
+halve(x: RR64): RR64 = x/2
+
+run(): () = println(halve(3.5))
+
+end

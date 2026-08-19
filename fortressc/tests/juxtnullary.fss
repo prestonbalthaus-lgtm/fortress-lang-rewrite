@@ -1,0 +1,8 @@
+component juxtnullary
+export Executable
+
+answer(): ZZ64 = 42
+
+run(): () = println(answer ())
+
+end

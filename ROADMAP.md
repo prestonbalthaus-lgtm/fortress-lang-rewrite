@@ -18,7 +18,7 @@ The rest of phase 6 and all of phase 8 are **shelved**. There is no cluster to
 test on, and MPI is not what is blocking the language. Slurm, `sbatch`,
 multi-node runs and the InfiniBand fabric wait until the compiler is finished.
 
-Language completion was the plan, in this order, and all four are now done:
+Language completion was the plan, in this order, and all six are now done:
 
 1. **Memory.** Boehm collector. `specs/2026-08-18-m3a-memory.md`.
 2. **Arrays and iteration.** `specs/2026-08-18-m3b-arrays.md`. `Array[\T\]`,
@@ -72,10 +72,49 @@ generated a module LLVM rejected, because the generated `main` calls `run` with
 no arguments. Both are diagnostics now. Neither was reachable before, because
 every file carrying them died at the parser on `()` first.
 
-**What is in front now**, in rough order of what the corpus is waiting on:
-`getter`/`setter` (126 files) and `opr` declarations (79), then enclosing
-operators, which need the precedence map that `<|`, `|>` and `|x|` were
-tokenised without.
+6. **Juxtaposition as function application, and chained comparison.**
+   `specs/2026-08-19-m3f-application-chaining-design.md`. `println "Hello"` is a
+   call; `a < b < c` is a chain whose interior operands evaluate once.
+
+**And the histogram was wrong a fourth time, which makes it a pattern.** Eleven
+candidate constructs were spiked behind an environment switch, one switch each,
+and measured against the real corpus. `var` bindings carry 105 first-blockers
+and are worth **6** files. `opr` declarations carry 97 and are worth **5**.
+Chained `=` is a footnote at 51 blockers and is worth **49**, a 96% conversion.
+The named front-runners were the two worst buys on the board.
+
+The compile metric turned out to be a different lever again. Of the 297 files
+that parsed and did not compile, the largest single cause was `unknown name
+println`, 48 files -- not a missing builtin, but `println "Hello"`:
+**juxtaposition as function application**, spec rule (c) at
+`juxtameaning.tex:44-46`. That alone was compile 151 -> 181.
+
+Parser 428 -> 476 of the 1780 that lex, 24.0% -> 26.7%. Files that compile end
+to end 151 -> 187. The one file the parser *lost* is
+`ProjectFortress/parser_tests/XXXchain1.fss`, whose own source says
+`(* SHOULD NOT PARSE *)`: it is the legacy suite's negative test for the rule
+that a chain may not mix two senses of ordering, and it is now refused by name.
+
+The full-corpus driver sweep earned its keep a second time. Two files exited
+**101**, a Rust panic: an integer literal that takes `RR64` from context was
+still lowered as an i64, so `halve(x: RR64): RR64 = x/2` -- ordinary Fortress --
+reached `arith` where it requires a float. Pre-existing, unreachable until
+`println (halve(3.5))` started parsing as a call.
+
+Two rules were spiked, measured at **zero** corpus files, and handled
+differently on purpose. The specification's n-ary juxtaposition reassociation is
+a real algorithm and is refused with a diagnostic. `f ()` as the zero-argument
+call is four lines and is *kept*, because it makes valid Fortress compile rather
+than because it moves a number.
+
+**What is in front now.** The remaining nine constructs, blocker count against
+measured parse delta, so the trap is visible: `getter`/`setter` 131 -> +31,
+top-level value declarations 113 -> +31, `self` parameters 46 -> +25,
+`import java com...` 34 -> +25, object expressions 19 -> +13, dotted export
+names 21 -> +12, untyped parameters 32 -> +9, `var` bindings 105 -> **+6**,
+`opr` declarations 97 -> **+5**, enclosing operators 30 -> +5. They are
+superadditive: getter + `self` + top-level values together were +98, and all
+nine plus this milestone's two were +281.
 
 ## Phases
 

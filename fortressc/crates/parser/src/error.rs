@@ -26,6 +26,19 @@ pub enum ParseError {
         span: Span,
         kind: String,
     },
+    /// `f(x) = e` in block position. `=` is an equality operator in expression
+    /// position, so without this the declaration would parse as a discarded
+    /// comparison rather than fail.
+    LocalFunctionDeclarationUnsupported {
+        span: Span,
+    },
+    /// `a <= b > c`. `chained-multifix.tex:16-34` restricts a chain to a
+    /// mixture of equivalence operators and ordering operators of one sense.
+    ChainedOperatorsDiffer {
+        span: Span,
+        first: &'static str,
+        second: &'static str,
+    },
 }
 
 impl ParseError {
@@ -35,7 +48,9 @@ impl ParseError {
             Self::UnexpectedToken { span, .. }
             | Self::PostfixOperatorUnsupported { span }
             | Self::ReservedWord { span, .. }
-            | Self::StaticParameterKindUnsupported { span, .. } => Some(*span),
+            | Self::StaticParameterKindUnsupported { span, .. }
+            | Self::LocalFunctionDeclarationUnsupported { span }
+            | Self::ChainedOperatorsDiffer { span, .. } => Some(*span),
             Self::UnexpectedEndOfInput { .. } => None,
         }
     }
@@ -74,6 +89,22 @@ impl core::fmt::Display for ParseError {
                 f,
                 "{}..{}: `{kind}` static parameters are not implemented; \
                  M3d is type parameters only",
+                span.start, span.end
+            ),
+            Self::LocalFunctionDeclarationUnsupported { span } => write!(
+                f,
+                "{}..{}: a local function declaration is not implemented; \
+                 declare it at component level",
+                span.start, span.end
+            ),
+            Self::ChainedOperatorsDiffer {
+                span,
+                first,
+                second,
+            } => write!(
+                f,
+                "{}..{}: a chain mixes `{first}` with `{second}`; \
+                 chained ordering operators must have the same sense",
                 span.start, span.end
             ),
         }

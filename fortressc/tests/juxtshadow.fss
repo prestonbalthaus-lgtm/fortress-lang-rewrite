@@ -1,0 +1,10 @@
+component juxtshadow
+export Executable
+
+f(x: ZZ64): ZZ64 = x + 1
+
+apply(f: ZZ64, y: ZZ64): ZZ64 = f y
+
+run(): () = println(apply(3, 4))
+
+end

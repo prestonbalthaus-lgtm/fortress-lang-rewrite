@@ -86,6 +86,12 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
                     } => {
                         format!("`{kind}` static parameter")
                     }
+                    fortress_parser::ParseError::LocalFunctionDeclarationUnsupported { .. } => {
+                        "local function declaration".to_owned()
+                    }
+                    fortress_parser::ParseError::ChainedOperatorsDiffer { .. } => {
+                        "chain mixes ordering senses".to_owned()
+                    }
                 };
                 *blockers.entry(label).or_default() += 1;
             }
@@ -108,9 +114,12 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
     // The same ratchet. The lexer pass took this from 84 to 154 by adding
     // `import`, the headerless-file production and the tokens above it; M3d's
     // static parameters took it to 168; M3e's `()` took it to 428, of which the
-    // unit type alone was 232 and tuples and arrows together were 28.
+    // unit type alone was 232 and tuples and arrows together were 28. M3f's `=`
+    // as an equality operator took it to 477, and M3f's chain sense check gave
+    // one back: XXXchain1.fss is the legacy suite's negative test for that rule
+    // and its own source says (* SHOULD NOT PARSE *).
     assert!(
-        parsed >= 428,
-        "parser corpus regressed: {parsed} files parse, floor is 428"
+        parsed >= 476,
+        "parser corpus regressed: {parsed} files parse, floor is 476"
     );
 }

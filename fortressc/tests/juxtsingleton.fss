@@ -1,0 +1,8 @@
+component juxtsingleton
+export Executable
+
+object Marker end
+
+run(): () = println(Marker 2)
+
+end

@@ -602,3 +602,93 @@ fn a_single_parenthesised_expression_is_not_a_tuple() {
         "a one-element parenthesised expression is not a tuple"
     );
 }
+
+// --------------------------------------------------- `=` and chained comparison
+
+#[test]
+fn a_bare_equals_in_expression_position_is_equality() {
+    match expr("1 = 1") {
+        Expr::Infix { op: BinOp::Eq, .. } => {}
+        other => panic!("expected an equality, got {other:?}"),
+    }
+}
+
+/// `f(x) = e` in block position is a local function declaration, which this
+/// subset does not implement. Without this it would parse as a discarded
+/// equality: 236 corpus files carry 572 such lines. The body here is itself an
+/// equality, which is why the guard is on tokens and not on the parsed tree.
+#[test]
+fn a_local_function_declaration_is_refused() {
+    match expr_error("do\n  isZero(x) = x = 0\n  isZero(1)\nend") {
+        ParseError::LocalFunctionDeclarationUnsupported { .. } => {}
+        other => panic!("expected a local function declaration diagnostic, got {other:?}"),
+    }
+}
+
+/// Pinned deliberately: `try_binding` takes the first `=`, so this is a binding
+/// whose value is a comparison. It was a parse error before `=` became an
+/// operator, and this is the reading the design argues for.
+#[test]
+fn a_binding_of_a_comparison_binds_the_comparison() {
+    match expr("do\n  b = 3 = 4\n  b\nend") {
+        Expr::Block { items, .. } => match items.first() {
+            Some(BlockItem::Binding(b)) => assert!(
+                matches!(b.value, Expr::Infix { op: BinOp::Eq, .. }),
+                "expected the binding's value to be an equality, got {:?}",
+                b.value
+            ),
+            other => panic!("expected a binding, got {other:?}"),
+        },
+        other => panic!("expected a block, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_two_operator_chain_desugars_to_a_block() {
+    match expr("a < b < c") {
+        // three temporaries and the nested if
+        Expr::Block { items, .. } => assert_eq!(items.len(), 4, "got {items:?}"),
+        other => panic!("a chain must desugar to a block, got {other:?}"),
+    }
+}
+
+/// A single comparison is untouched: no block, no temporaries, byte-identical
+/// to what every earlier milestone produced.
+#[test]
+fn a_single_comparison_is_not_a_chain() {
+    match expr("0 < 1") {
+        Expr::Infix { op: BinOp::Lt, .. } => {}
+        other => panic!("a single comparison must stay a bare Infix, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_chain_may_mix_equivalence_with_one_ordering_sense() {
+    match expr("a <= b < c = d") {
+        Expr::Block { items, .. } => assert_eq!(items.len(), 5, "got {items:?}"),
+        other => panic!("expected a block, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_chain_may_not_mix_two_ordering_senses() {
+    match expr_error("1 <= 2 > 0") {
+        ParseError::ChainedOperatorsDiffer { first, second, .. } => {
+            assert_eq!((first, second), ("<=", ">"));
+        }
+        other => panic!("expected a mixed-sense diagnostic, got {other:?}"),
+    }
+}
+
+/// A literal operand is not hoisted. Behind a binding it loses the type it
+/// would take from the other operand, and `0 < mid(1)` became a ZZ32 against a
+/// ZZ64 -- measured, on the evaluate-once fixture.
+#[test]
+fn a_chain_does_not_hoist_literals() {
+    match expr("0 < b < 2") {
+        Expr::Block { items, .. } => {
+            assert_eq!(items.len(), 2, "only `b` needs a temporary: {items:?}");
+        }
+        other => panic!("expected a block, got {other:?}"),
+    }
+}

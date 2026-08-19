@@ -886,7 +886,15 @@ impl Checker {
             return Err(TypeError::LiteralOutOfRange { span, ty });
         }
         Ok(TypedExpr {
-            kind: TypedExprKind::IntConst(value),
+            // A literal that took RR64 from context is a float constant. Left
+            // an IntConst it reaches `arith`, which requires a float value and
+            // has no conversion in between: `halve(x: RR64): RR64 = x/2` is
+            // ordinary Fortress and it panicked.
+            kind: if ty == Type::RR64 {
+                TypedExprKind::FloatConst(value as f64)
+            } else {
+                TypedExprKind::IntConst(value)
+            },
             ty,
             span,
         })
@@ -1052,6 +1060,26 @@ impl Checker {
         })
     }
 
+    /// Specification rule (c), `juxtameaning.tex:44-46`: an identifier with no
+    /// visible declaration is a function element. `lookup` is what "visible
+    /// declaration" means here, and it is the whole guard -- a local or a
+    /// parameter sharing a name with a function is a value, so `f y` stays
+    /// multiplication. A singleton object is a value too (`Self::variable`), so
+    /// only a constructible object counts.
+    fn is_function_element(&self, name: &str) -> bool {
+        if self.lookup(name).is_some() {
+            return false;
+        }
+        MpiOp::from_name(name).is_some()
+            || matches!(name, "widen" | "println" | "array" | "length")
+            || self
+                .registry
+                .objects
+                .get(name)
+                .is_some_and(|info| !info.singleton)
+            || self.functions.contains_key(name)
+    }
+
     /// The fold. A juxtaposition is multiplication when every operand is the
     /// same numeric type, and concatenation when any operand is a string.
     /// Nothing else resolves.
@@ -1061,6 +1089,29 @@ impl Checker {
         span: Span,
         expected: Option<Type>,
     ) -> Checked<TypedExpr> {
+        // Application first, and only on a leading function element: every
+        // juxtaposition that resolved before this milestone still takes the
+        // same path. The probe loop below is what reports `unknown name
+        // println`, so this has to run ahead of it.
+        if let Some((callee, args)) = items.split_first() {
+            if let Expr::Var { name, .. } = callee {
+                if self.is_function_element(name) {
+                    // `f ()` is the nullary call: in Fortress a zero-argument
+                    // function's argument is the unit value.
+                    if let [Expr::Unit { .. }] = args {
+                        return self.call(callee, &[], span, expected);
+                    }
+                    if args.len() != 1 {
+                        return Err(TypeError::JuxtapositionNotBinary {
+                            span,
+                            found: items.len(),
+                        });
+                    }
+                    return self.call(callee, args, span, expected);
+                }
+            }
+        }
+
         // Literals cannot supply a type, so the non-literal operands go first.
         let mut discovered: Option<Type> = None;
         let mut has_string = false;

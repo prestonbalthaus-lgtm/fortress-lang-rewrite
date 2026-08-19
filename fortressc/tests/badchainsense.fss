@@ -1,0 +1,6 @@
+component badchainsense
+export Executable
+
+run(): () = if 1 <= 2 > 0 then println("y") else println("n") end
+
+end

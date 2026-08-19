@@ -1,0 +1,13 @@
+component chainonce
+export Executable
+
+mid(x: ZZ64): ZZ64 = do
+    println("MID")
+    x
+  end
+
+run(): () = do
+    if 0 < mid(1) < 2 then println("YES") else println("NO") end
+  end
+
+end
