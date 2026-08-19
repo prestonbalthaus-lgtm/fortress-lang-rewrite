@@ -1,0 +1,31 @@
+component dottedmethod
+export Executable
+
+(* An object's own method beats a trait's default because Object <: Trait, so
+   the override is decided by M3c's most-specific rule and not by a new one.
+   The receiver is parameter 0, which is what makes a method call an ordinary
+   tuple for symmetric dispatch. *)
+trait Animal
+  noise(): ZZ32 = 0
+end
+
+object Dog extends Animal
+  noise(): ZZ32 = 1
+end
+
+object Rock extends Animal end
+
+object Point(x: ZZ32, y: ZZ32)
+  sum(): ZZ32 = x + y
+  scaled(k: ZZ32): ZZ32 = (x + y) k
+end
+
+speak(a: Animal): ZZ32 = a.noise()
+
+run(): () = do
+  println(speak(Dog))
+  println(speak(Rock))
+  println(Point(3, 4).sum())
+  println(Point(3, 4).scaled(2))
+end
+end

@@ -25,11 +25,11 @@ pub use types::{
     TypedParam, ARRAY_ALLOC, ARRAY_LENGTH, ARRAY_SLOT, DISPATCH_FAILED, FIRST_TAG, OBJECT_ALLOC,
 };
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use fortress_ast::{
-    Assign, BinOp, BlockItem, Component, Decl, Expr, FieldDecl, FnDecl, Member, ObjectDecl, Span,
-    TypeRef, UnOp,
+    Assign, BinOp, BlockItem, Component, Decl, Expr, FieldDecl, FnDecl, Member, MethodDecl,
+    ObjectDecl, Span, TypeRef, UnOp,
 };
 
 use registry::{close_traits, ObjectInfo, Registry, TraitInfo};
@@ -57,6 +57,11 @@ pub fn check(component: &Component) -> Checked<TypedComponent> {
 struct Signature {
     params: Vec<Type>,
     returns: Type,
+    /// False for a bodiless declaration: an abstract method types a call and
+    /// names a return, but can never be a dispatch target. Excluding it from
+    /// the table is what makes an unimplemented abstract method fail M3c's
+    /// exactly-one-winner check instead of needing a rule of its own.
+    concrete: bool,
     /// What codegen emits. A set of one keeps its bare Fortress name, so every
     /// symbol that existed before M3c is byte for byte what it was.
     symbol: String,
@@ -67,9 +72,31 @@ struct Signature {
 /// barely better than one that panics on it, so reaching this is a diagnostic.
 const MAX_DISPATCH_CELLS: usize = 1_000_000;
 
+/// While a dotted method body is checked: the receiver's type, and the fields
+/// a bare name may resolve against. A method sees its object's fields.
+struct SelfCtx {
+    ty: Type,
+    fields: Vec<TypedField>,
+}
+
 struct Checker {
     registry: Registry,
     functions: HashMap<String, Vec<Signature>>,
+    /// Dotted methods, and deliberately NOT `functions`: 1.0 gives `x.f(y)` its
+    /// own namespace and its own shadowing rules, so a method never collides
+    /// with a top-level `f`. Parameter 0 of every signature is the receiver,
+    /// which is the whole trick -- it makes a method call an ordinary tuple for
+    /// M3c's symmetric dispatch, so single dispatch needs no new machinery.
+    methods: HashMap<String, Vec<Signature>>,
+    /// Every name declared `getter` or `setter` anywhere in the component, so a
+    /// read of one is reported as an accessor rather than as a missing field.
+    accessors: HashSet<String>,
+    /// Which member of which method set each declaration is, keyed by the
+    /// declaration's start offset, which is unique per declaration. Positional
+    /// indices desynchronise the moment
+    /// signature building skips a member that the body pass does not.
+    method_slots: HashMap<usize, (String, usize)>,
+    self_ctx: Option<SelfCtx>,
     /// Which member of which overload set each function declaration is, in
     /// declaration order. Backpatching an inferred return type by name alone
     /// would land it on the wrong overload.
@@ -82,6 +109,24 @@ struct Checker {
     /// reach a singleton, a user function or another constructor. That is what
     /// makes construction order a non-question instead of a null dereference.
     object_init: bool,
+}
+
+/// A method lives in its own namespace, so its symbol must not be able to
+/// collide with a function's. `mangle` joins with `$`, so `$m$` cannot be
+/// produced by it: a Fortress name is never empty.
+///
+/// One type may declare the same method name at more than one arity or
+/// parameter type -- a legitimate overload -- so the parameters go into the
+/// symbol exactly as they do for a function. Leaving them out gave both
+/// members one symbol, and codegen defined the second against the first's
+/// declaration.
+fn method_symbol(receiver: &str, name: &str, params: &[Type], overloaded: bool) -> String {
+    let base = format!("{receiver}$m${name}");
+    if overloaded {
+        mangle(&base, params)
+    } else {
+        base
+    }
 }
 
 fn mangle(name: &str, params: &[Type]) -> String {
@@ -185,6 +230,10 @@ impl Checker {
         let mut checker = Self {
             registry,
             functions: HashMap::new(),
+            methods: HashMap::new(),
+            accessors: HashSet::new(),
+            method_slots: HashMap::new(),
+            self_ctx: None,
             slots: Vec::new(),
             scopes: Vec::new(),
             uses_mpi: false,
@@ -193,6 +242,7 @@ impl Checker {
         };
         checker.build_hierarchy(component)?;
         checker.build_signatures(component, &declared)?;
+        checker.build_method_signatures(component)?;
         Ok(checker)
     }
 
@@ -301,6 +351,121 @@ impl Checker {
         Ok(fields)
     }
 
+    /// Collect every dotted method into a namespace of its own, receiver first.
+    ///
+    /// Three kinds of member are deliberately left out, and each omission is
+    /// load bearing rather than unfinished:
+    ///
+    /// * an **accessor** is reached by `o.size`, not `o.size()`, so it is not a
+    ///   callee at all;
+    /// * a member with a **`self` parameter** is a *functional* method, which
+    ///   1.0 lifts into the top-level overload set of its name -- a different
+    ///   namespace and a different milestone;
+    /// * a **bodiless signature** cannot be a dispatch target. Leaving it out
+    ///   is what makes an unimplemented abstract method fail the exactly-one-
+    ///   winner check that M3c already runs, instead of needing a rule of its
+    ///   own.
+    fn build_method_signatures(&mut self, component: &Component) -> Checked<()> {
+        let mut counts: HashMap<(&str, &str), usize> = HashMap::new();
+        for decl in &component.decls {
+            let (owner, members) = match decl {
+                Decl::Trait(t) => (t.name.as_str(), &t.members),
+                Decl::Object(o) => (o.name.as_str(), &o.members),
+                Decl::Function(_) => continue,
+            };
+            for member in members {
+                let Member::Method(m) = member else { continue };
+                if m.accessor {
+                    self.accessors.insert(m.name.clone());
+                }
+                if m.accessor
+                    || m.params.iter().any(|p| p.name == "self")
+                    || !m.static_params.is_empty()
+                {
+                    continue;
+                }
+                *counts.entry((owner, m.name.as_str())).or_default() += 1;
+            }
+        }
+        for decl in &component.decls {
+            let (owner, members) = match decl {
+                Decl::Trait(t) => (intern(&t.name), &t.members),
+                Decl::Object(o) => (intern(&o.name), &o.members),
+                Decl::Function(_) => continue,
+            };
+            let receiver = if self.registry.is_object(owner) {
+                Type::Object(owner)
+            } else {
+                Type::Trait(owner)
+            };
+            for member in members {
+                let Member::Method(m) = member else { continue };
+                if m.accessor
+                    || m.params.iter().any(|p| p.name == "self")
+                    || !m.static_params.is_empty()
+                {
+                    continue;
+                }
+                // An abstract declaration on a generic trait can mention that
+                // trait's static parameter, which is not a type this pass can
+                // resolve. It contributes no dispatch target, so skipping it
+                // costs nothing; failing the component over it would refuse a
+                // program for a signature nothing calls.
+                let abstract_ = m.body.is_none();
+                let mut params = vec![receiver];
+                let mut unresolved = false;
+                for p in &m.params {
+                    match self.storable(&p.ty, "a parameter") {
+                        Ok(ty) => params.push(ty),
+                        Err(_) if abstract_ => {
+                            unresolved = true;
+                            break;
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+                if unresolved {
+                    continue;
+                }
+                let returns = match &m.return_type {
+                    Some(t) => match self.registry.resolve(t) {
+                        Ok(ty) => ty,
+                        Err(_) if abstract_ => continue,
+                        Err(e) => return Err(e),
+                    },
+                    None => Type::Void,
+                };
+                if self
+                    .methods
+                    .get(&m.name)
+                    .is_some_and(|set| set.iter().any(|other| other.params == params))
+                {
+                    return Err(TypeError::DuplicateDefinition {
+                        span: m.span,
+                        name: m.name.clone(),
+                    });
+                }
+                let symbol = method_symbol(
+                    owner,
+                    &m.name,
+                    params.get(1..).unwrap_or_default(),
+                    counts.get(&(owner, m.name.as_str())).copied().unwrap_or(0) > 1,
+                );
+                let set = self.methods.entry(m.name.clone()).or_default();
+                self.method_slots
+                    .insert(m.span.start, (m.name.clone(), set.len()));
+                set.push(Signature {
+                    params,
+                    returns,
+                    concrete: m.body.is_some(),
+                    symbol,
+                    span: m.span,
+                });
+            }
+        }
+        Ok(())
+    }
+
     fn build_signatures(
         &mut self,
         component: &Component,
@@ -345,6 +510,7 @@ impl Checker {
             set.push(Signature {
                 params,
                 returns,
+                concrete: true,
                 symbol,
                 span,
             });
@@ -388,6 +554,29 @@ impl Checker {
             if let Decl::Function(f) = decl {
                 functions.push(self.function(f, index)?);
                 index += 1;
+            }
+        }
+
+        // Lifted methods are ordinary functions from here down, which is why
+        // codegen needed no change for this milestone.
+        for decl in &component.decls {
+            let (owner, members) = match decl {
+                Decl::Trait(t) => (intern(&t.name), &t.members),
+                Decl::Object(o) => (intern(&o.name), &o.members),
+                Decl::Function(_) => continue,
+            };
+            for member in members {
+                let Member::Method(m) = member else { continue };
+                if m.accessor
+                    || m.params.iter().any(|p| p.name == "self")
+                    || !m.static_params.is_empty()
+                {
+                    continue;
+                }
+                if m.body.is_none() || !self.method_slots.contains_key(&m.span.start) {
+                    continue;
+                }
+                functions.push(self.method(m, owner)?);
             }
         }
 
@@ -545,6 +734,189 @@ impl Checker {
         })
     }
 
+    /// One dotted method body, lifted to a `TypedFn` whose first parameter is
+    /// the receiver. Codegen needs no new node: a lifted method is a function,
+    /// and a method call is a `DispatchFn` over its tuple.
+    fn method(&mut self, m: &MethodDecl, owner: &'static str) -> Checked<TypedFn> {
+        let Some(source) = &m.body else {
+            return Err(TypeError::MissingBody {
+                span: m.span,
+                name: m.name.clone(),
+            });
+        };
+        let Some((set, slot)) = self.method_slots.get(&m.span.start).cloned() else {
+            return Err(TypeError::UnknownName {
+                span: m.span,
+                name: m.name.clone(),
+            });
+        };
+        let Some(signature) = self.methods.get(&set).and_then(|v| v.get(slot)) else {
+            return Err(TypeError::UnknownName {
+                span: m.span,
+                name: m.name.clone(),
+            });
+        };
+        let symbol = signature.symbol.clone();
+        let declared = m.return_type.is_some().then_some(signature.returns);
+        let types = signature.params.clone();
+        let Some(&receiver) = types.first() else {
+            return Err(TypeError::UnknownName {
+                span: m.span,
+                name: m.name.clone(),
+            });
+        };
+
+        let mut params = vec![TypedParam {
+            name: "self".to_owned(),
+            ty: receiver,
+            span: m.span,
+        }];
+        let mut scope = HashMap::new();
+        scope.insert(
+            "self".to_owned(),
+            Local {
+                ty: receiver,
+                mutable: false,
+            },
+        );
+        for (p, ty) in m.params.iter().zip(types.into_iter().skip(1)) {
+            scope.insert(p.name.clone(), Local { ty, mutable: false });
+            params.push(TypedParam {
+                name: p.name.clone(),
+                ty,
+                span: p.span,
+            });
+        }
+
+        // An object's method sees its fields. A trait has none, so a default
+        // body there can only reach its parameters and `self`.
+        let fields = self
+            .registry
+            .objects
+            .get(owner)
+            .map_or_else(Vec::new, |o| o.fields.clone());
+        let previous = self.self_ctx.replace(SelfCtx {
+            ty: receiver,
+            fields,
+        });
+        self.scopes.push(scope);
+        let body = self.expr(source, declared);
+        self.scopes.pop();
+        self.self_ctx = previous;
+        let body = body?;
+
+        let return_type = declared.unwrap_or(body.ty);
+        if let Some(sig) = self.methods.get_mut(&set).and_then(|v| v.get_mut(slot)) {
+            sig.returns = return_type;
+        }
+        Ok(TypedFn {
+            name: symbol,
+            params,
+            return_type,
+            body,
+            span: m.span,
+        })
+    }
+
+    /// `o.m(y)`. The receiver is checked first and becomes argument 0, after
+    /// which this is an ordinary overload resolution over the method namespace.
+    fn method_call(
+        &mut self,
+        base: &Expr,
+        name: &str,
+        args: &[Expr],
+        span: Span,
+        dot_span: Span,
+        expected: Option<Type>,
+    ) -> Checked<TypedExpr> {
+        let receiver = self.expr(base, None)?;
+        self.dispatch_method(receiver, name, args, span, dot_span, expected)
+    }
+
+    /// Shared by `o.m(y)` and by the unqualified `m(y)` inside a method body.
+    fn dispatch_method(
+        &mut self,
+        receiver: TypedExpr,
+        name: &str,
+        args: &[Expr],
+        span: Span,
+        dot_span: Span,
+        expected: Option<Type>,
+    ) -> Checked<TypedExpr> {
+        let Some(all) = self.methods.get(name) else {
+            return Err(TypeError::DottedMethodUnsupported {
+                span: dot_span,
+                name: name.to_owned(),
+            });
+        };
+        let arity = args.len() + 1;
+        let candidates: Vec<Signature> = all
+            .iter()
+            .filter(|s| s.params.len() == arity)
+            .cloned()
+            .collect();
+        if candidates.is_empty() {
+            return Err(TypeError::ArityMismatch {
+                span,
+                name: name.to_owned(),
+                expected: all.first().map_or(1, |s| s.params.len()) - 1,
+                found: args.len(),
+            });
+        }
+
+        let mut typed = Vec::with_capacity(arity);
+        typed.push(receiver);
+        for (index, arg) in args.iter().enumerate() {
+            let hint = agreed(&candidates, index + 1);
+            typed.push(self.expr(arg, hint)?);
+        }
+
+        let statics: Vec<Type> = typed.iter().map(|t| t.ty).collect();
+        let refs: Vec<&Signature> = candidates.iter().collect();
+        let applicable = self.applicable(&refs, &statics);
+        if applicable.is_empty() {
+            return Err(TypeError::NoApplicableDeclaration {
+                span,
+                name: name.to_owned(),
+                arguments: render(&statics),
+            });
+        }
+        let returns = self.winner(name, &applicable, &statics, span)?.returns;
+        let target = self.dispatch_target(name, &candidates, &statics, returns, span)?;
+        self.require(returns, expected, span)?;
+        Ok(TypedExpr {
+            kind: TypedExprKind::Apply {
+                target,
+                args: typed,
+            },
+            ty: returns,
+            span,
+        })
+    }
+
+    /// `m(y)` written inside a method body, meaning `self.m(y)`.
+    fn self_call(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        span: Span,
+        callee_span: Span,
+        expected: Option<Type>,
+    ) -> Checked<TypedExpr> {
+        let Some(ctx) = &self.self_ctx else {
+            return Err(TypeError::UnknownName {
+                span: callee_span,
+                name: name.to_owned(),
+            });
+        };
+        let receiver = TypedExpr {
+            kind: TypedExprKind::Var("self".to_owned()),
+            ty: ctx.ty,
+            span: callee_span,
+        };
+        self.dispatch_method(receiver, name, args, span, callee_span, expected)
+    }
+
     // -------------------------------------------------------------- scopes
 
     fn lookup(&self, name: &str) -> Option<Local> {
@@ -648,6 +1020,29 @@ impl Checker {
                 span,
             });
         }
+        // Inside a method body a bare name may be one of the receiver's
+        // fields. Locals win, which is the shadowing rule a parameter needs.
+        if let Some(ctx) = &self.self_ctx {
+            if let Some((index, field)) =
+                ctx.fields.iter().enumerate().find(|(_, f)| f.name == name)
+            {
+                let ty = field.ty;
+                let receiver = ctx.ty;
+                self.require(ty, expected, span)?;
+                return Ok(TypedExpr {
+                    kind: TypedExprKind::Field {
+                        base: Box::new(TypedExpr {
+                            kind: TypedExprKind::Var("self".to_owned()),
+                            ty: receiver,
+                            span,
+                        }),
+                        index: index as u32,
+                    },
+                    ty,
+                    span,
+                });
+            }
+        }
         let Some((interned, info)) = self.registry.objects.get_key_value(name) else {
             return Err(TypeError::UnknownName {
                 span,
@@ -685,6 +1080,17 @@ impl Checker {
         expected: Option<Type>,
     ) -> Checked<TypedExpr> {
         let base = self.expr(base, None)?;
+        // A getter is read exactly like a field, so a program reaching here for
+        // an accessor's name is not asking for a field that does not exist --
+        // it is asking for a getter, which parses and is not implemented.
+        // Saying "has no field" would send it to the wrong bucket, the way the
+        // static-argument catch-all did in M3g.
+        if self.accessors.contains(name) {
+            return Err(TypeError::AccessorUnsupported {
+                span,
+                name: name.to_owned(),
+            });
+        }
         let unknown = || TypeError::UnknownField {
             span,
             found: base.ty,
@@ -1251,15 +1657,12 @@ impl Checker {
         // `x.f(y)` is a dotted method, which the specification gives its own
         // namespace and its own shadowing rules. It is not `f(x, y)`.
         if let Expr::Field {
+            base,
             name,
             span: dot_span,
-            ..
         } = callee
         {
-            return Err(TypeError::DottedMethodUnsupported {
-                span: *dot_span,
-                name: name.clone(),
-            });
+            return self.method_call(base, name, args, span, *dot_span, expected);
         }
         let Expr::Var {
             name,
@@ -1358,6 +1761,16 @@ impl Checker {
         callee_span: Span,
         expected: Option<Type>,
     ) -> Checked<TypedExpr> {
+        // Inside a method body an unqualified call may be a method on the
+        // receiver: 1.0 lets `m()` mean `self.m()`. A top-level function of the
+        // same name wins, which is the shadowing direction the two namespaces
+        // already imply.
+        if !self.functions.contains_key(name)
+            && self.methods.contains_key(name)
+            && self.self_ctx.is_some()
+        {
+            return self.self_call(name, args, span, callee_span, expected);
+        }
         let Some(all) = self.functions.get(name) else {
             return Err(TypeError::UnknownName {
                 span: callee_span,
@@ -1430,10 +1843,11 @@ impl Checker {
             .iter()
             .copied()
             .filter(|c| {
-                c.params
-                    .iter()
-                    .zip(arguments)
-                    .all(|(p, a)| self.registry.is_subtype(*a, *p))
+                c.concrete
+                    && c.params
+                        .iter()
+                        .zip(arguments)
+                        .all(|(p, a)| self.registry.is_subtype(*a, *p))
             })
             .collect()
     }

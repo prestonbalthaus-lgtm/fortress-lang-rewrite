@@ -28,10 +28,10 @@ export CPATH=${CPATH:-$HOME/.local/opt/gc-root/usr/include}
 export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 
 # Measured 2026-08-19 at the end of M3h, not taken from the design document.
-# M3f left this at 187. M3h's bundle parses 138 more files and 18 of them go all
-# the way through, with the component-level value bindings among them refused
-# rather than counted -- see the M3h design note.
-COMPILE_FLOOR=205
+# M3f left this at 187, M3h took it to 205. M3i's dotted methods take it to 222,
+# net of six files that stop compiling because their method bodies are now
+# checked at all -- see the M3i design note.
+COMPILE_FLOOR=222
 
 passed=0
 failed=0

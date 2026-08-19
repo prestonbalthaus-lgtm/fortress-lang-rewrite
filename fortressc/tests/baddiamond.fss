@@ -1,0 +1,17 @@
+component baddiamond
+export Executable
+
+(* Two unrelated traits both default `noise`, and Cat extends both. Neither is
+   more specific, so this is M3c's ambiguity, reported by naming both. *)
+trait Loud
+  noise(): ZZ32 = 9
+end
+
+trait Quiet
+  noise(): ZZ32 = 1
+end
+
+object Cat extends {Loud, Quiet} end
+
+run(): () = do println(Cat.noise()) end
+end
