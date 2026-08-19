@@ -52,6 +52,13 @@ pub enum TypeError {
         span: Span,
         position: &'static str,
     },
+    /// Codegen's generated `main` calls `run` with no arguments, so a `run`
+    /// that declares any is a module LLVM rejects. 1.0 gives the entry point an
+    /// optional `String...` parameter; this subset does not have varargs.
+    EntryPointTakesArguments {
+        span: Span,
+        found: usize,
+    },
     ArityMismatch {
         span: Span,
         name: String,
@@ -251,6 +258,7 @@ impl TypeError {
             | Self::UnknownType { span, .. }
             | Self::TypeNotImplemented { span, .. }
             | Self::VoidNotStorable { span, .. }
+            | Self::EntryPointTakesArguments { span, .. }
             | Self::ArityMismatch { span, .. }
             | Self::LiteralOutOfRange { span, .. }
             | Self::LiteralNotApplicable { span, .. }
@@ -326,6 +334,11 @@ impl core::fmt::Display for TypeError {
             Self::VoidNotStorable { position, .. } => {
                 write!(f, "`()` has no value, so it cannot be stored in {position}")
             }
+            Self::EntryPointTakesArguments { found, .. } => write!(
+                f,
+                "`run` is the entry point and is called with no arguments, \
+                 but this one declares {found}"
+            ),
             Self::ArityMismatch {
                 name,
                 expected,

@@ -1,7 +1,18 @@
 # Fortress M3e: the unit type `()`, with syntax for tuples and arrows
 
 Date: 2026-08-19
-Status: **design, for review. Nothing implemented.**
+Status: **landed** on `m3e/unit-tuple-arrow`. Implementation plan:
+`../plans/2026-08-19-m3e-unit-tuple-arrow.md`.
+
+Every corpus number below was predicted by the pre-implementation spike and then
+hit exactly by the implementation: 298, 303, 314, 418, 428. The compile metric
+in §9 was the one prediction that was wrong -- it said the number of files
+compiling end to end would move by a small amount, and it went 52 -> 151.
+
+Two defects the milestone's own corpus sweep found and fixed, neither of them
+reachable before because the files carrying them died at the parser on `()`:
+a void-valued binding was exit 70 rather than a diagnostic, and `run(args:String)`
+built a module LLVM rejected.
 
 `()` becomes a writable type and a writable value, resolving to the `Type::Void`
 that already exists. Tuple types, tuple expressions and arrow types get a real

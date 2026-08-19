@@ -1192,3 +1192,13 @@ fn a_tuple_expression_is_refused_with_a_diagnostic() {
         other => panic!("expected TypeNotImplemented, got {other:?}"),
     }
 }
+
+#[test]
+fn an_entry_point_with_parameters_is_refused() {
+    // Codegen's generated `main` calls `run` with no arguments, so this was
+    // "LLVM rejected the generated module", exit 70, on two corpus files.
+    match type_error("component t\nrun(args: String): () = ()\nend\n") {
+        TypeError::EntryPointTakesArguments { found, .. } => assert_eq!(found, 1),
+        other => panic!("expected EntryPointTakesArguments, got {other:?}"),
+    }
+}

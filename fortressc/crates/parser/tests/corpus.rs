@@ -107,9 +107,10 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
 
     // The same ratchet. The lexer pass took this from 84 to 154 by adding
     // `import`, the headerless-file production and the tokens above it; M3d's
-    // static parameters took it to 168.
+    // static parameters took it to 168; M3e's `()` took it to 428, of which the
+    // unit type alone was 232 and tuples and arrows together were 28.
     assert!(
-        parsed >= 168,
-        "parser corpus regressed: {parsed} files parse, floor is 168"
+        parsed >= 428,
+        "parser corpus regressed: {parsed} files parse, floor is 428"
     );
 }

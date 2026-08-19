@@ -358,6 +358,15 @@ impl Checker {
                 span: component.span,
             });
         }
+        for decl in &component.decls {
+            let Decl::Function(f) = decl else { continue };
+            if f.name == "run" && !f.params.is_empty() {
+                return Err(TypeError::EntryPointTakesArguments {
+                    span: f.span,
+                    found: f.params.len(),
+                });
+            }
+        }
         self.discharge_bounds(component)?;
 
         let mut objects = Vec::new();
