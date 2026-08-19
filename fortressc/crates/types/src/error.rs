@@ -163,6 +163,16 @@ pub enum TypeError {
         span: Span,
         name: String,
     },
+    /// A functional method that takes static parameters. 1.0 lifts a
+    /// functional method into the top-level overload set of its name; a
+    /// generic one needs the receiver's type to decide what to instantiate,
+    /// and expansion runs before anything is typed. The name exists; the
+    /// lifting does not, and saying `unknown name` about it puts the file in
+    /// the wrong bucket.
+    GenericFunctionalMethodUnsupported {
+        span: Span,
+        name: String,
+    },
     /// A `getter`/`setter` member read as a field. It parses; it is not read.
     AccessorUnsupported {
         span: Span,
@@ -309,6 +319,7 @@ impl TypeError {
             | Self::DispatchTableTooLarge { span, .. }
             | Self::NotPrintable { span, .. }
             | Self::AccessorUnsupported { span, .. }
+            | Self::GenericFunctionalMethodUnsupported { span, .. }
             | Self::ValueBindingUnsupported { span, .. }
             | Self::StaticArgumentsRequired { span, .. }
             | Self::NotGeneric { span, .. }
@@ -450,6 +461,12 @@ impl core::fmt::Display for TypeError {
                 "`{name}`: a component-level value declaration is parsed but \
                  not implemented; its initializer would have to run at \
                  component initialization, and it is not a nullary function"
+            ),
+            Self::GenericFunctionalMethodUnsupported { name, .. } => write!(
+                f,
+                "`{name}` is a generic functional method; it parses, but a \
+                 static argument on one cannot be resolved before the \
+                 receiver has a type"
             ),
             Self::AccessorUnsupported { name, .. } => write!(
                 f,

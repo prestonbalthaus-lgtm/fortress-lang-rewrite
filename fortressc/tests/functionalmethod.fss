@@ -1,0 +1,35 @@
+component functionalmethod
+export Executable
+
+(* A `self` parameter makes a FUNCTIONAL method. 1.0 lifts one into the
+   TOP-LEVEL overload set of its name, so it is written `area(s)` and never
+   `s.area()`, and a top-level `area` is an ordinary member of the same set --
+   which is why every member of it has to be counted before any symbol is
+   chosen.
+
+   `self` keeps the position the source gave it. `scaled` writes it second, and
+   dispatch does not care which column holds the interesting type. *)
+trait Shape
+   area(self): ZZ32 = 0
+end
+
+object Square(side: ZZ32) extends Shape
+   area(self): ZZ32 = side side
+   scaled(k: ZZ32, self): ZZ32 = k side
+end
+
+object Circle extends Shape end
+
+area(n: ZZ32): ZZ32 = n + 100
+
+pick(n: ZZ32): Shape = if n === 0 then Square(3) else Circle end
+
+run(): () = do
+   println(area(Square(4)))
+   println(area(Circle))
+   println(area(7))
+   println(scaled(5, Square(3)))
+   println(area(pick(0)))
+   println(area(pick(1)))
+end
+end

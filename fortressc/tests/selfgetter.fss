@@ -1,13 +1,18 @@
 component selfgetter
 export Executable
 
-(* Both forms parse. Neither is checked: a getter is read as a dotted access
-   and a `self` parameter is a functional method, and dotted method dispatch is
-   not implemented. This fixture exists to pin the PARSE, which is what M3h
-   moved. *)
+(* The getter half still only parses: `size` is read as `x.size`, not called,
+   and accessors are not implemented.
+
+   The `self` half is no longer only parsed. `area(self, k: ZZ32)` is a
+   FUNCTIONAL method, lifted into the top-level overload set of `area` with the
+   receiver in the position the source wrote it. It has no body, so it is a
+   member of the set that can never be a dispatch target -- which is what makes
+   an unimplemented one fail the exactly-one-winner check rather than need a
+   rule of its own. *)
 trait Shape
-  getter size(): ZZ32
-  area(self, k: ZZ32): ZZ32
+   getter size(): ZZ32
+   area(self, k: ZZ32): ZZ32
 end
 
 run(): () = ()

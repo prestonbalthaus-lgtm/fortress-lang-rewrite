@@ -1202,3 +1202,56 @@ fn an_entry_point_with_parameters_is_refused() {
         other => panic!("expected EntryPointTakesArguments, got {other:?}"),
     }
 }
+
+// ------------------------------- M3j: functional and generic methods
+
+/// The name exists; the lifting does not. `unknown name` about a declaration
+/// written three lines up sends the file into the wrong blocker bucket, which
+/// is how milestones get chosen off the wrong histogram.
+#[test]
+fn a_generic_functional_method_is_refused_by_its_own_name() {
+    let source = "component t\n\
+                  object O\n  foo[\\T\\](self, x: T): T = x\nend\n\
+                  run(): () = do println(foo[\\ZZ32\\](O, 17)) end\n\
+                  end\n";
+    match type_error(source) {
+        TypeError::GenericFunctionalMethodUnsupported { name, .. } => assert_eq!(name, "foo"),
+        other => panic!("expected GenericFunctionalMethodUnsupported, got {other:?}"),
+    }
+}
+
+/// A functional method and a top-level declaration of the same name are ONE
+/// overload set, so declaring the same signature twice is a duplicate rather
+/// than two namespaces quietly holding one each.
+#[test]
+fn a_functional_method_collides_with_an_identical_top_level_declaration() {
+    let source = "component t\n\
+                  object O\n  f(self): ZZ32 = 1\nend\n\
+                  f(x: O): ZZ32 = 2\n\
+                  run(): () = ()\n\
+                  end\n";
+    match type_error(source) {
+        TypeError::DuplicateDefinition { name, .. } => assert_eq!(name, "f"),
+        other => panic!("expected DuplicateDefinition, got {other:?}"),
+    }
+}
+
+/// `self` is lifted where it was written. A declaration that puts it second is
+/// a different signature from one that puts it first, and both are members of
+/// the same set.
+#[test]
+fn a_functional_method_keeps_the_position_self_was_written_in() {
+    let source = "component t\n\
+                  object O\n  f(k: ZZ32, self): ZZ32 = k\nend\n\
+                  run(): () = do println(f(2, O)) end\n\
+                  end\n";
+    let c = typed(source);
+    assert!(
+        c.functions.iter().any(|f| f.name == "O$f$f"),
+        "self written second must lift to (ZZ32, O): {:?}",
+        c.functions
+            .iter()
+            .map(|f| f.name.clone())
+            .collect::<Vec<_>>()
+    );
+}

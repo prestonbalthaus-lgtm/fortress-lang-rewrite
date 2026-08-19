@@ -852,3 +852,35 @@ fn each_instantiation_of_a_method_gets_its_own_symbol() {
         "the String cell needs its own method returning ptr:\n{ir}"
     );
 }
+
+/// A `self` parameter lifts a member into the TOP-LEVEL overload set of its
+/// name, alongside a real top-level declaration of it. Six numbers, and each
+/// one is a different rule: the override, the inherited default, the top-level
+/// member of the same set, `self` written second, and dispatch deciding on the
+/// run-time type twice.
+#[test]
+fn a_functional_method_joins_the_top_level_overload_set() {
+    let binary = compile_fixture("functionalmethod.fss", "functionalmethod");
+    let out = run(&binary);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "16\n0\n107\n15\n9\n0\n"
+    );
+    assert_eq!(out.status.code(), Some(0));
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// The symbol rule. A functional method is owner qualified and never bare,
+/// because the set it joins may already hold a real top-level `area`; and the
+/// overload count has to span both kinds or two members take one symbol.
+#[test]
+fn a_functional_method_symbol_is_owner_qualified() {
+    let ir = emit_ir("functionalmethod.fss");
+    for symbol in [
+        r#"@"Square$f$area$Square""#,
+        r#"@"Shape$f$area$Shape""#,
+        r#"@"area$zz32""#,
+    ] {
+        assert!(ir.contains(symbol), "missing {symbol}:\n{ir}");
+    }
+}

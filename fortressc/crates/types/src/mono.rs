@@ -13,7 +13,7 @@
 //! demand a syntactic property of the source, which is what lets this run before
 //! anything is typed.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use fortress_ast::{
     Assign, BlockItem, BoundObligation, Component, Decl, Expr, FieldDecl, FnDecl, Member,
@@ -76,6 +76,10 @@ struct Expander<'a> {
     queue: VecDeque<Job>,
     obligations: Vec<BoundObligation>,
     demand: Vec<Job>,
+    /// Names of functional methods that take static parameters. They are not
+    /// lifted, and this pass is the only one that sees `f[\ZZ32\](o, x)`
+    /// before the checker, so it reports the mechanism or nothing does.
+    generic_functional: BTreeSet<String>,
 }
 
 impl<'a> Expander<'a> {
@@ -91,12 +95,25 @@ impl<'a> Expander<'a> {
                 .push(decl);
         }
         check_uniformity(component)?;
+        let mut generic_functional = BTreeSet::new();
+        for decl in &component.decls {
+            for member in members_of(decl) {
+                let Member::Method(m) = member else { continue };
+                if m.accessor || m.static_params.is_empty() {
+                    continue;
+                }
+                if m.params.iter().any(|p| p.name == "self") {
+                    generic_functional.insert(m.name.clone());
+                }
+            }
+        }
         Ok(Self {
             generics,
             instances: Instances::new(),
             queue: VecDeque::new(),
             obligations: Vec::new(),
             demand: Vec::new(),
+            generic_functional,
         })
     }
 
@@ -475,6 +492,12 @@ impl<'a> Expander<'a> {
                     });
                 };
                 if !self.generics.contains_key(name) {
+                    if self.generic_functional.contains(name) {
+                        return Err(TypeError::GenericFunctionalMethodUnsupported {
+                            span: *span,
+                            name: name.clone(),
+                        });
+                    }
                     return Err(TypeError::NotGeneric {
                         span: *span,
                         name: name.clone(),
@@ -666,6 +689,14 @@ fn check_uniformity(component: &Component) -> Result<(), TypeError> {
         }
     }
     Ok(())
+}
+
+fn members_of(decl: &Decl) -> &[Member] {
+    match decl {
+        Decl::Trait(t) => &t.members,
+        Decl::Object(o) => &o.members,
+        Decl::Function(_) => &[],
+    }
 }
 
 fn static_params(decl: &Decl) -> &[StaticParam] {
