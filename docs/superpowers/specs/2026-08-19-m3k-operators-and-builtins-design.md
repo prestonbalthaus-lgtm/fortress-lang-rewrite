@@ -1,13 +1,12 @@
 # Fortress M3k: primitive operators and builtins
 
 Date: 2026-08-19
-Status: **landed** on `m3k/operators-and-builtins`, seven commits, not pushed.
+Status: **landed** on `m3k/operators-and-builtins`, nine commits, not pushed.
 Named as next by the M3j note, where `compiler_tests/Compiled17.fss` stopped at
 `unknown name AND`.
 
 Compile **242 -> 262** of 1956. Parse **614 -> 625**. **Zero regressions at
-every step** -- no file that compiled before this milestone fails after it,
-which is the first milestone since M3f that can say so.
+every step**: no file that compiled before this milestone fails after it.
 
 Baseline measured on the M3j merge, not taken from a document: 1956 files,
 242 exit 0, 1714 exit 1, 0 anything else.
@@ -107,7 +106,15 @@ what a block statement already does, so it needs no target and no shim.
 
 `assert` lands in the four shapes the corpus writes: a flag, a flag with a
 message, two values, two values with a message. The two-argument forms are told
-apart by the second argument's type. It becomes an `if`, a call to a halt shim,
+apart by the second argument's **type**.
+
+That was wrong in the first version, which asked whether the second argument
+was a string **literal**. `tests/intPrim.fss:16` writes the legacy library's
+own idiom -- `tst(s: String, a: Boolean) = assert(a, s)` -- where the message
+arrives as a String *variable*, so it took the equality branch and reported the
+message as a Boolean it was not. A wrong-mechanism diagnostic on the library's
+own shape, and invisible in the metric because that file blocks on accessors
+first. `tests/builtins.fss` now carries the variable-message form. It becomes an `if`, a call to a halt shim,
 and nothing else -- so **an assert is exactly as strong as `=` is and no
 stronger**, and `assert("a", "b")` is refused by name rather than quietly
 accepted. A failed assert halts with a diagnostic and exit 1.

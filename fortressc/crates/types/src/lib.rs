@@ -2869,11 +2869,11 @@ impl Checker {
     /// ```
     ///
     /// The two two-argument forms are told apart by the SECOND argument's
-    /// type, which is decidable: a message is a String, and comparing a value
-    /// against a String is the equality form only when the first is a String
-    /// too. `assert(s1, s2)` on two Strings is therefore the flag form's shape
-    /// but the equality form's meaning, and String equality is not implemented,
-    /// so it is refused rather than quietly read as a message.
+    /// type. A message is a String, so a Boolean first argument followed by a
+    /// String is the flag-and-message form and anything else is the equality
+    /// form. `assert(s1, s2)` on two Strings is the equality form, and String
+    /// equality is not implemented, so it is refused by name rather than
+    /// quietly read as a message.
     ///
     /// It becomes an `if`, a call to the halt shim, and nothing else. The
     /// comparison is the `Target::Compare` the language already has, so an
@@ -2883,13 +2883,26 @@ impl Checker {
             [flag] => (self.assert_flag(flag, span)?, None),
             [flag, second] => {
                 let first = self.expr(flag, None)?;
-                if first.ty == Type::Boolean && !is_string_literal(second) {
-                    // `assert(flag, otherFlag)` is the equality form.
-                    let right = self.expr(second, Some(Type::Boolean))?;
-                    (self.assert_equal(first, right, span)?, None)
-                } else if first.ty == Type::Boolean {
-                    (first, Some(self.expr(second, Some(Type::String))?))
+                if first.ty == Type::Boolean {
+                    // Told apart by the second argument's TYPE, not by whether
+                    // it is a string LITERAL. `tst(s: String, a: Boolean) =
+                    // assert(a, s)` is the legacy library's own idiom --
+                    // `tests/intPrim.fss:16` -- and asking for a literal sent
+                    // it into the equality form, where the message was
+                    // reported as a Boolean that was not one.
+                    //
+                    // It takes no hint, because there is nothing to hint at
+                    // yet: which form this is has not been decided.
+                    let right = self.expr(second, None)?;
+                    if right.ty == Type::String {
+                        (first, Some(right))
+                    } else {
+                        (self.assert_equal(first, right, span)?, None)
+                    }
                 } else {
+                    // Not a flag, so this is the equality form and the second
+                    // operand takes the first's type -- which is what pins a
+                    // bare literal in `assert(x, 17)`.
                     let right = self.expr(second, Some(first.ty))?;
                     (self.assert_equal(first, right, span)?, None)
                 }
@@ -3132,10 +3145,6 @@ impl Checker {
             span,
         })
     }
-}
-
-const fn is_string_literal(e: &Expr) -> bool {
-    matches!(e, Expr::StrLit { .. })
 }
 
 const fn is_int_literal(e: &Expr) -> bool {

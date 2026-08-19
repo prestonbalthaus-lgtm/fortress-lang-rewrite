@@ -9,6 +9,12 @@ side(): ZZ32 = do
    7
 end
 
+(* The legacy library's own idiom -- tests/intPrim.fss:16 writes exactly this.
+   The message reaches `assert` as a String VARIABLE, so telling the two
+   two-argument forms apart by whether the second is a string LITERAL sent it
+   into the equality form and reported the message as a Boolean it was not. *)
+flagged(a: Boolean, s: String): () = assert(a, s)
+
 run(): () = do
    print("a")
    print("b")
@@ -20,6 +26,7 @@ run(): () = do
    assert(1 < 2, "one is less than two")
    assert(3, 3)
    assert(2 + 2, 4, "arithmetic still works")
+   flagged(1 < 2, "the message is a variable, not a literal")
    println("done")
 end
 end
