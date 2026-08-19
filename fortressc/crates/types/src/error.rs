@@ -33,6 +33,20 @@ pub enum TypeError {
     },
     /// Numeric juxtaposition or arithmetic across two different numeric types.
     /// Separate from `Mismatch` because neither side is "the required" one.
+    /// An operand of `AND`, `OR` or `NOT` that is not Boolean. Named after the
+    /// operator rather than reported as an `if` whose condition is wrong, which
+    /// is what desugaring in the parser would have produced.
+    LogicalOperandNotBoolean {
+        span: Span,
+        op: &'static str,
+        found: Type,
+    },
+    /// `<`, `>`, `<=`, `>=` on Boolean. Equality is defined on Boolean;
+    /// ordering is not, and inventing one would be a silently wrong answer.
+    BooleanNotOrdered {
+        span: Span,
+        op: &'static str,
+    },
     MixedNumericOperands {
         span: Span,
         left: Type,
@@ -285,6 +299,8 @@ impl TypeError {
             | Self::UnresolvableJuxtaposition { span, .. }
             | Self::JuxtapositionNotBinary { span, .. }
             | Self::MixedNumericOperands { span, .. }
+            | Self::LogicalOperandNotBoolean { span, .. }
+            | Self::BooleanNotOrdered { span, .. }
             | Self::UnknownName { span, .. }
             | Self::UnknownType { span, .. }
             | Self::TypeNotImplemented { span, .. }
@@ -358,6 +374,15 @@ impl core::fmt::Display for TypeError {
                 f,
                 "a juxtaposition of {found} elements led by a function is not implemented; \
                  parenthesise the application"
+            ),
+            Self::LogicalOperandNotBoolean { op, found, .. } => write!(
+                f,
+                "`{op}` takes Boolean operands; this one is {}",
+                found.name()
+            ),
+            Self::BooleanNotOrdered { op, .. } => write!(
+                f,
+                "`{op}` is not defined on Boolean; equality is, ordering is not"
             ),
             Self::MixedNumericOperands { left, right, .. } => write!(
                 f,

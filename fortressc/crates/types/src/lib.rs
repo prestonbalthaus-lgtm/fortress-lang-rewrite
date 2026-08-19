@@ -270,6 +270,24 @@ fn live(signature: &Signature, arity: usize) -> bool {
     !signature.pruned && signature.params.len() == arity
 }
 
+/// The operator as the source wrote it, for diagnostics.
+const fn op_name(op: BinOp) -> &'static str {
+    match op {
+        BinOp::Add => "+",
+        BinOp::Sub => "-",
+        BinOp::Mul => "*",
+        BinOp::Div => "/",
+        BinOp::Lt => "<",
+        BinOp::Gt => ">",
+        BinOp::Le => "<=",
+        BinOp::Ge => ">=",
+        BinOp::Eq => "=",
+        BinOp::Ne => "=/=",
+        BinOp::And => "AND",
+        BinOp::Or => "OR",
+    }
+}
+
 fn cartesian(domain: &[Vec<Type>]) -> Vec<Vec<Type>> {
     let mut rows: Vec<Vec<Type>> = vec![Vec::new()];
     for column in domain {
@@ -1686,6 +1704,9 @@ impl Checker {
         span: Span,
         expected: Option<Type>,
     ) -> Checked<TypedExpr> {
+        if op == UnOp::Not {
+            return self.negation(operand, span, expected);
+        }
         let inner = self.expr(operand, expected)?;
         if !inner.ty.is_numeric() {
             return Err(TypeError::Mismatch {
@@ -1710,7 +1731,119 @@ impl Checker {
                 ty,
                 span,
             }),
+            // Routed above, before the operand is checked against a numeric
+            // type it was never going to have.
+            UnOp::Not => Err(TypeError::LogicalOperandNotBoolean {
+                span,
+                op: "NOT",
+                found: ty,
+            }),
         }
+    }
+
+    /// `NOT b`. One `xor` and no branch: `NOT` does not short circuit, and
+    /// three basic blocks for one instruction is worse code at `-O0`, which is
+    /// where this project checks its claims.
+    fn negation(
+        &mut self,
+        operand: &Expr,
+        span: Span,
+        expected: Option<Type>,
+    ) -> Checked<TypedExpr> {
+        let inner = self
+            .expr(operand, Some(Type::Boolean))
+            .map_err(|e| match e {
+                TypeError::Mismatch { span, found, .. }
+                | TypeError::LiteralNotApplicable {
+                    span,
+                    required: found,
+                } => TypeError::LogicalOperandNotBoolean {
+                    span,
+                    op: "NOT",
+                    found,
+                },
+                other => other,
+            })?;
+        if inner.ty != Type::Boolean {
+            return Err(TypeError::LogicalOperandNotBoolean {
+                span,
+                op: "NOT",
+                found: inner.ty,
+            });
+        }
+        self.require(Type::Boolean, expected, span)?;
+        Ok(TypedExpr {
+            kind: TypedExprKind::Apply {
+                target: Target::Not,
+                args: vec![inner],
+            },
+            ty: Type::Boolean,
+            span,
+        })
+    }
+
+    /// `a AND b` and `a OR b`, which SHORT CIRCUIT.
+    ///
+    /// The construct that already emits a conditional branch, two blocks and a
+    /// phi is `If`, so that is what these become -- after both operands are
+    /// checked as Boolean, so the diagnostic names the operator instead of
+    /// talking about an `if` the user did not write. Desugaring in the parser
+    /// would have been cheaper and would have reported the wrong mechanism.
+    fn logical(
+        &mut self,
+        op: BinOp,
+        lhs: &Expr,
+        rhs: &Expr,
+        span: Span,
+        expected: Option<Type>,
+    ) -> Checked<TypedExpr> {
+        let name = if op == BinOp::And { "AND" } else { "OR" };
+        let operand = |checker: &mut Self, e: &Expr| -> Checked<TypedExpr> {
+            let typed = checker
+                .expr(e, Some(Type::Boolean))
+                .map_err(|err| match err {
+                    TypeError::Mismatch { span, found, .. }
+                    | TypeError::LiteralNotApplicable {
+                        span,
+                        required: found,
+                    } => TypeError::LogicalOperandNotBoolean {
+                        span,
+                        op: name,
+                        found,
+                    },
+                    other => other,
+                })?;
+            if typed.ty == Type::Boolean {
+                return Ok(typed);
+            }
+            Err(TypeError::LogicalOperandNotBoolean {
+                span: typed.span,
+                op: name,
+                found: typed.ty,
+            })
+        };
+        let left = operand(self, lhs)?;
+        let right = operand(self, rhs)?;
+        let constant = |value: bool| TypedExpr {
+            kind: TypedExprKind::BoolConst(value),
+            ty: Type::Boolean,
+            span,
+        };
+        let (then_branch, else_branch) = if op == BinOp::And {
+            (right, constant(false))
+        } else {
+            (constant(true), right)
+        };
+        self.require(Type::Boolean, expected, span)?;
+        Ok(TypedExpr {
+            kind: TypedExprKind::If {
+                cond: Box::new(left),
+                then_branch: Box::new(then_branch),
+                else_branch: Some(Box::new(else_branch)),
+            },
+            ty: Type::Boolean,
+            span,
+        })
     }
 
     fn infix(
@@ -1721,6 +1854,9 @@ impl Checker {
         span: Span,
         expected: Option<Type>,
     ) -> Checked<TypedExpr> {
+        if matches!(op, BinOp::And | BinOp::Or) {
+            return self.logical(op, lhs, rhs, span, expected);
+        }
         let comparison = matches!(
             op,
             BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge | BinOp::Eq | BinOp::Ne
@@ -1748,7 +1884,17 @@ impl Checker {
                 right: right.ty,
             });
         }
-        if !left.ty.is_numeric() {
+        // Equality is defined on Boolean and is the same `icmp` the numeric
+        // path emits. Ordering is not defined on it, and inventing one would
+        // be a silently wrong answer rather than a missing feature.
+        if left.ty == Type::Boolean {
+            if !matches!(op, BinOp::Eq | BinOp::Ne) {
+                return Err(TypeError::BooleanNotOrdered {
+                    span,
+                    op: op_name(op),
+                });
+            }
+        } else if !left.ty.is_numeric() {
             return Err(TypeError::Mismatch {
                 span,
                 found: left.ty,
@@ -1827,6 +1973,14 @@ impl Checker {
                 },
                 Type::Boolean,
             ),
+            // Routed above, before either operand is checked.
+            BinOp::And | BinOp::Or => {
+                return Err(TypeError::LogicalOperandNotBoolean {
+                    span,
+                    op: op_name(op),
+                    found: left.ty,
+                })
+            }
         };
         self.require(ty, expected, span)?;
         Ok(TypedExpr {

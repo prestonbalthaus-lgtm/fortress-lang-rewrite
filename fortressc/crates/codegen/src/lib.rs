@@ -958,6 +958,16 @@ impl<'ctx> Lowering<'ctx> {
                 };
                 Ok(Some(out))
             }
+            // One `xor` against the i1 constant, which is what `build_not`
+            // emits. Nothing branches: `NOT` has no operand it can skip.
+            Target::Not => {
+                let value = self.one(args)?;
+                let out = self
+                    .builder
+                    .build_not(value.into_int_value(), "not")
+                    .map_err(CodegenError::from_builder)?;
+                Ok(Some(out.into()))
+            }
             Target::Widen { .. } => {
                 let value = self.one(args)?;
                 let out = self

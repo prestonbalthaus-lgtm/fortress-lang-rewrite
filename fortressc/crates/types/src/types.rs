@@ -282,6 +282,9 @@ pub enum Target {
     Negate {
         ty: Type,
     },
+    /// `NOT`. One `xor` on an `i1`, and no branch: negation does not short
+    /// circuit, so it needs none.
+    Not,
     /// `widen`, the only numeric conversion, and it is never inserted implicitly.
     Widen {
         from: Type,
@@ -329,6 +332,7 @@ impl Target {
             Self::Arith { op, ty } => format!("{}_{}_{}", op.symbol(), ty.symbol(), ty.symbol()),
             Self::Compare { op, ty } => format!("{}_{}_{}", op.symbol(), ty.symbol(), ty.symbol()),
             Self::Negate { ty } => format!("neg_{}", ty.symbol()),
+            Self::Not => "not_boolean".to_owned(),
             Self::Widen { from, to } => format!("widen_{}_{}", from.symbol(), to.symbol()),
             Self::ToString { from } => format!("to_string_{}", from.symbol()),
             Self::Concat => "concat_string_string".to_owned(),

@@ -790,7 +790,45 @@ impl<'t, 'a> Parser<'t, 'a> {
     // --------------------------------------------------------- expressions
 
     fn expr(&mut self) -> Parsed<Expr> {
-        self.comparison()
+        self.disjunction()
+    }
+
+    /// `a OR b`, left associative, and below every conjunction --
+    /// `appendices/operators.tex:840-851`.
+    fn disjunction(&mut self) -> Parsed<Expr> {
+        let mut lhs = self.conjunction()?;
+        while self.at_word_op("OR") {
+            self.pos += 1;
+            self.skip_newlines();
+            let rhs = self.conjunction()?;
+            lhs = infix(BinOp::Or, Fixity::Loose, lhs, rhs);
+        }
+        Ok(lhs)
+    }
+
+    /// `a AND b`, left associative, and below every relational operator --
+    /// which is what puts `comparison` underneath it and makes
+    /// `a = 3 AND b = 8` mean `(a = 3) AND (b = 8)`.
+    fn conjunction(&mut self) -> Parsed<Expr> {
+        let mut lhs = self.comparison()?;
+        while self.at_word_op("AND") {
+            self.pos += 1;
+            self.skip_newlines();
+            let rhs = self.comparison()?;
+            lhs = infix(BinOp::And, Fixity::Loose, lhs, rhs);
+        }
+        Ok(lhs)
+    }
+
+    /// A word operator is an all-capitals identifier the parser reads as an
+    /// operator rather than as a name.
+    ///
+    /// Its shape is NEVER read from `fixity_at`. A word operator cannot be
+    /// glued on its left -- the lexer would have merged the letters into one
+    /// identifier -- so `a AND (b)` reads as `Prefix` and the operator would be
+    /// left unconsumed, turning a correct program into a parse error.
+    fn at_word_op(&self, word: &str) -> bool {
+        matches!(self.peek_kind(), Some(Kind::Ident(name)) if *name == word)
     }
 
     /// Comparison operators chain. One operator is left exactly as it was: no
@@ -841,8 +879,11 @@ impl<'t, 'a> Parser<'t, 'a> {
 
     /// `a < b < c` becomes a block of one binding per operand and a nested
     /// `if`. The bindings are what the specification's "evaluated only once"
-    /// requires, and the nested `if` is the conjunction: this subset has no
-    /// `AND`, and does not gain one here.
+    /// requires, and the nested `if` is the conjunction.
+    ///
+    /// M3k gave the subset a real `AND`, and this still does not use it: the
+    /// nested `if` IS what `AND` desugars to, so routing the chain through it
+    /// would add a node and change nothing.
     fn desugar_chain(&mut self, operands: &[Expr], ops: &[(BinOp, Fixity, Span)]) -> Parsed<Expr> {
         let start = operands.first().map_or(0, |e| e.span().start);
         let end = operands.last().map_or(0, |e| e.span().end);
@@ -972,6 +1013,14 @@ impl<'t, 'a> Parser<'t, 'a> {
     }
 
     fn starts_juxt_operand(&self) -> bool {
+        // A word operator is an identifier to the lexer, so without this the
+        // juxtaposition run swallows `AND` and the layer above never sees it.
+        // `NOT` is left in: it does start an operand, and `a NOT b` then fails
+        // as the multiplication of `a` by a Boolean rather than as a name that
+        // does not exist.
+        if self.at_word_op("AND") || self.at_word_op("OR") {
+            return false;
+        }
         match self.peek_kind() {
             Some(
                 Kind::IntLit { .. }
@@ -993,6 +1042,20 @@ impl<'t, 'a> Parser<'t, 'a> {
     }
 
     fn unary(&mut self) -> Parsed<Expr> {
+        // `NOT` is a prefix operator, and 1.0 puts prefix operators above every
+        // infix operator, so `NOT a AND b` is `(NOT a) AND b`.
+        if self.at_word_op("NOT") {
+            let span = self.span_here();
+            self.pos += 1;
+            self.skip_newlines();
+            let operand = self.unary()?;
+            let full = Span::new(span.start, operand.span().end);
+            return Ok(Expr::Prefix {
+                op: UnOp::Not,
+                operand: Box::new(operand),
+                span: full,
+            });
+        }
         let prefix = match self.peek_kind() {
             Some(Kind::Minus) => Some(UnOp::Neg),
             Some(Kind::Plus) => Some(UnOp::Pos),
@@ -1475,6 +1538,8 @@ const fn op_text(op: BinOp) -> &'static str {
         BinOp::Sub => "-",
         BinOp::Mul => "*",
         BinOp::Div => "/",
+        BinOp::And => "AND",
+        BinOp::Or => "OR",
     }
 }
 
