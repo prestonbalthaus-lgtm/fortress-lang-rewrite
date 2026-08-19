@@ -535,3 +535,54 @@ fn two_or_more_types_in_parentheses_are_a_tuple() {
         other => panic!("expected a tuple type, got {other:?}"),
     }
 }
+
+/// The parse error from a whole declaration, for grammar cases that cannot be
+/// expressed as a bare expression.
+fn decl_error(decl: &str) -> ParseError {
+    let src = format!("component t\n{decl}\nend\n");
+    let tokens = fortress_lexer::lex(&src).unwrap_or_else(|e| panic!("lex failed: {e}"));
+    match parse(&tokens) {
+        Ok(_) => panic!("expected {decl:?} to fail to parse"),
+        Err(e) => e,
+    }
+}
+
+#[test]
+fn a_glued_minus_greater_is_an_arrow_type() {
+    match return_type("f(): ZZ32 -> String = 1") {
+        TypeRef::Arrow { from, to, .. } => {
+            assert_eq!(from.written(), "ZZ32");
+            assert_eq!(to.written(), "String");
+        }
+        other => panic!("expected an arrow type, got {other:?}"),
+    }
+}
+
+#[test]
+fn arrow_types_are_right_associative() {
+    assert_eq!(
+        return_type("f(): ZZ32 -> String -> Boolean = 1").written(),
+        "ZZ32 -> String -> Boolean"
+    );
+    match return_type("f(): ZZ32 -> String -> Boolean = 1") {
+        TypeRef::Arrow { to, .. } => match *to {
+            TypeRef::Arrow { .. } => {}
+            other => panic!("expected the right side to be the nested arrow, got {other:?}"),
+        },
+        other => panic!("expected an arrow type, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_spaced_minus_greater_is_not_an_arrow() {
+    let e = decl_error("f(): ZZ32 - > String = 1");
+    assert!(matches!(e, ParseError::UnexpectedToken { .. }), "got {e:?}");
+}
+
+#[test]
+fn an_arrow_may_appear_inside_parentheses() {
+    match return_type("f(): (ZZ32 -> String) = 1") {
+        TypeRef::Arrow { .. } => {}
+        other => panic!("expected an arrow type, got {other:?}"),
+    }
+}

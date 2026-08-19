@@ -573,7 +573,31 @@ impl<'t, 'a> Parser<'t, 'a> {
         Ok(params)
     }
 
+    /// `A -> B`, right associative. `->` is not a token: it is `Minus` glued to
+    /// `Gt`, decided by span adjacency the same way operator fixity is, so the
+    /// lexer does not have to learn a token that would change how every `->` in
+    /// the corpus lexes.
     fn type_ref(&mut self) -> Parsed<TypeRef> {
+        let from = self.type_atom()?;
+        if !(self.at(&Kind::Minus)
+            && self.glued_right(self.pos)
+            && matches!(self.peek_ahead(1), Some(Kind::Gt)))
+        {
+            return Ok(from);
+        }
+        let start = from.span().start;
+        self.pos += 2;
+        self.skip_newlines();
+        let to = self.type_ref()?;
+        let end = to.span().end;
+        Ok(TypeRef::Arrow {
+            from: Box::new(from),
+            to: Box::new(to),
+            span: Span::new(start, end),
+        })
+    }
+
+    fn type_atom(&mut self) -> Parsed<TypeRef> {
         if self.at(&Kind::LParen) {
             let start = self.expect(&Kind::LParen, "`(`")?.span.start;
             self.skip_newlines();
