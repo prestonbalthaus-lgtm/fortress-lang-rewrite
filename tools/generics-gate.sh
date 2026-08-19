@@ -93,7 +93,7 @@ preflight() {
 compile() {
     printf '== compile ==\n'
     local name
-    for name in generics genericdispatch; do
+    for name in generics genericdispatch genericoverload; do
         if "$fortressc" "$repo/fortressc/tests/$name.fss" -o "$build/$name" 2>"$build/$name.err"; then
             ok "$name.fss compiles and links"
         else
@@ -235,12 +235,50 @@ refusals() {
     done
 }
 
+# A generic overload set has more than one member, and instantiating it must
+# produce a ground overload set of the same size. The expander keyed its
+# template map by name alone, so all but one member was dropped, and its
+# emission loop matched instances by name alone, so the survivor was emitted
+# once per source declaration -- which the checker reported as
+# `tag$Red$e is defined twice`. Both halves are asserted: the program runs, and
+# the IR carries one definition per member per static argument.
+overload_set() {
+    printf '== a generic overload set instantiates to a ground overload set ==\n'
+    have "$build/genericoverload" 'a generic overload set keeps every member' || return
+
+    local out want
+    out=$("$build/genericoverload" 2>&1)
+    want=$(printf '1\n2\n1\n')
+    if [[ $out == "$want" ]]; then
+        ok "each member keeps its own body: $(printf '%s' "$out" | tr '\n' ' ')"
+    else
+        bad 'a generic overload set keeps every member' \
+            "want: $(printf '%s' "$want" | tr '\n' ' ') | got: $(printf '%s' "$out" | tr '\n' ' ')"
+    fi
+
+    local ir members
+    if ! ir=$("$fortressc" "$repo/fortressc/tests/genericoverload.fss" --emit-ir 2>/dev/null); then
+        bad 'the overload program emits IR'
+        return
+    fi
+    # Two members at two static arguments is four definitions. Counting them is
+    # the assertion: dropping a member and double-emitting one both move it.
+    members=$(printf '%s' "$ir" | grep -c 'define .*@"tag[$]')
+    if [[ $members -eq 4 ]]; then
+        ok "two members at two static arguments emit $members definitions"
+    else
+        bad 'two members at two static arguments emit 4 definitions' "found $members"
+    fi
+}
+
 # --------------------------------------------------------------- mutations
 
 MUTATIONS=(
   'crates/types/src/mono.rs|for instance in self.instances.values() {|for instance in self.instances.values().rev() {|emit instantiations in reverse name order'
   'crates/types/src/mono.rs|check_uniformity(component)?;|let _ = check_uniformity(component);|stop enforcing the uniformity rule'
   'crates/types/src/lib.rs|self.discharge_bounds(component)?;|let _ = self.discharge_bounds(component);|stop discharging bound obligations'
+  'crates/types/src/mono.rs|if instance.origin == name && instance.member == member {|if instance.origin == name {|emit every instance once per source declaration of its name'
+  'crates/types/src/mono.rs|for (member, template) in templates.iter().enumerate() {|for (member, template) in templates.iter().enumerate().take(1) {|instantiate only the first member of an overload set'
 )
 
 mutate() {
@@ -277,6 +315,7 @@ PY
             passed=0; failed=0
             compile >/dev/null 2>&1
             stamping >/dev/null 2>&1
+            overload_set
             ordering
             determinism
             refusals
@@ -313,6 +352,7 @@ case "${1:-}" in
         preflight
         compile
         stamping
+        overload_set
         unboxing
         dispatching
         ordering
