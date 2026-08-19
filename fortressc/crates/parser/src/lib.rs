@@ -979,6 +979,20 @@ impl<'t, 'a> Parser<'t, 'a> {
                 }
                 let inner = self.expr()?;
                 self.skip_newlines();
+                if self.at(&Kind::Comma) {
+                    let mut items = vec![inner];
+                    while self.at(&Kind::Comma) {
+                        self.pos += 1;
+                        self.skip_newlines();
+                        items.push(self.expr()?);
+                        self.skip_newlines();
+                    }
+                    let close = self.expect(&Kind::RParen, "`)`")?.span;
+                    return Ok(Expr::Tuple {
+                        items,
+                        span: Span::new(span.start, close.end),
+                    });
+                }
                 self.expect(&Kind::RParen, "`)`")?;
                 Ok(inner)
             }

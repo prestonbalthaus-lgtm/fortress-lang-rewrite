@@ -227,6 +227,11 @@ pub enum Expr {
     Unit {
         span: Span,
     },
+    /// `(a, b)`. Two or more, by construction.
+    Tuple {
+        items: Vec<Expr>,
+        span: Span,
+    },
     /// Digits with group separators already removed. Arbitrary precision at
     /// this stage: the types crate decides `ZZ32` versus `ZZ64`.
     IntLit {
@@ -353,6 +358,7 @@ impl Expr {
     pub const fn span(&self) -> Span {
         match self {
             Self::Unit { span }
+            | Self::Tuple { span, .. }
             | Self::IntLit { span, .. }
             | Self::FloatLit { span, .. }
             | Self::StrLit { span, .. }

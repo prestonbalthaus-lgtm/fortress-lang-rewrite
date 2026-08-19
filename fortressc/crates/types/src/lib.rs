@@ -556,6 +556,10 @@ impl Checker {
                     span: *span,
                 })
             }
+            Expr::Tuple { span, .. } => Err(TypeError::TypeNotImplemented {
+                span: *span,
+                form: "a tuple expression",
+            }),
             Expr::IntLit { digits, span } => self.int_literal(digits, *span, expected),
             Expr::FloatLit {
                 int_digits,

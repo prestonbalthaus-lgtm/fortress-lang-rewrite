@@ -586,3 +586,19 @@ fn an_arrow_may_appear_inside_parentheses() {
         other => panic!("expected an arrow type, got {other:?}"),
     }
 }
+
+#[test]
+fn a_comma_separated_parenthesised_expression_is_a_tuple() {
+    match expr("(1, 2)") {
+        Expr::Tuple { items, .. } => assert_eq!(items.len(), 2),
+        other => panic!("expected a tuple expression, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_single_parenthesised_expression_is_not_a_tuple() {
+    assert!(
+        !matches!(expr("(1)"), Expr::Tuple { .. }),
+        "a one-element parenthesised expression is not a tuple"
+    );
+}

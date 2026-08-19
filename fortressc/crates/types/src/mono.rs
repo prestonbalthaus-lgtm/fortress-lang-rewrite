@@ -485,6 +485,12 @@ impl<'a> Expander<'a> {
                 items: self.exprs(items, subst)?,
                 span: *span,
             },
+            // Refused by the checker, but expansion runs first and its elements
+            // can still name a static parameter.
+            Expr::Tuple { items, span } => Expr::Tuple {
+                items: self.exprs(items, subst)?,
+                span: *span,
+            },
             Expr::Index { base, index, span } => Expr::Index {
                 base: Box::new(self.expr(base, subst)?),
                 index: Box::new(self.expr(index, subst)?),

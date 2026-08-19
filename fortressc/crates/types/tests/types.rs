@@ -1184,3 +1184,11 @@ fn a_unit_binding_is_refused() {
         other => panic!("expected VoidNotStorable, got {other:?}"),
     }
 }
+
+#[test]
+fn a_tuple_expression_is_refused_with_a_diagnostic() {
+    match body_error("f(): ZZ32 = do\n  x = (1, 2)\n  0\nend") {
+        TypeError::TypeNotImplemented { form, .. } => assert_eq!(form, "a tuple expression"),
+        other => panic!("expected TypeNotImplemented, got {other:?}"),
+    }
+}
