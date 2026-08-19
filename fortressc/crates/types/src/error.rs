@@ -44,6 +44,14 @@ pub enum TypeError {
         span: Span,
         form: &'static str,
     },
+    /// `Type::Void` has no representation -- `basic_type` maps it to `None` --
+    /// so a position that has to store a value cannot hold one. Reaching
+    /// codegen with one is malformed IR, which is exit 70 rather than a
+    /// diagnostic, so it is refused here.
+    VoidNotStorable {
+        span: Span,
+        position: &'static str,
+    },
     ArityMismatch {
         span: Span,
         name: String,
@@ -242,6 +250,7 @@ impl TypeError {
             | Self::UnknownName { span, .. }
             | Self::UnknownType { span, .. }
             | Self::TypeNotImplemented { span, .. }
+            | Self::VoidNotStorable { span, .. }
             | Self::ArityMismatch { span, .. }
             | Self::LiteralOutOfRange { span, .. }
             | Self::LiteralNotApplicable { span, .. }
@@ -313,6 +322,9 @@ impl core::fmt::Display for TypeError {
             Self::UnknownType { name, .. } => write!(f, "unknown type `{name}`"),
             Self::TypeNotImplemented { form, .. } => {
                 write!(f, "{form} is not implemented in this subset")
+            }
+            Self::VoidNotStorable { position, .. } => {
+                write!(f, "`()` has no value, so it cannot be stored in {position}")
             }
             Self::ArityMismatch {
                 name,

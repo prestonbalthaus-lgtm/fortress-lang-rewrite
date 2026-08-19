@@ -1795,6 +1795,12 @@ impl Checker {
                     };
                     let value = self.expr(&b.value, declared)?;
                     let ty = declared.unwrap_or(value.ty);
+                    if ty == Type::Void {
+                        return Err(TypeError::VoidNotStorable {
+                            span: b.span,
+                            position: "a binding",
+                        });
+                    }
                     self.declare(b.name.clone(), ty, b.mutable);
                     typed.push(TypedBlockItem::Binding {
                         name: b.name.clone(),

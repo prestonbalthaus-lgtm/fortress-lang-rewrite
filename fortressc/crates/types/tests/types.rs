@@ -1102,3 +1102,23 @@ fn mangling_distinguishes_nesting_from_arity() {
         fortress_types::mangle_static("Foo", &[bare("List"), bare("B")])
     );
 }
+
+// ------------------------------------------------------- void is not storable
+
+#[test]
+fn a_void_valued_binding_is_a_diagnostic_not_an_internal_error() {
+    match body_error("f(): ZZ32 = do\n  x = println(\"hi\")\n  0\nend") {
+        TypeError::VoidNotStorable { position, .. } => assert_eq!(position, "a binding"),
+        other => panic!("expected VoidNotStorable, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_binding_of_a_void_while_is_refused_too() {
+    match body_error(
+        "f(): ZZ32 = do\n  y: ZZ32 := 0\n  x = while y < 0 do y := y + 1 end\n  0\nend",
+    ) {
+        TypeError::VoidNotStorable { .. } => {}
+        other => panic!("expected VoidNotStorable, got {other:?}"),
+    }
+}
