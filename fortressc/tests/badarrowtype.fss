@@ -1,0 +1,8 @@
+component badarrowtype
+export Executable
+
+f(): ZZ32 -> String = 1
+
+run(): () = ()
+
+end
