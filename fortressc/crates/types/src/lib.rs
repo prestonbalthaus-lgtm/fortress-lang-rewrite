@@ -196,6 +196,20 @@ impl Checker {
         Ok(checker)
     }
 
+    /// Resolve a type that has to occupy storage. `basic_type(Void)` is `None`,
+    /// so a Void here would build a signature or a layout with a hole in it and
+    /// fail as an internal error rather than as a diagnostic.
+    fn storable(&self, t: &TypeRef, position: &'static str) -> Checked<Type> {
+        let ty = self.registry.resolve(t)?;
+        if ty == Type::Void {
+            return Err(TypeError::VoidNotStorable {
+                span: t.span(),
+                position,
+            });
+        }
+        Ok(ty)
+    }
+
     fn supertrait(&self, reference: &TypeRef) -> Checked<&'static str> {
         match self.registry.resolve(reference)? {
             Type::Trait(name) => Ok(name),
@@ -250,7 +264,7 @@ impl Checker {
         for p in o.params.iter().flatten() {
             fields.push(TypedField {
                 name: p.name.clone(),
-                ty: self.registry.resolve(&p.ty)?,
+                ty: self.storable(&p.ty, "a field")?,
             });
         }
         for member in &o.members {
@@ -269,7 +283,7 @@ impl Checker {
             }
             fields.push(TypedField {
                 name: f.name.clone(),
-                ty: self.registry.resolve(&f.ty)?,
+                ty: self.storable(&f.ty, "a field")?,
             });
         }
         for (index, field) in fields.iter().enumerate() {
@@ -305,7 +319,7 @@ impl Checker {
             let params = f
                 .params
                 .iter()
-                .map(|p| self.registry.resolve(&p.ty))
+                .map(|p| self.storable(&p.ty, "a parameter"))
                 .collect::<Checked<Vec<Type>>>()?;
             let returns = match &f.return_type {
                 Some(t) => self.registry.resolve(t)?,

@@ -604,7 +604,11 @@ In `crates/types/tests/types.rs`:
 #[test]
 fn the_unit_type_resolves_to_void() {
     let c = typed("component t\nf(): () = println(\"hi\")\nend\n");
-    assert_eq!(c.functions[0].return_type, Type::Void);
+    // `.first()`, not `[0]` -- the workspace denies clippy::indexing_slicing.
+    assert_eq!(
+        c.functions.first().map(|f| f.return_type),
+        Some(Type::Void)
+    );
 }
 
 #[test]

@@ -504,3 +504,11 @@ fn a_named_type_renders_its_static_arguments() {
     let written = return_type("f(): Array[\\ZZ64\\] = 1").written();
     assert_eq!(written, "Array[\\ZZ64\\]");
 }
+
+#[test]
+fn empty_parentheses_are_the_unit_type() {
+    match return_type("f(): () = println(\"hi\")") {
+        TypeRef::Unit { .. } => {}
+        other => panic!("expected the unit type, got {other:?}"),
+    }
+}

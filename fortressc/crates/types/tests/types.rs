@@ -1122,3 +1122,34 @@ fn a_binding_of_a_void_while_is_refused_too() {
         other => panic!("expected VoidNotStorable, got {other:?}"),
     }
 }
+
+#[test]
+fn the_unit_type_resolves_to_void() {
+    let c = typed("component t\nf(): () = println(\"hi\")\nend\n");
+    assert_eq!(c.functions.first().map(|f| f.return_type), Some(Type::Void));
+}
+
+#[test]
+fn a_unit_parameter_is_refused() {
+    match type_error("component t\nf(x: ()): ZZ32 = 1\nend\n") {
+        TypeError::VoidNotStorable { position, .. } => assert_eq!(position, "a parameter"),
+        other => panic!("expected VoidNotStorable, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_unit_field_is_refused() {
+    match type_error("component t\nobject O(x: ()) end\nf(): ZZ32 = 1\nend\n") {
+        TypeError::VoidNotStorable { position, .. } => assert_eq!(position, "a field"),
+        other => panic!("expected VoidNotStorable, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_unit_array_element_is_refused() {
+    match type_error("component t\nf(): ZZ32 = do\n  a: Array[\\()\\] = array(1)\n  1\nend\nend\n")
+    {
+        TypeError::VoidNotStorable { position, .. } => assert_eq!(position, "an array element"),
+        other => panic!("expected VoidNotStorable, got {other:?}"),
+    }
+}

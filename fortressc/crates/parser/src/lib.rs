@@ -563,6 +563,14 @@ impl<'t, 'a> Parser<'t, 'a> {
     }
 
     fn type_ref(&mut self) -> Parsed<TypeRef> {
+        if self.at(&Kind::LParen) {
+            let start = self.expect(&Kind::LParen, "`(`")?.span.start;
+            self.skip_newlines();
+            let end = self.expect(&Kind::RParen, "`)`")?.span.end;
+            return Ok(TypeRef::Unit {
+                span: Span::new(start, end),
+            });
+        }
         let (name, span) = self.identifier("a type name")?;
         if !self.at(&Kind::LGeneric) {
             return Ok(TypeRef::Named {

@@ -98,12 +98,7 @@ impl Registry {
     pub(crate) fn resolve(&self, t: &TypeRef) -> Result<Type, TypeError> {
         let (name, args, span) = match t {
             TypeRef::Named { name, args, span } => (name, args, *span),
-            TypeRef::Unit { span } => {
-                return Err(TypeError::TypeNotImplemented {
-                    span: *span,
-                    form: "the unit type",
-                })
-            }
+            TypeRef::Unit { .. } => return Ok(Type::Void),
             TypeRef::Tuple { span, .. } => {
                 return Err(TypeError::TypeNotImplemented {
                     span: *span,
@@ -125,6 +120,12 @@ impl Registry {
                 });
             };
             let inner = self.resolve(argument)?;
+            if inner == Type::Void {
+                return Err(TypeError::VoidNotStorable {
+                    span: argument.span(),
+                    position: "an array element",
+                });
+            }
             return Elem::of(inner).map(Type::Array).ok_or_else(|| {
                 TypeError::UnsupportedElementType {
                     span: argument.span(),
