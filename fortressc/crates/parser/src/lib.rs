@@ -1158,6 +1158,22 @@ impl<'t, 'a> Parser<'t, 'a> {
             return Ok(BlockItem::Binding(binding));
         }
         self.pos = save;
+        // `f(x) = e`: a local function declaration, not a discarded equality.
+        // Guarded on tokens rather than on the parsed tree, because a body that
+        // is itself an equality (`isZero(x) = x = 0`) collects into a chain and
+        // desugars into a block before any tree match could see it.
+        if matches!(self.peek_kind(), Some(Kind::Ident(_)))
+            && matches!(self.peek_ahead(1), Some(Kind::LParen))
+            && self.glued_left(self.pos + 1)
+        {
+            let probe = self.pos;
+            if let Ok(Expr::Call { callee, span, .. }) = self.postfix() {
+                if matches!(*callee, Expr::Var { .. }) && self.at(&Kind::Eq) {
+                    return Err(ParseError::LocalFunctionDeclarationUnsupported { span });
+                }
+            }
+            self.pos = probe;
+        }
         let target = self.expr()?;
         if !self.at(&Kind::ColonEq) {
             return Ok(BlockItem::Expr(target));
@@ -1234,8 +1250,14 @@ enum OperatorShape {
     Postfix,
 }
 
+/// `=` is here because every definition site consumes its own `=` first:
+/// `member` takes a field's or a function's through `optional_definition`, and
+/// `try_binding` takes a binding's. An `=` that reaches this point is equality.
+/// The one shape that slips through, `f(x) = e` in block position, is refused
+/// by `block_item`.
 const fn comparison_op(kind: &Kind<'_>) -> Option<BinOp> {
     match kind {
+        Kind::Eq => Some(BinOp::Eq),
         Kind::Lt => Some(BinOp::Lt),
         Kind::Gt => Some(BinOp::Gt),
         Kind::Le => Some(BinOp::Le),

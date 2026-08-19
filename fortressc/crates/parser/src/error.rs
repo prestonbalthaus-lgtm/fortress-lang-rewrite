@@ -26,6 +26,12 @@ pub enum ParseError {
         span: Span,
         kind: String,
     },
+    /// `f(x) = e` in block position. `=` is an equality operator in expression
+    /// position, so without this the declaration would parse as a discarded
+    /// comparison rather than fail.
+    LocalFunctionDeclarationUnsupported {
+        span: Span,
+    },
 }
 
 impl ParseError {
@@ -35,7 +41,8 @@ impl ParseError {
             Self::UnexpectedToken { span, .. }
             | Self::PostfixOperatorUnsupported { span }
             | Self::ReservedWord { span, .. }
-            | Self::StaticParameterKindUnsupported { span, .. } => Some(*span),
+            | Self::StaticParameterKindUnsupported { span, .. }
+            | Self::LocalFunctionDeclarationUnsupported { span } => Some(*span),
             Self::UnexpectedEndOfInput { .. } => None,
         }
     }
@@ -74,6 +81,12 @@ impl core::fmt::Display for ParseError {
                 f,
                 "{}..{}: `{kind}` static parameters are not implemented; \
                  M3d is type parameters only",
+                span.start, span.end
+            ),
+            Self::LocalFunctionDeclarationUnsupported { span } => write!(
+                f,
+                "{}..{}: a local function declaration is not implemented; \
+                 declare it at component level",
                 span.start, span.end
             ),
         }

@@ -602,3 +602,43 @@ fn a_single_parenthesised_expression_is_not_a_tuple() {
         "a one-element parenthesised expression is not a tuple"
     );
 }
+
+// --------------------------------------------------- `=` and chained comparison
+
+#[test]
+fn a_bare_equals_in_expression_position_is_equality() {
+    match expr("1 = 1") {
+        Expr::Infix { op: BinOp::Eq, .. } => {}
+        other => panic!("expected an equality, got {other:?}"),
+    }
+}
+
+/// `f(x) = e` in block position is a local function declaration, which this
+/// subset does not implement. Without this it would parse as a discarded
+/// equality: 236 corpus files carry 572 such lines. The body here is itself an
+/// equality, which is why the guard is on tokens and not on the parsed tree.
+#[test]
+fn a_local_function_declaration_is_refused() {
+    match expr_error("do\n  isZero(x) = x = 0\n  isZero(1)\nend") {
+        ParseError::LocalFunctionDeclarationUnsupported { .. } => {}
+        other => panic!("expected a local function declaration diagnostic, got {other:?}"),
+    }
+}
+
+/// Pinned deliberately: `try_binding` takes the first `=`, so this is a binding
+/// whose value is a comparison. It was a parse error before `=` became an
+/// operator, and this is the reading the design argues for.
+#[test]
+fn a_binding_of_a_comparison_binds_the_comparison() {
+    match expr("do\n  b = 3 = 4\n  b\nend") {
+        Expr::Block { items, .. } => match items.first() {
+            Some(BlockItem::Binding(b)) => assert!(
+                matches!(b.value, Expr::Infix { op: BinOp::Eq, .. }),
+                "expected the binding's value to be an equality, got {:?}",
+                b.value
+            ),
+            other => panic!("expected a binding, got {other:?}"),
+        },
+        other => panic!("expected a block, got {other:?}"),
+    }
+}
