@@ -171,10 +171,6 @@ pub enum ArithOp {
     Sub,
     Mul,
     Div,
-    /// `^`. The only arithmetic operator that is a C shim rather than an LLVM
-    /// instruction: integers have no power instruction, and a loop emitted
-    /// inline would be a second place the overflow rule lives.
-    Pow,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -194,7 +190,6 @@ impl ArithOp {
             Self::Sub => "sub",
             Self::Mul => "mul",
             Self::Div => "div",
-            Self::Pow => "pow",
         }
     }
 }
@@ -294,6 +289,16 @@ pub enum Target {
     /// `NOT`. One `xor` on an `i1`, and no branch: negation does not short
     /// circuit, so it needs none.
     Not,
+    /// `^`, and the one operator whose operands may differ in type: 1.0
+    /// declares it on every base-exponent pair, and
+    /// `ProjectFortress/tests/expTest.fss` exercises all four of them. It is a
+    /// C shim for every pair -- integers have no power instruction, and a loop
+    /// emitted inline would be a second place the negative-exponent rule
+    /// could be got wrong.
+    Pow {
+        base: Type,
+        exponent: Type,
+    },
     /// `widen`, the only numeric conversion, and it is never inserted implicitly.
     Widen {
         from: Type,
@@ -349,6 +354,9 @@ impl Target {
             Self::Compare { op, ty } => format!("{}_{}_{}", op.symbol(), ty.symbol(), ty.symbol()),
             Self::Negate { ty } => format!("neg_{}", ty.symbol()),
             Self::Not => "not_boolean".to_owned(),
+            Self::Pow { base, exponent } => {
+                format!("pow_{}_{}", base.symbol(), exponent.symbol())
+            }
             Self::Widen { from, to } => format!("widen_{}_{}", from.symbol(), to.symbol()),
             Self::ToString { from } => format!("to_string_{}", from.symbol()),
             Self::Concat => "concat_string_string".to_owned(),

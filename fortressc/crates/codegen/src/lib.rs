@@ -246,23 +246,32 @@ impl<'ctx> Lowering<'ctx> {
             self.module.add_function(name, ty, Some(Linkage::External));
         }
 
-        // `^`, one per numeric type. Both operands have the same type, which
-        // is the rule every other arithmetic operator already follows.
-        self.module.add_function(
-            "pow_zz32_zz32",
-            i32t.fn_type(&[i32t.into(), i32t.into()], false),
-            Some(Linkage::External),
-        );
-        self.module.add_function(
-            "pow_zz64_zz64",
-            i64t.fn_type(&[i64t.into(), i64t.into()], false),
-            Some(Linkage::External),
-        );
-        self.module.add_function(
-            "pow_rr64_rr64",
-            f64t.fn_type(&[f64t.into(), f64t.into()], false),
-            Some(Linkage::External),
-        );
+        // `^`, one shim per base-exponent pair. All nine exist because 1.0
+        // declares the operator on all of them, not because a rule was chosen
+        // about which combinations are allowed.
+        let powers: [(
+            &str,
+            BasicTypeEnum<'ctx>,
+            BasicMetadataTypeEnum<'ctx>,
+            BasicMetadataTypeEnum<'ctx>,
+        ); 9] = [
+            ("pow_zz32_zz32", i32t.into(), i32t.into(), i32t.into()),
+            ("pow_zz32_zz64", i32t.into(), i32t.into(), i64t.into()),
+            ("pow_zz32_rr64", f64t.into(), i32t.into(), f64t.into()),
+            ("pow_zz64_zz32", i64t.into(), i64t.into(), i32t.into()),
+            ("pow_zz64_zz64", i64t.into(), i64t.into(), i64t.into()),
+            ("pow_zz64_rr64", f64t.into(), i64t.into(), f64t.into()),
+            ("pow_rr64_zz32", f64t.into(), f64t.into(), i32t.into()),
+            ("pow_rr64_zz64", f64t.into(), f64t.into(), i64t.into()),
+            ("pow_rr64_rr64", f64t.into(), f64t.into(), f64t.into()),
+        ];
+        for (name, ret, base, exponent) in powers {
+            self.module.add_function(
+                name,
+                ret.fn_type(&[base, exponent], false),
+                Some(Linkage::External),
+            );
+        }
 
         let concat = ptr.fn_type(&[ptr.into(), ptr.into()], false);
         self.module
@@ -1025,6 +1034,15 @@ impl<'ctx> Lowering<'ctx> {
                 let value = self.widen_boolean_for_c(*ty, value)?;
                 self.call_runtime(&target.symbol(), &[value], false)
             }
+            // Every base-exponent pair is a shim, so this is one call and no
+            // instruction selection at all.
+            Target::Pow { .. } => {
+                let [l, r] = self.two(args)?;
+                let symbol = target.symbol();
+                self.call_runtime(&symbol, &[l, r], true)?
+                    .ok_or_else(|| CodegenError::internal(format!("`{symbol}` returned no value")))
+                    .map(Some)
+            }
             Target::Print { ty } => {
                 if *ty == Type::Void {
                     return self.call_runtime("print_void", &[], false);
@@ -1133,16 +1151,6 @@ impl<'ctx> Lowering<'ctx> {
         l: BasicValueEnum<'ctx>,
         r: BasicValueEnum<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
-        // `^` is the one arithmetic operator with no instruction behind it.
-        // It is a shim for both widths and for floats alike, so the negative
-        // exponent rule lives in exactly one place -- and so an inline loop is
-        // never a second place it could be got wrong.
-        if op == ArithOp::Pow {
-            let symbol = Target::Arith { op, ty }.symbol();
-            return self
-                .call_runtime(&symbol, &[l, r], true)?
-                .ok_or_else(|| CodegenError::internal(format!("`{symbol}` returned no value")));
-        }
         if ty == Type::RR64 {
             let (l, r) = (l.into_float_value(), r.into_float_value());
             let out = match op {
@@ -1150,7 +1158,6 @@ impl<'ctx> Lowering<'ctx> {
                 ArithOp::Sub => self.builder.build_float_sub(l, r, "sub"),
                 ArithOp::Mul => self.builder.build_float_mul(l, r, "mul"),
                 ArithOp::Div => self.builder.build_float_div(l, r, "div"),
-                ArithOp::Pow => return Err(CodegenError::internal("pow is a shim".to_owned())),
             };
             return Ok(out.map_err(CodegenError::from_builder)?.into());
         }
@@ -1160,7 +1167,6 @@ impl<'ctx> Lowering<'ctx> {
             ArithOp::Sub => self.builder.build_int_sub(l, r, "sub"),
             ArithOp::Mul => self.builder.build_int_mul(l, r, "mul"),
             ArithOp::Div => self.builder.build_int_signed_div(l, r, "div"),
-            ArithOp::Pow => return Err(CodegenError::internal("pow is a shim".to_owned())),
         };
         Ok(out.map_err(CodegenError::from_builder)?.into())
     }

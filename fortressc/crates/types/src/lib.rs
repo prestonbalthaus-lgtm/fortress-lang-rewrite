@@ -1848,6 +1848,57 @@ impl Checker {
         })
     }
 
+    /// `a^b`, and the one place two numeric operands are allowed to disagree.
+    ///
+    /// 1.0 declares `^` on every base-exponent pair -- an integer raised to a
+    /// real is a real, a real raised to an integer is a real -- and
+    /// `ProjectFortress/tests/expTest.fss` is the corpus asserting all four.
+    /// Requiring agreement here would have been consistent with `+` and wrong
+    /// about the operator this milestone exists to add.
+    ///
+    /// The exponent takes no hint from context: in `x: RR64 = 2^10` the base
+    /// is pinned by the binding and the exponent is an ordinary ZZ32 literal.
+    fn power(
+        &mut self,
+        lhs: &Expr,
+        rhs: &Expr,
+        span: Span,
+        expected: Option<Type>,
+    ) -> Checked<TypedExpr> {
+        let hint = expected.filter(|t| t.is_numeric());
+        let base = self.expr(lhs, hint)?;
+        let exponent = self.expr(rhs, None)?;
+        for operand in [&base, &exponent] {
+            if !operand.ty.is_numeric() {
+                return Err(TypeError::Mismatch {
+                    span: operand.span,
+                    found: operand.ty,
+                    required: Type::ZZ64,
+                });
+            }
+        }
+        // A real anywhere makes the result real; two integers keep the base's
+        // width, because there is no implicit widening in this language.
+        let ty = if base.ty == Type::RR64 || exponent.ty == Type::RR64 {
+            Type::RR64
+        } else {
+            base.ty
+        };
+        let target = Target::Pow {
+            base: base.ty,
+            exponent: exponent.ty,
+        };
+        self.require(ty, expected, span)?;
+        Ok(TypedExpr {
+            kind: TypedExprKind::Apply {
+                target,
+                args: vec![base, exponent],
+            },
+            ty,
+            span,
+        })
+    }
+
     fn infix(
         &mut self,
         op: BinOp,
@@ -1858,6 +1909,9 @@ impl Checker {
     ) -> Checked<TypedExpr> {
         if matches!(op, BinOp::And | BinOp::Or) {
             return self.logical(op, lhs, rhs, span, expected);
+        }
+        if op == BinOp::Pow {
+            return self.power(lhs, rhs, span, expected);
         }
         let comparison = matches!(
             op,
@@ -1933,13 +1987,15 @@ impl Checker {
                 },
                 left.ty,
             ),
-            BinOp::Pow => (
-                Target::Arith {
-                    op: ArithOp::Pow,
-                    ty: left.ty,
-                },
-                left.ty,
-            ),
+            // Routed above: `^` is the one operator whose operands may
+            // differ in type, so it never reaches the agreement check.
+            BinOp::Pow => {
+                return Err(TypeError::MixedNumericOperands {
+                    span,
+                    left: left.ty,
+                    right: right.ty,
+                })
+            }
             BinOp::Lt => (
                 Target::Compare {
                     op: CompareOp::Lt,

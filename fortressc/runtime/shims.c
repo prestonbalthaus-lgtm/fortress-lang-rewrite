@@ -108,7 +108,18 @@ long long pow_zz64_zz64(long long a, long long b) {
 
 int pow_zz32_zz32(int a, int b) { return (int)pow_zz64_zz64(a, b); }
 
+/*
+ * The mixed pairs. 1.0 declares `^` on every base-exponent combination and
+ * expTest.fss asserts all four, so all nine exist rather than a rule about
+ * which ones are allowed. A real anywhere makes the answer real.
+ */
 double pow_rr64_rr64(double a, double b) { return pow(a, b); }
+double pow_rr64_zz32(double a, int b) { return pow(a, (double)b); }
+double pow_rr64_zz64(double a, long long b) { return pow(a, (double)b); }
+double pow_zz32_rr64(int a, double b) { return pow((double)a, b); }
+double pow_zz64_rr64(long long a, double b) { return pow((double)a, b); }
+int pow_zz32_zz64(int a, long long b) { return (int)pow_zz64_zz64(a, b); }
+long long pow_zz64_zz32(long long a, int b) { return pow_zz64_zz64(a, b); }
 
 void print_string(const char *s) { fputs(s, stdout); }
 void print_zz32(int v) { printf("%d", v); }
