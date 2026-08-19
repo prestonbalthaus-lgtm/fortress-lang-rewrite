@@ -814,6 +814,23 @@ impl<'a> Expander<'a> {
                 body: Box::new(self.expr(body, subst)?),
                 span: *span,
             },
+            Expr::For {
+                binder,
+                lo,
+                hi,
+                inclusive,
+                sequential,
+                body,
+                span,
+            } => Expr::For {
+                binder: binder.clone(),
+                lo: Box::new(self.expr(lo, subst)?),
+                hi: Box::new(self.expr(hi, subst)?),
+                inclusive: *inclusive,
+                sequential: *sequential,
+                body: Box::new(self.expr(body, subst)?),
+                span: *span,
+            },
             Expr::Field { base, name, span } => Expr::Field {
                 base: Box::new(self.expr(base, subst)?),
                 name: name.clone(),
