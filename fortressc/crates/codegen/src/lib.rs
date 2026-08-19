@@ -727,6 +727,9 @@ impl<'ctx> Lowering<'ctx> {
 
     fn expr(&mut self, e: &TypedExpr) -> Result<Option<BasicValueEnum<'ctx>>, CodegenError> {
         match &e.kind {
+            // Void has no representation, so there is nothing to produce. The
+            // same `None` a call returning Void already yields.
+            TypedExprKind::Unit => Ok(None),
             TypedExprKind::IntConst(value) => {
                 let ty = match e.ty {
                     Type::ZZ32 => self.context.i32_type(),

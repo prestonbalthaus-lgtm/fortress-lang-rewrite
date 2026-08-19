@@ -223,6 +223,10 @@ pub enum UnOp {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
+    /// `()`. The one value of the unit type.
+    Unit {
+        span: Span,
+    },
     /// Digits with group separators already removed. Arbitrary precision at
     /// this stage: the types crate decides `ZZ32` versus `ZZ64`.
     IntLit {
@@ -348,7 +352,8 @@ impl Expr {
     #[must_use]
     pub const fn span(&self) -> Span {
         match self {
-            Self::IntLit { span, .. }
+            Self::Unit { span }
+            | Self::IntLit { span, .. }
             | Self::FloatLit { span, .. }
             | Self::StrLit { span, .. }
             | Self::BoolLit { span, .. }

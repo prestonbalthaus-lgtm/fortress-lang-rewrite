@@ -548,6 +548,14 @@ impl Checker {
     /// checked against; it is never used to convert anything.
     fn expr(&mut self, e: &Expr, expected: Option<Type>) -> Checked<TypedExpr> {
         match e {
+            Expr::Unit { span } => {
+                self.require(Type::Void, expected, *span)?;
+                Ok(TypedExpr {
+                    kind: TypedExprKind::Unit,
+                    ty: Type::Void,
+                    span: *span,
+                })
+            }
             Expr::IntLit { digits, span } => self.int_literal(digits, *span, expected),
             Expr::FloatLit {
                 int_digits,

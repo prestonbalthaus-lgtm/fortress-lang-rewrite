@@ -398,7 +398,8 @@ impl<'a> Expander<'a> {
 
     fn expr(&mut self, e: &Expr, subst: &Subst) -> Result<Expr, TypeError> {
         Ok(match e {
-            Expr::IntLit { .. }
+            Expr::Unit { .. }
+            | Expr::IntLit { .. }
             | Expr::FloatLit { .. }
             | Expr::StrLit { .. }
             | Expr::BoolLit { .. } => e.clone(),

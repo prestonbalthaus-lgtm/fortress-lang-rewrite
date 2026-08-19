@@ -44,8 +44,8 @@ Design document: `docs/superpowers/specs/2026-08-19-m3e-unit-tuple-arrow-design.
 | `crates/types/tests/types.rs` | resolution and refusal tests | 2, 3, 5, 6, 7, 8 |
 | `crates/driver/tests/end_to_end.rs` | `run():() = ()` compiles, links, runs | 7 |
 | `crates/parser/tests/corpus.rs` | the parser ratchet | 10 |
-| `tests/unitvoid.fss` | the positive fixture: a void function that runs | 7 |
-| `tests/badvoidparam.fss`, `tests/badtupletype.fss`, `tests/badarrowtype.fss`, `tests/badtupleexpr.fss` | the four negative gate fixtures | 9 |
+| `fortressc/tests/unitvoid.fss` | the positive fixture: a void function that runs | 7 |
+| `fortressc/tests/badvoidparam.fss`, `badtupletype.fss`, `badarrowtype.fss`, `badtupleexpr.fss` | the four negative gate fixtures | 9 |
 | `tools/unit-gate.sh` | the M3e gate, `--selftest` and `--mutate` | 9 |
 | `ROADMAP.md`, `04-state.md`, the design doc | the record | 10 |
 
@@ -1083,7 +1083,7 @@ and no function values -- so refusing them is the honest signal."
 - Modify: `crates/types/src/types.rs` (`TypedExprKind`)
 - Modify: `crates/types/src/lib.rs` (the `Expr::Unit` arm)
 - Modify: `crates/codegen/src/lib.rs`
-- Create: `tests/unitvoid.fss`
+- Create: `fortressc/tests/unitvoid.fss`
 - Test: `crates/parser/tests/parser.rs`, `crates/types/tests/types.rs`, `crates/driver/tests/end_to_end.rs`
 
 **Interfaces:**
@@ -1111,7 +1111,8 @@ fn a_unit_binding_is_refused() {
 }
 ```
 
-Create `tests/unitvoid.fss` (repository root `tests/`, alongside `fact.fss`):
+Create `fortressc/tests/unitvoid.fss` (alongside `fact.fss`; `end_to_end.rs`'s
+`fixture()` resolves `CARGO_MANIFEST_DIR/../../tests`, which is `fortressc/tests`):
 
 ```
 component unitvoid
@@ -1220,7 +1221,7 @@ Expected: all PASS, parser corpus **418**.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add -A fortressc/crates tests/unitvoid.fss
+git add -A fortressc/crates fortressc/tests/unitvoid.fss
 git commit -m "feat: () is an expression, and run():() = () compiles and runs
 
 The most common function shape in the corpus, and it had never compiled."
@@ -1348,7 +1349,7 @@ git commit -m "feat(parser): tuple expressions parse, and the checker refuses th
 
 **Files:**
 - Create: `tools/unit-gate.sh`
-- Create: `tests/badvoidparam.fss`, `tests/badtupletype.fss`, `tests/badarrowtype.fss`, `tests/badtupleexpr.fss`
+- Create: `fortressc/tests/badvoidparam.fss`, `fortressc/tests/badtupletype.fss`, `fortressc/tests/badarrowtype.fss`, `fortressc/tests/badtupleexpr.fss`
 
 **Interfaces:**
 - Consumes: everything Tasks 1–8 produced.
@@ -1356,7 +1357,7 @@ git commit -m "feat(parser): tuple expressions parse, and the checker refuses th
 
 - [ ] **Step 1: Create the negative fixtures**
 
-`tests/badvoidparam.fss`:
+`fortressc/tests/badvoidparam.fss`:
 
 ```
 component badvoidparam
@@ -1369,7 +1370,7 @@ run(): () = ()
 end
 ```
 
-`tests/badtupletype.fss`:
+`fortressc/tests/badtupletype.fss`:
 
 ```
 component badtupletype
@@ -1382,7 +1383,7 @@ run(): () = ()
 end
 ```
 
-`tests/badarrowtype.fss`:
+`fortressc/tests/badarrowtype.fss`:
 
 ```
 component badarrowtype
@@ -1395,7 +1396,7 @@ run(): () = ()
 end
 ```
 
-`tests/badtupleexpr.fss`:
+`fortressc/tests/badtupleexpr.fss`:
 
 ```
 component badtupleexpr
@@ -1527,7 +1528,7 @@ cd fortressc && cargo build --workspace
 - [ ] **Step 8: Commit**
 
 ```bash
-git add -A tools tests
+git add -A tools fortressc/tests
 git commit -m "test(m3e): the unit gate, with a mutation suite
 
 Three mutations, all refused: dropping the void parameter guard, folding

@@ -1169,3 +1169,18 @@ fn an_arrow_type_is_refused_with_a_diagnostic() {
         other => panic!("expected TypeNotImplemented, got {other:?}"),
     }
 }
+
+#[test]
+fn the_unit_expression_has_type_void() {
+    let b = body("f(): () = ()");
+    assert_eq!(b.ty, Type::Void);
+    assert!(matches!(b.kind, TypedExprKind::Unit), "got {:?}", b.kind);
+}
+
+#[test]
+fn a_unit_binding_is_refused() {
+    match body_error("f(): ZZ32 = do\n  x: () = ()\n  0\nend") {
+        TypeError::VoidNotStorable { position, .. } => assert_eq!(position, "a binding"),
+        other => panic!("expected VoidNotStorable, got {other:?}"),
+    }
+}

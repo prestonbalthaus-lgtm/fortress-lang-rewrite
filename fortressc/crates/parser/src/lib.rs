@@ -971,6 +971,12 @@ impl<'t, 'a> Parser<'t, 'a> {
             Kind::LParen => {
                 self.pos += 1;
                 self.skip_newlines();
+                if self.at(&Kind::RParen) {
+                    let close = self.expect(&Kind::RParen, "`)`")?.span;
+                    return Ok(Expr::Unit {
+                        span: Span::new(span.start, close.end),
+                    });
+                }
                 let inner = self.expr()?;
                 self.skip_newlines();
                 self.expect(&Kind::RParen, "`)`")?;
