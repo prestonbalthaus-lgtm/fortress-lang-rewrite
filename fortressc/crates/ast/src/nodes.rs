@@ -221,6 +221,9 @@ pub enum BinOp {
     Ge,
     Eq,
     Ne,
+    /// `^`. 1.0 puts it above every other operator, including tight
+    /// juxtaposition, and makes it LEFT associative -- `2^3^4` is `(2^3)^4`.
+    Pow,
     /// `AND` and `OR`, the short-circuit boolean operators. They are infix
     /// nodes for one reason -- one expression walk rather than two -- and they
     /// are the only `BinOp`s whose right operand may not be evaluated. The

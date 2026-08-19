@@ -284,6 +284,7 @@ const fn op_name(op: BinOp) -> &'static str {
         BinOp::Ge => ">=",
         BinOp::Eq => "=",
         BinOp::Ne => "=/=",
+        BinOp::Pow => "^",
         BinOp::And => "AND",
         BinOp::Or => "OR",
     }
@@ -1928,6 +1929,13 @@ impl Checker {
             BinOp::Div => (
                 Target::Arith {
                     op: ArithOp::Div,
+                    ty: left.ty,
+                },
+                left.ty,
+            ),
+            BinOp::Pow => (
+                Target::Arith {
+                    op: ArithOp::Pow,
                     ty: left.ty,
                 },
                 left.ty,

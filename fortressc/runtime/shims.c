@@ -14,6 +14,7 @@
  * allocator built on GC_malloc instead, or the collector will free the objects
  * it points at while it is still holding them.
  */
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -78,6 +79,37 @@ void println_void(void) { puts(""); }
  * because a flag would be one more thing generated code has to get right and
  * these are four lines each.
  */
+/*
+ * `^`. There is no integer power instruction, so this is a shim rather than
+ * inline IR -- and being a shim is what keeps the negative-exponent rule in one
+ * place. A negative exponent on an integer has no integer answer, so it halts
+ * the way an out of bounds subscript does rather than inventing zero.
+ *
+ * Exponentiation by squaring: the loop is O(log b), and it is the same shape
+ * for both integer widths.
+ */
+long long pow_zz64_zz64(long long a, long long b) {
+    if (b < 0) {
+        fortress_halt("negative exponent has no integer result", a, b);
+    }
+    long long result = 1;
+    long long base = a;
+    while (b > 0) {
+        if (b & 1) {
+            result *= base;
+        }
+        b >>= 1;
+        if (b > 0) {
+            base *= base;
+        }
+    }
+    return result;
+}
+
+int pow_zz32_zz32(int a, int b) { return (int)pow_zz64_zz64(a, b); }
+
+double pow_rr64_rr64(double a, double b) { return pow(a, b); }
+
 void print_string(const char *s) { fputs(s, stdout); }
 void print_zz32(int v) { printf("%d", v); }
 void print_zz64(long long v) { printf("%lld", v); }

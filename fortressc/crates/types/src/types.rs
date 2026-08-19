@@ -171,6 +171,10 @@ pub enum ArithOp {
     Sub,
     Mul,
     Div,
+    /// `^`. The only arithmetic operator that is a C shim rather than an LLVM
+    /// instruction: integers have no power instruction, and a loop emitted
+    /// inline would be a second place the overflow rule lives.
+    Pow,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -190,6 +194,7 @@ impl ArithOp {
             Self::Sub => "sub",
             Self::Mul => "mul",
             Self::Div => "div",
+            Self::Pow => "pow",
         }
     }
 }

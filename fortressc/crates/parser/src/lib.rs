@@ -1117,6 +1117,18 @@ impl<'t, 'a> Parser<'t, 'a> {
                 };
                 continue;
             }
+            // `a^b`. Superscripting sits in the same group as subscripting --
+            // above tight juxtaposition, above everything -- and the group is
+            // LEFT associative, so `2^3^4` is `(2^3)^4`. That is why the
+            // exponent is a `primary` and not a `postfix`: parsing it at this
+            // level would consume the next `^` and make it right associative.
+            if self.at(&Kind::Caret) {
+                self.pos += 1;
+                self.skip_newlines();
+                let exponent = self.primary()?;
+                expr = infix(BinOp::Pow, Fixity::Tight, expr, exponent);
+                continue;
+            }
             // A glued `[` subscripts; a spaced one opens an array literal that
             // the juxtaposition layer will pick up.
             if self.at(&Kind::LBracket) && self.glued_left(self.pos) {
@@ -1538,6 +1550,7 @@ const fn op_text(op: BinOp) -> &'static str {
         BinOp::Sub => "-",
         BinOp::Mul => "*",
         BinOp::Div => "/",
+        BinOp::Pow => "^",
         BinOp::And => "AND",
         BinOp::Or => "OR",
     }
