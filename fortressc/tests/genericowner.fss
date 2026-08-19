@@ -1,0 +1,27 @@
+component genericowner
+export Executable
+
+(* A ground method on a generic owner. Its return type and its body are both
+   substituted with the owner's arguments -- the return type because M3i checks
+   method bodies and `unknown type T` would otherwise refuse this, the body
+   because an instantiation written inside one has to raise its demand.
+
+   Two instantiations of one template are clones and carry the SAME span, so
+   the slot map cannot be keyed by it: `get` would resolve to one signature for
+   both cells. *)
+object Cell[\T\](held: T)
+   get(): T = held
+   echoed(): T = same[\T\](held)
+end
+
+same[\T\](x: T): T = x
+
+run(): () = do
+   i = Cell[\ZZ32\](7)
+   s = Cell[\String\]("hi")
+   println(i.get())
+   println(s.get())
+   println(i.echoed())
+   println(s.echoed())
+end
+end

@@ -821,3 +821,34 @@ fn a_chain_mixing_equivalence_with_one_sense_is_true() {
     assert_eq!(String::from_utf8_lossy(&out.stdout), "YES\n");
     let _ = std::fs::remove_file(&binary);
 }
+
+// -------------------------------- M3j: methods on and of generic types
+
+/// A ground method on a generic owner. Two things had to be fixed for this to
+/// compile at all, and both are visible in the output rather than in a comment:
+/// the return type is substituted (`unknown type T` before), and the slot map
+/// is no longer keyed by span -- two instantiations of one template are clones
+/// and share it, so `get` resolved to one signature for both cells.
+#[test]
+fn a_method_on_a_generic_owner_is_substituted_per_instantiation() {
+    let binary = compile_fixture("genericowner.fss", "genericowner");
+    let out = run(&binary);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "7\nhi\n7\nhi\n");
+    assert_eq!(out.status.code(), Some(0));
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// The same fixture, seen from the object side: the two instantiations really
+/// are two functions over two layouts, which is what a shared slot destroyed.
+#[test]
+fn each_instantiation_of_a_method_gets_its_own_symbol() {
+    let ir = emit_ir("genericowner.fss");
+    assert!(
+        ir.contains(r#"define i32 @"Cell$ZZ32$e$m$get""#),
+        "the ZZ32 cell needs its own method returning i32:\n{ir}"
+    );
+    assert!(
+        ir.contains(r#"define ptr @"Cell$String$e$m$get""#),
+        "the String cell needs its own method returning ptr:\n{ir}"
+    );
+}

@@ -391,9 +391,15 @@ impl<'a> Expander<'a> {
         })
     }
 
-    /// Method bodies are not walked. Dotted methods are parsed and never
-    /// checked, so a body there can neither be compiled nor create demand; the
-    /// signature is substituted so the shape of the declaration stays honest.
+    /// A ground method is substituted whole -- parameters, return type and
+    /// body. M3i checks method bodies, so leaving the return type alone made
+    /// `get(): T = v` inside `Cell[\T\]` refuse with `unknown type T`, and
+    /// leaving the body alone swallowed every instantiation request written
+    /// inside one.
+    ///
+    /// A generic method is left exactly as written. Its body may name its own
+    /// static parameters, and walking `Cell[\S\]` with `S` unbound would
+    /// mangle a request for a type that does not exist.
     fn members(&mut self, members: &[Member], subst: &Subst) -> Result<Vec<Member>, TypeError> {
         let mut out = Vec::with_capacity(members.len());
         for m in members {
@@ -408,19 +414,22 @@ impl<'a> Expander<'a> {
                     mutable: f.mutable,
                     span: f.span,
                 }),
-                Member::Method(m) => Member::Method(MethodDecl {
+                Member::Method(m) if m.static_params.is_empty() => Member::Method(MethodDecl {
                     name: m.name.clone(),
-                    static_params: m.static_params.clone(),
-                    params: if m.static_params.is_empty() {
-                        self.params(&m.params, subst)?
-                    } else {
-                        m.params.clone()
+                    static_params: Vec::new(),
+                    params: self.params(&m.params, subst)?,
+                    return_type: match &m.return_type {
+                        Some(t) => Some(self.ty(t, subst)?),
+                        None => None,
                     },
-                    return_type: m.return_type.clone(),
-                    body: m.body.clone(),
+                    body: match &m.body {
+                        Some(b) => Some(self.expr(b, subst)?),
+                        None => None,
+                    },
                     accessor: m.accessor,
                     span: m.span,
                 }),
+                Member::Method(m) => Member::Method(m.clone()),
             });
         }
         Ok(out)

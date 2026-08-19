@@ -92,10 +92,15 @@ struct Checker {
     /// read of one is reported as an accessor rather than as a missing field.
     accessors: HashSet<String>,
     /// Which member of which method set each declaration is, keyed by the
-    /// declaration's start offset, which is unique per declaration. Positional
-    /// indices desynchronise the moment
-    /// signature building skips a member that the body pass does not.
-    method_slots: HashMap<usize, (String, usize)>,
+    /// owner and the member's index in that owner's member list. The pair is
+    /// unique by construction and reads the same in both passes, so it cannot
+    /// desynchronise the way a running positional index would.
+    ///
+    /// The start offset this used to be keyed by is NOT unique: two
+    /// instantiations of one generic type clone the same members, so
+    /// `Cell[\ZZ32\].get` and `Cell[\String\].get` carry the same span and
+    /// the second silently overwrote the first.
+    method_slots: HashMap<(&'static str, usize), (String, usize)>,
     self_ctx: Option<SelfCtx>,
     /// Which member of which overload set each function declaration is, in
     /// declaration order. Backpatching an inferred return type by name alone
@@ -398,7 +403,7 @@ impl Checker {
             } else {
                 Type::Trait(owner)
             };
-            for member in members {
+            for (index, member) in members.iter().enumerate() {
                 let Member::Method(m) = member else { continue };
                 if m.accessor
                     || m.params.iter().any(|p| p.name == "self")
@@ -453,7 +458,7 @@ impl Checker {
                 );
                 let set = self.methods.entry(m.name.clone()).or_default();
                 self.method_slots
-                    .insert(m.span.start, (m.name.clone(), set.len()));
+                    .insert((owner, index), (m.name.clone(), set.len()));
                 set.push(Signature {
                     params,
                     returns,
@@ -565,7 +570,7 @@ impl Checker {
                 Decl::Object(o) => (intern(&o.name), &o.members),
                 Decl::Function(_) => continue,
             };
-            for member in members {
+            for (index, member) in members.iter().enumerate() {
                 let Member::Method(m) = member else { continue };
                 if m.accessor
                     || m.params.iter().any(|p| p.name == "self")
@@ -573,10 +578,10 @@ impl Checker {
                 {
                     continue;
                 }
-                if m.body.is_none() || !self.method_slots.contains_key(&m.span.start) {
+                if m.body.is_none() || !self.method_slots.contains_key(&(owner, index)) {
                     continue;
                 }
-                functions.push(self.method(m, owner)?);
+                functions.push(self.method(m, owner, index)?);
             }
         }
 
@@ -737,14 +742,14 @@ impl Checker {
     /// One dotted method body, lifted to a `TypedFn` whose first parameter is
     /// the receiver. Codegen needs no new node: a lifted method is a function,
     /// and a method call is a `DispatchFn` over its tuple.
-    fn method(&mut self, m: &MethodDecl, owner: &'static str) -> Checked<TypedFn> {
+    fn method(&mut self, m: &MethodDecl, owner: &'static str, index: usize) -> Checked<TypedFn> {
         let Some(source) = &m.body else {
             return Err(TypeError::MissingBody {
                 span: m.span,
                 name: m.name.clone(),
             });
         };
-        let Some((set, slot)) = self.method_slots.get(&m.span.start).cloned() else {
+        let Some((set, slot)) = self.method_slots.get(&(owner, index)).cloned() else {
             return Err(TypeError::UnknownName {
                 span: m.span,
                 name: m.name.clone(),
