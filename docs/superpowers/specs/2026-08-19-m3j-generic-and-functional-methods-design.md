@@ -4,7 +4,7 @@ Date: 2026-08-19
 Status: **landed** on `m3j/generic-and-functional-methods`, five commits, not
 pushed. Named as next by `2026-08-19-m3i-dotted-methods-design.md`.
 
-Compile **222 -> PLACEHOLDER** of 1956. Parse unchanged at **exactly 614** --
+Compile **222 -> 242** of 1956. Parse unchanged at **exactly 614** --
 the parser changed by zero lines. **Codegen changed by zero lines**, again, and
 that is a measured result and not an omission: a stamp is a `TypedFn`, a lifted
 functional method is a `TypedFn`, and codegen already compiled both.
@@ -22,7 +22,7 @@ so it is stated and measured as its own step.
 | baseline | 222 | the M3i tip |
 | Part 0 | **224** | a ground method is substituted whole |
 | Part 2 | **229** | functional methods |
-| Part 1 | **PLACEHOLDER** | generic dotted methods |
+| Part 1 | **242** | generic dotted methods |
 
 M3h's lesson held again in the other direction: measured separately these are
 +2, +5 and +13, and the parts do not simply add, because a file blocked on one
@@ -211,11 +211,11 @@ Three of M3i's six regressions come back: `Compiled1.ai.fss` and
 
 ## Gates
 
-`tools/dispatch-gate.sh` **23/0 -> PLACEHOLDER**, with the four programs above
+`tools/dispatch-gate.sh` **23/0 -> 35/0**, with the four programs above
 asserted by output, the over-approximation asserted in symbols, and two
 refusals asserted by name.
 
-`tools/apply-gate.sh` `COMPILE_FLOOR` **222 -> PLACEHOLDER**.
+`tools/apply-gate.sh` `COMPILE_FLOOR` **222 -> 242**.
 
 Mutations, every one **shown to refuse** before any green was reported:
 
@@ -229,7 +229,13 @@ Mutations, every one **shown to refuse** before any green was reported:
 | let a requirement tie with an implementation | REFUSED, 4 checks |
 | let a bodiless functional declaration be a dispatch target | REFUSED, 1 check |
 
-Full run: dispatch **12 mutations, 0 survived, 0 could not be applied**.
+Full run across all four mutating gates: **25 mutations, 0 survived, 0 could
+not be applied** -- dispatch 12, apply 5, generics 5, unit 3.
+
+Seven gates green: generics 23/0, dispatch 35/0, array 16/0, memory 17/0, MPI
+17/0, unit 15/0, apply 21/0 with `242 corpus files compile end to end`. A
+stamped object is byte identical across two builds, which is the direct witness
+for the ordered maps the stamp table is built on.
 
 Two mutations in *other* gates went to **could not be applied** on the first
 run, which is not a pass and is easy to skim past -- the generics gate's
