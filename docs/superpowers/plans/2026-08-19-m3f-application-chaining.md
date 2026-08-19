@@ -45,7 +45,7 @@ No production code. Every number this milestone reports is a delta against a bas
 **Interfaces:**
 - Produces: two sorted file-path lists, one per metric, for the set-diffs in Tasks 2 and 3. Nothing in the repository depends on them.
 
-- [ ] **Step 1: Export the build environment and build the workspace clean**
+- [x] **Step 1: Export the build environment and build the workspace clean**
 
 ```bash
 cd /home/prestonalthaus/claude/fortress-lang-rewrite/fortressc
@@ -57,7 +57,7 @@ cargo build --workspace
 
 Expected: builds with no warnings.
 
-- [ ] **Step 2: Record the parser corpus baseline**
+- [x] **Step 2: Record the parser corpus baseline**
 
 ```bash
 cd /home/prestonalthaus/claude/fortress-lang-rewrite/fortressc
@@ -66,37 +66,34 @@ cargo test -p fortress-parser --test corpus -- --nocapture 2>&1 | grep -E 'parse
 
 Expected: `parsed 428 (24.0% of those that lex)`. If it is not 428, stop: the ratchet in `crates/parser/tests/corpus.rs` and `04-state.md` disagree with the tree, and that has to be understood before anything is built on top of it.
 
-- [ ] **Step 3: Record the set of files that parse**
+- [x] **Step 3: Record the set of files that parse**
 
-```bash
-cd /home/prestonalthaus/claude/fortress-lang-rewrite
-SCRATCH=/tmp/claude-1000/-home-prestonalthaus-claude/92371b9f-ac5f-46f7-a11e-41d63047ecdc/scratchpad
-python3 - > "$SCRATCH/m3f-baseline-parse.txt" <<'PY'
-import os, subprocess
-files = []
-for d, ds, fs in os.walk('.'):
-    ds[:] = [x for x in ds if x not in ('.git', 'target', 'fortressc')]
-    files += [os.path.join(d, f) for f in fs if f.endswith(('.fss', '.fsi'))]
-files.sort()
-for p in files:
-    r = subprocess.run(['fortressc/target/debug/fortressc', p, '--emit-obj', '-o', '/dev/null'],
-                       capture_output=True, text=True)
-    # A parse failure is the only diagnostic whose text has no `..` span prefix
-    # from the types crate and comes from ParseError's Display. Cheaper and
-    # exact: re-run the parser directly is not exposed, so classify on stderr.
-    err = r.stderr
-    parsed = ('expected ' not in err and 'unexpected end of input' not in err
-              and 'reserved word' not in err and 'static parameters' not in err
-              and 'postfix operator' not in err)
-    if parsed:
-        print(p)
-PY
-wc -l "$SCRATCH/m3f-baseline-parse.txt"
+Exact, not heuristic. Temporarily instrument `crates/parser/tests/corpus.rs` to
+print each path it parses, capture the list, and revert the instrumentation. The
+patch is three lines inside the `Ok(_) => parsed += 1,` arm:
+
+```rust
+            Ok(_) => {
+                parsed += 1;
+                if std::env::var("FCORPUS_LIST").is_ok() {
+                    println!("PARSED {}", path.display());
+                }
+            }
 ```
 
-Expected: a count near 428. This heuristic classifies on stderr text; it is used only for the *set diff*, never for the headline number, which comes from the corpus test in Step 2.
+```bash
+cd /home/prestonalthaus/claude/fortress-lang-rewrite/fortressc
+SCRATCH=/tmp/claude-1000/-home-prestonalthaus-claude/92371b9f-ac5f-46f7-a11e-41d63047ecdc/scratchpad
+FCORPUS_LIST=1 cargo test -p fortress-parser --test corpus -- --nocapture 2>/dev/null \
+  | grep '^PARSED ' | sed 's/^PARSED //' | sort > "$SCRATCH/m3f-baseline-parse.txt"
+wc -l "$SCRATCH/m3f-baseline-parse.txt"
+git checkout -- crates/parser/tests/corpus.rs
+```
 
-- [ ] **Step 4: Record the full driver sweep baseline**
+MEASURED 2026-08-19: exactly 428 paths, matching the corpus test's own count.
+Use the same instrumentation for the after-sets in Tasks 3 and 4.
+
+- [x] **Step 4: Record the full driver sweep baseline**
 
 ```bash
 cd /home/prestonalthaus/claude/fortress-lang-rewrite
@@ -128,7 +125,7 @@ PY
 
 Expected on stderr: `# exit profile {0: 151, 1: 1805}`, and no `EXIT70` lines. Measured on this tree on 2026-08-19; the whole sweep takes about 9 seconds.
 
-- [ ] **Step 5: Record the three numbers in the working notes**
+- [x] **Step 5: Record the three numbers in the working notes**
 
 No commit. Carry forward: **parse 428, compile 151, exit-70 zero.** Every later measurement is stated against these.
 
@@ -150,7 +147,7 @@ No commit. Carry forward: **parse 428, compile 151, exit-70 zero.** Every later 
 - Consumes: `Checker::call(&mut self, callee: &Expr, args: &[Expr], span: Span, expected: Option<Type>) -> Checked<TypedExpr>` (`crates/types/src/lib.rs:1187`); `Checker::lookup(&self, name: &str) -> Option<Local>` (`:544`); `self.functions: HashMap<String, Vec<Signature>>`; `self.registry.objects: <name -> ObjectInfo { singleton: bool, .. }>`; `MpiOp::from_name(name) -> Option<MpiOp>`.
 - Produces: `TypeError::JuxtapositionNotBinary { span: Span, found: usize }`, used by Task 5's gate.
 
-- [ ] **Step 1: Write the failing end-to-end test**
+- [x] **Step 1: Write the failing end-to-end test**
 
 Append to `fortressc/crates/driver/tests/end_to_end.rs`:
 
@@ -179,7 +176,7 @@ fn a_shadowed_function_name_is_not_application() {
 }
 ```
 
-- [ ] **Step 2: Write the two fixtures the test needs**
+- [x] **Step 2: Write the two fixtures the test needs**
 
 `fortressc/tests/juxtapply.fss`:
 
@@ -214,7 +211,7 @@ end
 
 `double`'s own body is `x 2`, where `x` is a parameter, so it stays multiplication — the same rule, exercised from the inside. `apply` takes a parameter literally named `f` while a function `f` exists; `f y` must be 3 times 4.
 
-- [ ] **Step 3: Run the tests and watch them fail**
+- [x] **Step 3: Run the tests and watch them fail**
 
 ```bash
 cd /home/prestonalthaus/claude/fortress-lang-rewrite/fortressc
@@ -223,7 +220,7 @@ cargo test -p fortress-driver --test end_to_end juxta 2>&1 | tail -30
 
 Expected: `juxtaposition_of_a_function_is_application` fails, because `fortressc` exits 1 with `unknown name \`println\``. `a_shadowed_function_name_is_not_application` PASSES already — it is the regression guard, and it is supposed to be green before and after.
 
-- [ ] **Step 4: Add the diagnostic**
+- [x] **Step 4: Add the diagnostic**
 
 In `fortressc/crates/types/src/error.rs`, add to the `TypeError` enum, immediately after the `UnresolvableJuxtaposition` variant:
 
@@ -254,7 +251,7 @@ Add to the `Display` match, after the `UnresolvableJuxtaposition` arm:
             ),
 ```
 
-- [ ] **Step 5: Add the function-element test**
+- [x] **Step 5: Add the function-element test**
 
 In `fortressc/crates/types/src/lib.rs`, in `impl Checker`, immediately above `fn juxtaposition`:
 
@@ -280,7 +277,7 @@ In `fortressc/crates/types/src/lib.rs`, in `impl Checker`, immediately above `fn
     }
 ```
 
-- [ ] **Step 6: Apply it at the top of the fold**
+- [x] **Step 6: Apply it at the top of the fold**
 
 In `fortressc/crates/types/src/lib.rs`, at the very start of `fn juxtaposition`, before the comment `// Literals cannot supply a type`:
 
@@ -309,7 +306,7 @@ In `fortressc/crates/types/src/lib.rs`, at the very start of `fn juxtaposition`,
         }
 ```
 
-- [ ] **Step 7: Run the tests and watch them pass**
+- [x] **Step 7: Run the tests and watch them pass**
 
 ```bash
 cd /home/prestonalthaus/claude/fortress-lang-rewrite/fortressc
@@ -318,7 +315,7 @@ cargo test -p fortress-driver --test end_to_end juxta 2>&1 | tail -20
 
 Expected: both PASS.
 
-- [ ] **Step 8: Run the whole suite, clippy and fmt**
+- [x] **Step 8: Run the whole suite, clippy and fmt**
 
 ```bash
 cd /home/prestonalthaus/claude/fortress-lang-rewrite/fortressc
@@ -329,7 +326,7 @@ cargo fmt --check
 
 Expected: all green. The suite was 217 tests before this milestone; it is now 219.
 
-- [ ] **Step 9: Write the three refusal fixtures**
+- [x] **Step 9: Write the three refusal fixtures**
 
 `fortressc/tests/juxtnary.fss`:
 
@@ -370,7 +367,7 @@ run(): () = println(answer ())
 end
 ```
 
-- [ ] **Step 10: Check each refusal fixture by hand and record its exact message**
+- [x] **Step 10: Check each refusal fixture by hand and record its exact message**
 
 ```bash
 cd /home/prestonalthaus/claude/fortress-lang-rewrite
@@ -388,7 +385,7 @@ Expected:
 - `juxtsingleton` exit 1, message contains `neither multiplication nor concatenation`. This is the singleton exclusion: if `is_function_element` used `is_object` instead of `!info.singleton`, the message would be `is a singleton and has no constructor` instead. **The message is the assertion, not the exit code** — both are exit 1.
 - `juxtnullary` exit 0, and running it prints `42`. If it exits 1 with an arity mismatch, deviation 2 is not wired.
 
-- [ ] **Step 11: Measure the compile delta and the exit-70 count**
+- [x] **Step 11: Measure the compile delta and the exit-70 count**
 
 ```bash
 cd /home/prestonalthaus/claude/fortress-lang-rewrite
@@ -400,7 +397,7 @@ Re-run Task 1 Step 4's script verbatim, redirecting to `$SCRATCH/m3f-after-juxt-
 
 Expected: exit profile `{0: 181, 1: 1775}`, **zero** `EXIT70` lines. 181 is the number the design predicts from the scouting spike. If the count differs, report the measured number: the measurement wins, and a difference is worth understanding before moving on. If any `EXIT70` line appears, stop and fix it — that is the M3e latent-crash class and it is exactly what this sweep exists to catch.
 
-- [ ] **Step 12: Measure the nullary rule on its own**
+- [x] **Step 12: Measure the nullary rule on its own**
 
 ```bash
 cd /home/prestonalthaus/claude/fortress-lang-rewrite/fortressc
@@ -411,7 +408,7 @@ cargo build --workspace 2>&1 | tail -3
 
 Report the delta the nullary arm is worth as its own number. It is a deviation from the approved design and it does not get to hide inside an aggregate.
 
-- [ ] **Step 13: Commit**
+- [x] **Step 13: Commit**
 
 ```bash
 cd /home/prestonalthaus/claude/fortress-lang-rewrite
@@ -445,7 +442,7 @@ Adding `Kind::Eq` to the comparison operators is what makes chaining reachable a
 - Consumes: `Parser::postfix(&mut self) -> Parsed<Expr>`; `Parser::glued_left(&self, index: usize) -> bool`; `Parser::peek_ahead(&self, n: usize) -> Option<&Kind>`; `Parser::at(&self, kind: &Kind) -> bool`.
 - Produces: `ParseError::LocalFunctionDeclarationUnsupported { span: Span }`; `Kind::Eq` mapping to `BinOp::Eq`, which Task 4 chains over.
 
-- [ ] **Step 1: Write the failing parser tests**
+- [x] **Step 1: Write the failing parser tests**
 
 Append to `fortressc/crates/parser/tests/parser.rs`:
 
@@ -482,7 +479,7 @@ fn a_binding_of_a_comparison_binds_the_comparison() {
 }
 ```
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 ```bash
 cd /home/prestonalthaus/claude/fortress-lang-rewrite/fortressc
@@ -491,7 +488,7 @@ cargo test -p fortress-parser --test parser 2>&1 | tail -25
 
 Expected: all three fail. The first two on the missing variant (a compile error is a failure here), the third on a parse error at `=`.
 
-- [ ] **Step 3: Add the parse error variant**
+- [x] **Step 3: Add the parse error variant**
 
 In `fortressc/crates/parser/src/error.rs`, add to the enum after `StaticParameterKindUnsupported`:
 
@@ -521,7 +518,7 @@ Add to `Display`, after the `StaticParameterKindUnsupported` arm:
             ),
 ```
 
-- [ ] **Step 4: Make `=` a comparison operator**
+- [x] **Step 4: Make `=` a comparison operator**
 
 In `fortressc/crates/parser/src/lib.rs`, in `comparison_op`, add above the `EqEqEq` arm:
 
@@ -539,7 +536,7 @@ The comment above the function should record why this is safe. Replace the exist
 /// by `block_item`.
 ```
 
-- [ ] **Step 5: Add the block-item guard**
+- [x] **Step 5: Add the block-item guard**
 
 In `fortressc/crates/parser/src/lib.rs`, in `fn block_item`, immediately after `self.pos = save;` and before `let target = self.expr()?;`:
 
@@ -562,7 +559,7 @@ In `fortressc/crates/parser/src/lib.rs`, in `fn block_item`, immediately after `
         }
 ```
 
-- [ ] **Step 6: Add the corpus blocker arm**
+- [x] **Step 6: Add the corpus blocker arm**
 
 In `fortressc/crates/parser/tests/corpus.rs`, in the `match &e` that labels blockers, add before the closing brace:
 
@@ -572,7 +569,7 @@ In `fortressc/crates/parser/tests/corpus.rs`, in the `match &e` that labels bloc
                     } => "local function declaration".to_owned(),
 ```
 
-- [ ] **Step 7: Run the parser tests and watch them pass**
+- [x] **Step 7: Run the parser tests and watch them pass**
 
 ```bash
 cd /home/prestonalthaus/claude/fortress-lang-rewrite/fortressc
@@ -581,7 +578,7 @@ cargo test -p fortress-parser 2>&1 | tail -25
 
 Expected: all PASS. The corpus test's ratchet still asserts 428 and must not regress; the count should now be **higher**, which the ratchet permits.
 
-- [ ] **Step 8: Measure the parse delta and the leakage**
+- [x] **Step 8: Measure the parse delta and the leakage**
 
 ```bash
 cd /home/prestonalthaus/claude/fortress-lang-rewrite/fortressc
@@ -604,7 +601,7 @@ done < "$SCRATCH/m3f-newly-parsing.txt" | head -40
 
 Expected: **no output** from the leakage loop. Any hit is a file that now parses because a local function declaration was misread, and the guard has a hole. Report the count either way.
 
-- [ ] **Step 9: Write the refusal fixture**
+- [x] **Step 9: Write the refusal fixture**
 
 `fortressc/tests/localfn.fss`:
 
@@ -620,7 +617,7 @@ run(): () = do
 end
 ```
 
-- [ ] **Step 10: Check it by hand**
+- [x] **Step 10: Check it by hand**
 
 ```bash
 cd /home/prestonalthaus/claude/fortress-lang-rewrite
@@ -629,7 +626,7 @@ fortressc/target/debug/fortressc fortressc/tests/localfn.fss --emit-obj -o /dev/
 
 Expected: exit 1, message contains `a local function declaration is not implemented`.
 
-- [ ] **Step 11: Clippy, fmt and the whole suite**
+- [x] **Step 11: Clippy, fmt and the whole suite**
 
 ```bash
 cd /home/prestonalthaus/claude/fortress-lang-rewrite/fortressc
@@ -638,7 +635,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-- [ ] **Step 12: Commit**
+- [x] **Step 12: Commit**
 
 ```bash
 cd /home/prestonalthaus/claude/fortress-lang-rewrite
@@ -672,7 +669,7 @@ could see it."
 - Consumes: `Task 3`'s `Kind::Eq => Some(BinOp::Eq)` in `comparison_op`; `infix(op: BinOp, fixity: Fixity, lhs: Expr, rhs: Expr) -> Expr`; `Expr::Block`, `BlockItem::Binding`, `Binding`, `Expr::If`, `Expr::BoolLit`, `Expr::Var`.
 - Produces: `ParseError::ChainedOperatorsDiffer { span: Span, first: &'static str, second: &'static str }`, used by Task 5's gate.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `fortressc/crates/parser/tests/parser.rs`:
 
@@ -735,7 +732,7 @@ fn a_chain_may_not_mix_two_ordering_senses() {
 }
 ```
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 ```bash
 cd /home/prestonalthaus/claude/fortress-lang-rewrite/fortressc
@@ -744,7 +741,7 @@ cargo test -p fortress-parser --test parser 2>&1 | tail -30
 
 Expected: `a_two_operator_chain_desugars_to_a_block` fails on the block assertion, `a_chain_may_not_mix_two_ordering_senses` fails to compile on the missing variant, the other two pass.
 
-- [ ] **Step 3: Add the parse error variant**
+- [x] **Step 3: Add the parse error variant**
 
 In `fortressc/crates/parser/src/error.rs`, add to the enum:
 
@@ -779,7 +776,7 @@ Add to `Display`:
             ),
 ```
 
-- [ ] **Step 4: Add the sense classifier**
+- [x] **Step 4: Add the sense classifier**
 
 In `fortressc/crates/parser/src/lib.rs`, next to `comparison_op`:
 
@@ -816,7 +813,7 @@ const fn op_text(op: BinOp) -> &'static str {
 }
 ```
 
-- [ ] **Step 5: Give the parser a temporary counter**
+- [x] **Step 5: Give the parser a temporary counter**
 
 Find the `struct Parser` definition in `fortressc/crates/parser/src/lib.rs` and add a field:
 
@@ -829,7 +826,7 @@ Find the `struct Parser` definition in `fortressc/crates/parser/src/lib.rs` and 
 
 Initialise it to `0` wherever the struct is constructed.
 
-- [ ] **Step 6: Rewrite `comparison` to collect**
+- [x] **Step 6: Rewrite `comparison` to collect**
 
 Replace `fn comparison` in `fortressc/crates/parser/src/lib.rs` with:
 
@@ -886,7 +883,7 @@ Replace `fn comparison` in `fortressc/crates/parser/src/lib.rs` with:
     }
 ```
 
-- [ ] **Step 7: Write the desugar**
+- [x] **Step 7: Write the desugar**
 
 Immediately below `comparison` in `fortressc/crates/parser/src/lib.rs`:
 
@@ -960,7 +957,7 @@ Immediately below `comparison` in `fortressc/crates/parser/src/lib.rs`:
     }
 ```
 
-- [ ] **Step 8: Add the corpus blocker arm**
+- [x] **Step 8: Add the corpus blocker arm**
 
 In `fortressc/crates/parser/tests/corpus.rs`, add to the `match &e`:
 
@@ -970,7 +967,7 @@ In `fortressc/crates/parser/tests/corpus.rs`, add to the `match &e`:
                     }
 ```
 
-- [ ] **Step 9: Run the parser tests and watch them pass**
+- [x] **Step 9: Run the parser tests and watch them pass**
 
 ```bash
 cd /home/prestonalthaus/claude/fortress-lang-rewrite/fortressc
@@ -979,7 +976,7 @@ cargo test -p fortress-parser 2>&1 | tail -25
 
 Expected: all PASS.
 
-- [ ] **Step 10: Write the end-to-end fixtures**
+- [x] **Step 10: Write the end-to-end fixtures**
 
 `fortressc/tests/chainonce.fss`:
 
@@ -1023,7 +1020,7 @@ run(): () = if 1 <= 2 > 0 then println("y") else println("n") end
 end
 ```
 
-- [ ] **Step 11: Write the end-to-end tests**
+- [x] **Step 11: Write the end-to-end tests**
 
 Append to `fortressc/crates/driver/tests/end_to_end.rs`:
 
@@ -1054,7 +1051,7 @@ fn a_chain_mixing_equivalence_with_one_sense_is_true() {
 }
 ```
 
-- [ ] **Step 12: Run them**
+- [x] **Step 12: Run them**
 
 ```bash
 cd /home/prestonalthaus/claude/fortress-lang-rewrite/fortressc
@@ -1063,7 +1060,7 @@ cargo test -p fortress-driver --test end_to_end chain 2>&1 | tail -20
 
 Expected: both PASS. If `chainonce` fails because `mid`'s body block cannot hold a void statement before its value, check `Checker::block` — a non-final block item takes `expected = None` and any type is allowed, so it should compile.
 
-- [ ] **Step 13: Check the refusal fixture by hand**
+- [x] **Step 13: Check the refusal fixture by hand**
 
 ```bash
 cd /home/prestonalthaus/claude/fortress-lang-rewrite
@@ -1072,7 +1069,7 @@ fortressc/target/debug/fortressc fortressc/tests/badchainsense.fss --emit-obj -o
 
 Expected: exit 1, message contains ``a chain mixes `<=` with `>` ``.
 
-- [ ] **Step 14: Clippy, fmt and the whole suite**
+- [x] **Step 14: Clippy, fmt and the whole suite**
 
 ```bash
 cd /home/prestonalthaus/claude/fortress-lang-rewrite/fortressc
@@ -1081,7 +1078,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-- [ ] **Step 15: Measure both metrics again, and the exit-70 count**
+- [x] **Step 15: Measure both metrics again, and the exit-70 count**
 
 Re-run Task 1 Step 2 (parser corpus), Task 1 Step 3 (parse set, into `$SCRATCH/m3f-final-parse.txt`) and Task 1 Step 4 (driver sweep, into `$SCRATCH/m3f-final-compile.txt`).
 
@@ -1095,7 +1092,7 @@ SCRATCH=/tmp/claude-1000/-home-prestonalthaus-claude/92371b9f-ac5f-46f7-a11e-41d
 comm -13 "$SCRATCH/m3f-baseline-compile.txt" "$SCRATCH/m3f-final-compile.txt" | head -40
 ```
 
-- [ ] **Step 16: Commit**
+- [x] **Step 16: Commit**
 
 ```bash
 cd /home/prestonalthaus/claude/fortress-lang-rewrite
@@ -1124,7 +1121,7 @@ One comparison operator is left byte-identical to what it was."
 - Consumes: every fixture from Tasks 2, 3 and 4; `fortressc/target/debug/fortressc`.
 - Produces: nothing the compiler uses. `./tools/apply-gate.sh`, `--selftest`, `--mutate`.
 
-- [ ] **Step 1: Write the gate**
+- [x] **Step 1: Write the gate**
 
 Create `tools/apply-gate.sh`, modelled on `tools/unit-gate.sh`:
 
@@ -1385,7 +1382,7 @@ printf '\n%d/%d\n' "$passed" "$failed"
 [[ $failed -eq 0 ]]
 ```
 
-- [ ] **Step 2: Make it executable and run the self test**
+- [x] **Step 2: Make it executable and run the self test**
 
 ```bash
 cd /home/prestonalthaus/claude/fortress-lang-rewrite
@@ -1395,7 +1392,7 @@ chmod +x tools/apply-gate.sh
 
 Expected: 7/0. Every assertion has been shown to accept a right answer and refuse a wrong one before it is used on anything.
 
-- [ ] **Step 3: Replace the placeholder mutation with a real evaluate-once mutation**
+- [x] **Step 3: Replace the placeholder mutation with a real evaluate-once mutation**
 
 Mutation 2 must make the desugar duplicate the operand instead of binding it, so the middle operand runs twice. Look at what `desugar_chain` compiled to and pick a single grep-unique line that does it. The intended form: in `desugar_chain`, replace the `Expr::Var` on the right-hand side of each comparison with a clone of the original operand expression. Because `desugar_chain` consumes `operands` into the bindings, the simplest grep-unique mutation that reproduces double evaluation is to make `comparison_at` build both sides from a re-parse-free clone. If no single-line mutation is available, restructure `desugar_chain` so it is: keep a `Vec<Expr>` of the original operands alongside `names`, and have `comparison_at` read from `names`; the mutation then flips one `names.get(...)` to the original-operand vector. Adjust the code so the mutation is one line, then record the exact `from` and `to` strings in `MUTATIONS`.
 
@@ -1406,7 +1403,7 @@ cd /home/prestonalthaus/claude/fortress-lang-rewrite
 ./tools/apply-gate.sh --mutate 2>&1 | tail -30
 ```
 
-- [ ] **Step 4: Run the mutation suite**
+- [x] **Step 4: Run the mutation suite**
 
 ```bash
 cd /home/prestonalthaus/claude/fortress-lang-rewrite
@@ -1415,7 +1412,7 @@ cd /home/prestonalthaus/claude/fortress-lang-rewrite
 
 Expected: `mutations: 4 run, 0 survived, 0 could not be applied`. State each mutation and the numbers it produced when reporting. A gate is not trusted until it has refused.
 
-- [ ] **Step 5: Set `COMPILE_FLOOR` from the measurement and run the gate**
+- [x] **Step 5: Set `COMPILE_FLOOR` from the measurement and run the gate**
 
 Set `COMPILE_FLOOR` to the number Task 4 Step 15 measured, not to 181 if the measurement disagrees.
 
@@ -1426,7 +1423,7 @@ cd /home/prestonalthaus/claude/fortress-lang-rewrite
 
 Expected: all green, and the last line is `N/0`.
 
-- [ ] **Step 6: Re-run the other six gates**
+- [x] **Step 6: Re-run the other six gates**
 
 ```bash
 cd /home/prestonalthaus/claude/fortress-lang-rewrite
@@ -1438,7 +1435,7 @@ done
 
 Expected: generics 20/0, dispatch 19/0, array 16/0, memory 17/0, MPI 17/0, unit 15/0. Nothing in this milestone should move any of them; if one moves, understand it before continuing.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 cd /home/prestonalthaus/claude/fortress-lang-rewrite
@@ -1466,7 +1463,7 @@ real driver and fails on a drop or on any exit 70."
 - Consumes: every measurement from Tasks 2, 3, 4 and 5.
 - Produces: nothing code depends on.
 
-- [ ] **Step 1: Move the parser ratchet**
+- [x] **Step 1: Move the parser ratchet**
 
 In `fortressc/crates/parser/tests/corpus.rs`, replace the floor and its comment with the measured number:
 
@@ -1482,7 +1479,7 @@ In `fortressc/crates/parser/tests/corpus.rs`, replace the floor and its comment 
 
 Replace `<N>` with the number Task 4 Step 15 measured. Run `cargo test -p fortress-parser --test corpus` and confirm it passes on the nose.
 
-- [ ] **Step 2: Update the design document's status and measured numbers**
+- [x] **Step 2: Update the design document's status and measured numbers**
 
 In `docs/superpowers/specs/2026-08-19-m3f-application-chaining-design.md`:
 - Change the status line to `Status: **landed**` plus the commit range.
@@ -1490,11 +1487,11 @@ In `docs/superpowers/specs/2026-08-19-m3f-application-chaining-design.md`:
 - In §7, replace "Not measured: what chained comparison does to the compile metric" with the number, now that it is measured.
 - Add a short subsection recording the three deviations listed at the top of the implementation plan, each with its measurement.
 
-- [ ] **Step 3: Update `ROADMAP.md`**
+- [x] **Step 3: Update `ROADMAP.md`**
 
 Tick M3f, record the two metrics, and name the next milestone. The M3f candidate table in `04-state.md` still holds the measured deltas for the nine constructs that were not built; do not delete it, it is the input to M3g.
 
-- [ ] **Step 4: Update `04-state.md`**
+- [x] **Step 4: Update `04-state.md`**
 
 Set `last_updated` to today. Under `fortress_compiler`, rewrite `active_focus`, `recent_wins`, `known_bugs` and `next_steps`:
 - `active_focus`: the branch and its state, the seven gates and their numbers, the corpus numbers.
@@ -1502,11 +1499,11 @@ Set `last_updated` to today. Under `fortress_compiler`, rewrite `active_focus`, 
 - `known_bugs`: carry forward the deliberate-do-not-fix list, and add: n-ary juxtaposition refused (measured at zero files), local function declarations refused, multifix operators out, no `AND`/`OR`.
 - `next_steps`: the remaining M3f scouting table, unchanged, minus the two constructs this milestone consumed.
 
-- [ ] **Step 5: Update memory**
+- [x] **Step 5: Update memory**
 
 Both existing memories are still right and both gained evidence. Append to `measure-by-experiment-not-by-counting.md`: the blocker histogram was wrong a **fourth** time — `var` 105 blockers to +6 files, `opr` 97 to +5, chained `=` 51 to +49. Append to `full-driver-sweep-finds-latent-crashes.md`: the sweep is now a gate with a floor, not just a one-off measurement, and it runs in about 9 seconds over 1956 files.
 
-- [ ] **Step 6: Final verification, everything, measured**
+- [x] **Step 6: Final verification, everything, measured**
 
 ```bash
 cd /home/prestonalthaus/claude/fortress-lang-rewrite/fortressc
@@ -1522,7 +1519,7 @@ for g in generics dispatch array memory mpi unit apply; do
 done
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 cd /home/prestonalthaus/claude/fortress-lang-rewrite
@@ -1548,3 +1545,35 @@ The `04-state.md` and memory files live outside this repository and are not comm
 **Known soft spot, stated rather than hidden.** Task 5 Step 3 asks the engineer to restructure `desugar_chain` if no single-line mutation reproduces double evaluation. That is the one step in this plan that does not hand over finished code, because the exact grep-unique string depends on how `desugar_chain` reads after `cargo fmt` has reflowed it. The requirement is precise — one grep-unique line, mutation makes `chainonce` print `MID` twice — and the shape of the fix is given.
 
 **One limitation, deliberate and not worth code.** `(f) x` unwraps to `Expr::Var` in `primary`, so a parenthesised identifier is indistinguishable from a bare one and would also be treated as application. The specification distinguishes them. Tracking parenthesisation would mean a new AST field for a form the corpus does not contain; it is recorded here instead.
+
+---
+
+## Execution record, 2026-08-19
+
+All six tasks complete on `m3f/application-chaining`. Deviations from the plan as
+written, each with what forced it:
+
+* **Task 1 Step 3** used exact instrumentation of the corpus test rather than
+  the stderr heuristic the plan first specified. The heuristic could not
+  separate a parse `expected X, found Y` from a type `expected ZZ32, found
+  String`. Recorded in the step.
+* **Task 3 and 4** use the existing `expr()` / `expr_error()` helpers in
+  `parser.rs` instead of the plan's hand-rolled component wrapping. Same
+  assertions, and it reads like the rest of the file.
+* **Task 4** discovered that the desugar must not hoist literal operands. The
+  plan's version bound every operand, which destroys the bidirectional typing
+  `Checker::infix` does for a bare literal, and `0 < mid(1) < 2` typechecked as
+  ZZ32 against ZZ64. Caught by the evaluate-once fixture on its first run.
+* **Task 5 Step 3's soft spot resolved itself.** The one-line grep-unique
+  mutation for double evaluation is `if is_literal(operand) {` -> `if true {`,
+  which disables hoisting entirely. No restructuring was needed.
+* **Task 2 gained an unplanned fix.** The sweep found two corpus files exiting
+  101, a Rust panic: an integer literal typed RR64 from context was still
+  lowered as an i64. Fixed in `int_literal`, with `rr64literal.fss` and a
+  regression test.
+
+Final numbers, all measured on this tree: parser corpus **476** (from 428),
+compile end to end **187** (from 151), zero exit 70, zero panics, 230 cargo
+tests, clippy 0, fmt clean, seven gates green (generics 20/0, dispatch 19/0,
+array 16/0, memory 17/0, MPI 17/0, unit 15/0, apply 20/0), and all four apply
+gate mutations shown to refuse.

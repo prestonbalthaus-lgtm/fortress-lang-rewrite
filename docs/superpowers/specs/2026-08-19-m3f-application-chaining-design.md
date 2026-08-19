@@ -1,7 +1,8 @@
 # Fortress M3f: juxtaposition as function application, and chained comparison
 
 Date: 2026-08-19
-Status: **design, for review. Nothing implemented.**
+Status: **landed**, commits 0d9bb1594..ef5e142ac on `m3f/application-chaining`.
+Implementation plan: `plans/2026-08-19-m3f-application-chaining.md`.
 
 Two independent language rules, both already written down in Specification 1.0,
 both measured before being scoped. `println "Hello"` becomes a call. `a < b < c`
@@ -250,26 +251,73 @@ Mutations, and a gate is not trusted until it has refused:
 
 ## 6. Ratchets, and a new one
 
-* Parser floor 428 → whatever the implementation measures. Chained comparison
-  measured **+49** at parse in the spike, so about 477, but the spike had no
-  desugar and the real one may differ; the measured number wins.
+* Parser floor 428 -> **476**. Chained `=` measured +49 at parse, taking it to
+  477; the sense check then gave one back, and that one is
+  `ProjectFortress/parser_tests/XXXchain1.fss`, whose own source says
+  `(* SHOULD NOT PARSE *)`. It is the legacy suite's negative test for this
+  exact rule. 476 is more correct than 477.
 * Lexer floor 1780, untouched. Neither part of this milestone changes the lexer.
-* **The compile metric gets a floor for the first time.** It is the headline
-  number of this milestone and nothing currently guards it — the parser corpus
-  test stops at the parser. The gate records the count from a full driver sweep
-  and fails if it drops. Measured target is 181 from juxtaposition; chained
-  comparison's contribution to it is **not yet measured** and will be reported
-  rather than predicted.
+* **The compile metric got a floor for the first time**, in `tools/apply-gate.sh`
+  at **187**. The gate sweeps all 1956 files with the real driver -- nine
+  seconds -- and fails if the count drops or if any file exits anything but 0
+  or 1. The parser corpus test stops at the parser and cannot see this number.
 
-## 7. What is measured and what is not, stated plainly
+## 7. What was measured, stated plainly
 
-**Measured, with the real driver over all 1956 files:** juxtaposition
-application is compile 151 → 181, and the n-ary variant adds nothing.
+**Juxtaposition application: compile 151 -> 181**, measured with the real driver
+over all 1956 files, exactly as the scouting spike predicted. The n-ary variant
+adds nothing.
 
-**Measured, with the real corpus test:** chained comparison is parse 428 → 477.
+**Chained comparison: parse 428 -> 477**, measured with the real corpus test,
+exactly as the scouting spike predicted. The sense check then took it to 476.
 
-**Not measured:** what chained comparison does to the compile metric. The
-scouting spike was blunt — `Eq` added to the comparison table with no chaining
-and no desugar — so any compile number taken from it would have been fiction.
-M3e's design predicted its compile movement and was wrong by a factor of three in
-the good direction; this one declines to predict and will report.
+**Chained comparison's effect on the compile metric was not predicted here, and
+it is zero.** Compile stood at 187 before the desugar landed and at 187 after.
+Reporting it rather than predicting it was the right call: M3e's design
+predicted its compile movement and was wrong by a factor of three.
+
+**The full sweep found a third latent crash.** Two files exited 101, a Rust
+panic, not the exit 70 the M3e sweep found: an integer literal that takes RR64
+from context was typed RR64 but still lowered as an i64, so
+`halve(x: RR64): RR64 = x/2` reached `arith` where it requires a float value.
+Pre-existing, and unreachable until `println (halve(3.5))` started parsing as an
+application. Fixed in the checker, where the literal's type is already known;
+worth two files, which is why the final compile number is 187 and not 185.
+
+## 8. Three deviations from this design, found while planning, each measured
+
+1. **Singletons are excluded from the function-element set.** §1.1 said "present
+   in `Checker::functions` or an `MpiOp`, or it is `println`". Object
+   constructors belong there too, but a *singleton* object name is a value --
+   the only type name that is one. The test is `!info.singleton`. Without it
+   `Marker 2` on a singleton becomes `Marker(2)`. Gated by `juxtsingleton.fss`,
+   which asserts the message and not the exit code, because both readings are
+   exit 1.
+
+2. **`f ()` is the zero-argument call.** In Fortress a nullary function's
+   argument is `()`, and a naive delegation reports an arity mismatch on valid
+   source. Measured at **zero** corpus files -- the same number that killed the
+   n-ary rule -- and kept anyway, because four lines that make correct Fortress
+   compile is a different thing from an algorithm that moves no metric.
+
+3. **A local function declaration in block position is refused by name.** Making
+   `=` an equality operator turns `f(x) = 3` in a block from a parse error into
+   a silently accepted discarded comparison. Measured: **236 corpus files carry
+   572 indented `name(...) = ` lines**. The guard is a token-level speculative
+   parse rather than a match on the parsed tree, because a body that is itself
+   an equality (`isZero(x) = x = 0`) collects into a three-operand chain and
+   desugars into a block before any tree match could see it. Verified by set
+   diff: of the 49 files that newly parse, none got there through a misread
+   local function declaration.
+
+## 9. One thing the design got wrong, and the fixture caught it
+
+§2.3's desugar binds every operand. Doing that to a **literal** destroys the
+bidirectional typing `Checker::infix` does for a bare literal operand -- the
+rule that decides ZZ32 against ZZ64 -- because behind a binding the literal no
+longer sees the operand it is being compared with. `0 < mid(1) < 2` typechecked
+as ZZ32 against ZZ64 and was refused.
+
+A literal is a constant, so binding it buys nothing anyway. Only operands that
+can actually be evaluated are bound. This was found by the evaluate-once
+end-to-end fixture on its first run, not by reading the code.
