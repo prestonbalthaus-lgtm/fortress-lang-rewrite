@@ -1,168 +1,266 @@
 # Fortress M3j: generic dotted methods, and functional methods
 
 Date: 2026-08-19
-Status: **spec**, written before the code.
-Named as next by `2026-08-19-m3i-dotted-methods-design.md`, which scoped both
-halves and said why neither was built there.
+Status: **landed** on `m3j/generic-and-functional-methods`, five commits, not
+pushed. Named as next by `2026-08-19-m3i-dotted-methods-design.md`.
 
-Baseline, measured on the `m3i/dotted-methods` tip and not taken from a
-document: **1956 corpus files, 222 exit 0, 1734 exit 1, 0 anything else.**
+Compile **222 -> PLACEHOLDER** of 1956. Parse unchanged at **exactly 614** --
+the parser changed by zero lines. **Codegen changed by zero lines**, again, and
+that is a measured result and not an omission: a stamp is a `TypedFn`, a lifted
+functional method is a `TypedFn`, and codegen already compiled both.
 
-## Three parts, not two
+Baseline measured on the M3i tip, not taken from a document: 1956 files,
+**222 exit 0, 1734 exit 1, 0 anything else**.
 
-The milestone brief names two. Reading the expander turned up a third that both
-of them stand on, so it is stated as its own part and measured as its own step.
+## Three parts, and the third was not in the brief
 
-### Part 0: a method's return type and body are not substituted
+The brief named two. Reading the expander turned up a third that both stand on,
+so it is stated and measured as its own step.
 
-`Expander::members` substitutes a method's *parameters* and clones its return
-type and body verbatim. The comment says why — "method bodies are not walked,
-dotted methods are parsed and never checked" — and that comment stopped being
-true at M3i, which checks them.
+| step | compile | what |
+|---|---|---|
+| baseline | 222 | the M3i tip |
+| Part 0 | **224** | a ground method is substituted whole |
+| Part 2 | **229** | functional methods |
+| Part 1 | **PLACEHOLDER** | generic dotted methods |
 
-The consequence is a hard refusal on ordinary code:
+M3h's lesson held again in the other direction: measured separately these are
++2, +5 and +13, and the parts do not simply add, because a file blocked on one
+usually contains another.
 
-```
-object Cell[\T\](v: T)
-  get(): T = v
-end
-```
+## Part 0: a method's return type and body were not substituted
 
-`unknown type T`, because `T` reached `build_method_signatures` unsubstituted
-and `storable` could not resolve it. The `Err(_) if abstract_` escape only
-covers bodiless declarations.
+`Expander::members` substituted a method's *parameters* and cloned its return
+type and body. The comment said why -- "method bodies are not walked, dotted
+methods are parsed and never checked" -- and that stopped being true at M3i,
+which checks them.
 
-The same clone also swallows demand: a method body calling `foo[\ZZ32\]()`
-raises no instantiation request, so the checker meets an `Expr::Instantiate`
-and reports `NotGeneric` about a name that is.
+The consequence was a hard refusal on ordinary code. `object Cell[\T\](v: T)`
+with `get(): T = v` reported **`unknown type T`**, because `T` reached
+`build_method_signatures` unsubstituted and the `Err(_) if abstract_` escape
+only covers bodiless declarations. The same clone swallowed demand: a method
+body calling `foo[\ZZ32\]()` raised no instantiation request at all.
 
-Part 0 substitutes all three for a **ground** method. A **generic** method
-cannot be walked here at all — its body may name its own static parameters, and
-walking `Cell[\S\]` with `S` unbound would mangle a request for a type that
-does not exist. It is registered as a template instead, which is what Part 1
-consumes.
+### And a slot map keyed by something that is not unique
 
-### Part 1: generic dotted methods, by over-approximation
+`method_slots` was keyed by the declaration's start offset. Two instantiations
+of one generic type are **clones of the same members and carry the same span**,
+so `Cell[\ZZ32\].get` and `Cell[\String\].get` shared one entry and the second
+overwrote the first.
 
-`o.m[\String\]()` refuses today. Expansion is untyped, so it cannot know what
-`o` is, and it runs before the checker, so nothing later can raise the demand.
+Rekeyed to `(owner, member index)`, which is unique by construction and reads
+identically in both passes -- so it cannot desynchronise the way the running
+positional index M3i's comment warns about would.
+
+`fortressc/tests/genericowner.fss` prints `7 hi 7 hi` and the emitted module
+carries `Cell$ZZ32$e$m$get` returning `i32` beside `Cell$String$e$m$get`
+returning `ptr`. Two instantiations, two methods, two return types.
+
+## Part 1: generic dotted methods, by over-approximation
+
+`o.m[\String\]()` refused. Expansion is untyped, so it cannot know what `o` is,
+and it runs before the checker, so nothing later can raise the demand -- the
+M3g fixpoint in miniature.
 
 The answer that keeps the phase split is the one M3i named: **stamp `m` at
-those arguments into every type that declares a generic `m` of matching static
-and value arity.** Demand stays syntactic. The receiver is never consulted.
+those arguments into every type declaring a generic `m` of matching static and
+value arity.** Demand stays syntactic; the receiver is never consulted.
 
-Correctness comes from what happens after: a stamp is an ordinary ground
-method, so M3c's symmetric dispatch picks the winner by receiver type and the
-stamps nothing reaches are dead code. `MAX_INSTANTIATIONS` counts stamps, so
-the over-approximation is bounded by the ceiling that already exists.
+Correctness comes from what happens next. A stamp is an ordinary ground method,
+so M3c's symmetric dispatch picks the winner by receiver type and the stamps
+nothing reaches are dead code. `MAX_INSTANTIATIONS` counts stamps and type
+instantiations against **one** ceiling, so the guessing is bounded by a limit
+that already existed.
 
-The call site rewrites to the mangled name and stays a dotted call:
+The call site keeps its shape and only its name changes:
 
 ```
 Call{ callee: Instantiate{ callee: Field{o, "m"}, args: [String] } }
   ->  Call{ callee: Field{o, "m$String$e"} }
 ```
 
-The unqualified form inside a method body — `f[\S\]()`, which
-`compiler_tests/Compiled15.fss` writes — rewrites to `Var("f$ZZ32$e")` and
-lands on M3i's `m()` means `self.m()` path.
+and the unqualified form inside a method body -- `f[\S\]()`, which
+`compiler_tests/Compiled15.fss` writes -- becomes `Var("f$ZZ32$e")` and lands
+on M3i's `m()` means `self.m()` path. The value arity is read at the
+application, which is why the rewrite lives in the `Call` arm and not in the
+`Instantiate` arm below it.
 
 **Two substitutions, composed, applied once.** A generic method inside a
 generic type has an owner-level substitution and a method-level one. Walking
-with either alone is wrong, so the template records the owner's substitution
-and the stamp walks once with the union, the method's own parameters winning
-where the names collide.
+with either alone is wrong -- the owner's alone meets the method's own
+parameters unbound and would mangle a request for a type that does not exist --
+so the template records the owner's and the stamp walks once with the union,
+the method's own parameters winning where names collide.
 
 **One fixpoint, two kinds of job.** A stamped body can demand a type
-instantiation and a type instance can register new method templates, so type
-expansion and stamping run in one loop to a joint fixpoint rather than one
-after the other.
+instantiation and a type instance registers method templates a stamp still has
+to be made from, so `expand_types` and `stamp_methods` run in one loop to a
+joint fixpoint rather than one after the other.
 
-#### What over-approximation costs, and where the line is
+`fortressc/tests/genericmethod.fss` prints `1 2 1 2 6`: the receiver decides,
+twice of it at run time through a trait. `Unused` never appears at a call site
+and still carries both stamps -- the over-approximation, read off the object
+rather than taken on trust -- and `Spare`, which declares `f` at an arity
+nothing demands, carries none.
+
+### What a wrong guess costs, and where the line is
 
 Stamping into a type the receiver could never have puts a body in front of the
 checker that the program never asked to compile. Two failure modes, and they
 are **not** the same:
 
-* **A bound fails on a stamp.** `record_bounds` tags the obligation with the
-  stamp's identity. `discharge_bounds` runs at the top of `run`, before any
-  body is checked and before any dispatch table is memoised, so a failure there
-  **prunes the stamp** instead of refusing the component. A call whose receiver
-  domain includes the pruned type then fails the exactly-one-winner check that
-  M3c already runs, naming the tuple. No new rule, and the closed-world answer.
-* **A stamped body does not typecheck.** That is a **hard error**. Dropping a
-  would-be winner after signatures exist reroutes dispatch to a less specific
-  applicable member, which is a silently wrong answer — the class this compiler
-  refuses to produce. If it bites the corpus the cost gets stated, the way
-  M3i's six regressions were.
+* **A bound fails on a stamp.** The obligation is tagged with the stamp's
+  identity. `discharge_bounds` runs at the top of `run`, before any body is
+  checked and before any dispatch table is memoised, so a failure there
+  **withdraws the stamp** instead of refusing the component. A call whose
+  receiver domain includes the withdrawn type then fails the exactly-one-winner
+  check M3c already runs. No new rule.
+* **A stamped body does not typecheck.** That is a **hard error**, deliberately.
+  Dropping a would-be winner after signatures exist reroutes dispatch to a less
+  specific applicable member, which is a silently wrong answer. It did not bite
+  the corpus: the sweep is clean.
 
-Stated limit: pruning covers the direct obligation. A *type* instantiation
+**A withdrawn stamp leaves the candidate set entirely, not merely the target
+list**, and that half is measured too. Left in, its wrongly instantiated
+parameter types reach `agreed`, the two declarations disagree on a column, a
+literal takes no hint and defaults to `ZZ32`, and the program is blamed for a
+guess expansion made. `tests/prunedstamp.fss` prints `1 2 3`; with either half
+reverted it reports a diagnostic against source that is correct.
+
+Stated limit: withdrawal covers the direct obligation. A *type* instantiation
 demanded only by a wrong stamp records ordinary, untagged obligations, so a
 bound failure one level down still refuses the component. Not built, because
 not measured.
 
-### Part 2: functional methods
+## Part 2: functional methods
 
 A member with a `self` parameter is a *functional* method. 1.0 lifts it into
-the **top-level overload set of its name** — `functions`, not `methods` — and
-it is called `f(x, y)`, never `x.f(y)`.
+the **top-level overload set of its name** -- `functions`, not `methods` -- and
+it is written `f(x, y)`, never `x.f(y)`.
 
 `self` keeps its **written position**. `area(self, k: ZZ32)` lifts to
-`(Owner, ZZ32)` and `foo(x: ZZ32, self)` lifts to `(ZZ32, Owner)`. Symmetric
-dispatch does not care which column the interesting type is in, so forcing
-position 0 would be extra code with a chance of being wrong.
+`(Owner, ZZ32)` and `scaled(k: ZZ32, self)` to `(ZZ32, Owner)`. Symmetric
+dispatch does not care which column holds the interesting type, so forcing the
+receiver to position 0 would be code with a chance of being wrong and no chance
+of being right in a new way.
 
-`Self` resolves to the owner across the whole signature — the `self` parameter,
-the other parameters, and the return type. For an object owner that is the
-object type; for a trait owner it is the trait type, which under closed-world
-dispatch is the sound reading and is stated as a deviation from 1.0's
-run-time-type reading.
+`Self` resolves to the owner across the whole signature -- the `self`
+parameter, the other parameters, and the return type -- and **dotted methods
+resolve it the same way**, because two kinds of method disagreeing about `Self`
+would be a difference with no reason behind it. For a trait owner it resolves
+to the trait type; under closed-world dispatch that is the sound reading, and
+it is a stated deviation from 1.0, where `Self` is the receiver's run-time type.
 
 Symbols are always owner qualified (`Owner$f$name`), never bare, because a bare
-one collides with a real top-level `f` of the same name. The overload count is
-taken over the **merged** set — top-level declarations and functional methods
-together — or two members get one symbol and codegen defines the second against
-the first's declaration, which is the bug M3i's `method_symbol` comment records.
+one collides with a real top-level `f`. The overload count is taken over the
+**merged** set -- top-level declarations and functional methods together -- or
+two members take one symbol and codegen defines the second against the first's
+declaration, which is the bug `method_symbol`'s comment already records.
 
-**A generic functional method is out of scope**, and it gets a named
-diagnostic rather than the `unknown name` catch-all: the name exists, the
-lifting does not. `not_passing_yet/genericFunctionalMethods.fss` is the corpus
-witness. A wrong-mechanism diagnostic moves files into the wrong bucket and
-milestones are chosen off those buckets — that lesson is two milestones old.
+`tests/functionalmethod.fss` prints `16 0 107 15 9 0`, and each number is a
+different rule: the override, the inherited default, a real top-level member of
+the same set, `self` written second, and dispatch deciding on the run-time type
+twice.
 
-## A defect Part 1 forces out into the open
+**A generic functional method is out of scope, and gets a named diagnostic.**
+`unknown name` about a declaration three lines up is false, and files the
+program under the wrong blocker -- and milestones are chosen off those buckets.
+Five corpus files say so by name now; before, they were spread across
+`unknown name` and `takes no static arguments`.
 
-`method_slots` is keyed by `m.span.start`. Two instantiations of one generic
-type clone the same members, so `Cell[\ZZ32\].get` and `Cell[\String\].get`
-carry **the same span**, and the second overwrites the first. Stamps make it
-worse — one template, many owners.
+## The deviation this milestone had to decide: a requirement is not an implementation
 
-Rekeyed to `(owner, member index)`, which is unique by construction and
-identical in both passes, so it cannot desynchronise the way the positional
-index M3i's comment warns about did.
+M3i's note says a bodiless declaration "types a call and is never a target".
+The code only had the second half: `applicable` filtered on `concrete` before
+the static return type was computed, so a trait declaring `f` abstractly with
+every object beneath it implementing `f` **refused** -- ordinary Fortress, and
+the shape `compiler_tests/Compiled15.fss` is written in.
 
-## Measurement plan
+Making abstract declarations simply applicable is also wrong, and the corpus
+said so within one sweep: in
+`long_term_not_working/abstract/DiamondInheritance7.fss` an object inherits a
+concrete `m` from `S` and an abstract `m` from `T`, and the two tie -- an
+ambiguity reported between an implementation and a *requirement*, which is not
+an ambiguity at all.
 
-Per-construct deltas are measured, in this order, each against the previous:
+The rule, and it is a deviation worth signing off rather than discovering in a
+diff: **what types a call is the implementations, and a bodiless declaration
+only when there is no implementation applicable at all.** Two witnesses, both
+in the gate:
 
-| step | what |
+| witness | before | after |
+|---|---|---|
+| `Compiled15.fss` | refused, `no declaration of f$ZZ32$e applies to (T)` | compiles, prints `pass` |
+| `DiamondInheritance7.fss` | ambiguity between `S.m` and abstract `T.m` | compiles, prints `S.m cd` |
+
+`badabstract.fss` is still refused and its diagnostic got **better**: it now
+names `(Rock)`, the type that is missing the implementation, rather than
+`(Animal)`, the trait that is not.
+
+## What it cost
+
+Two files that compiled before do not now, and both are honest:
+`compiler_tests/Compiled10.d.fss` and `Compiled10.k.fss` are the legacy suite's
+own `comprises` tests -- `.k` annotates each call `(* Yes *)` or `(* No *)` and
+contains calls marked *No* -- and their functional method bodies are checked
+for the first time. A file that compiled because its body was never looked at
+was not a compiling file.
+
+Three of M3i's six regressions come back: `Compiled1.ai.fss` and
+`TestImports1/2.fss` all needed a generic method to resolve.
+
+## Gates
+
+`tools/dispatch-gate.sh` **23/0 -> PLACEHOLDER**, with the four programs above
+asserted by output, the over-approximation asserted in symbols, and two
+refusals asserted by name.
+
+`tools/apply-gate.sh` `COMPILE_FLOOR` **222 -> PLACEHOLDER**.
+
+Mutations, every one **shown to refuse** before any green was reported:
+
+| mutation | result |
 |---|---|
-| baseline | 222 |
-| Part 0 | method substitution |
-| Part 2 | functional methods, measured on Part 0 |
-| Part 1 | generic dotted methods, measured on Part 0 + Part 2 |
+| file a method slot under its span, which two instantiations share | REFUSED, 9 checks |
+| stamp no generic method anywhere | REFUSED, 5 checks |
+| drop the first static argument of every stamp | REFUSED, 2 checks |
+| refuse the component instead of withdrawing a wrong stamp | REFUSED, 2 checks |
+| leave a withdrawn stamp in the candidate set | REFUSED, 2 checks |
+| let a requirement tie with an implementation | REFUSED, 4 checks |
+| let a bodiless functional declaration be a dispatch target | REFUSED, 1 check |
 
-M3h established that a delta taken against an older baseline is biased **low**,
-not merely unreliable, so the combined number is what the ratchet takes.
+Full run: dispatch **12 mutations, 0 survived, 0 could not be applied**.
 
-Non-negotiable, from the guidelines: every gate self-tests, and a real mutation
-is run against each new assertion and **shown to fail** before its green result
-is reported. The mutation table is split on `IFS='|'`, so no mutation may
-contain a Rust closure.
+Two mutations in *other* gates went to **could not be applied** on the first
+run, which is not a pass and is easy to skim past -- the generics gate's
+emission-order mutation because the loop it names was rewritten, and the unit
+gate's void-guard mutation because a second call site made its pattern
+ambiguous. Both are repointed, and the top-level parameter loop was written out
+long-hand so its mutation target is unique and contains no `|` -- the mutation
+table is split on `IFS='|'`, so a Rust closure in one becomes unparseable and
+is reported as *could not be applied*.
 
-## Expected non-results, to be reported as results
+**The four mutating gates now restore from `HEAD`, not from the index**, and
+refuse to run unless the tree already matches `HEAD`. Restoring from the index
+faithfully puts a defect back if anything stages during a run, and the worktree
+and the index then agree with each other while both are wrong. The apply gate's
+corpus walker also skips `.claude`, which holds agent worktrees -- full repo
+copies, and one left in place reads the corpus at several times its size.
 
-Codegen is expected to change by **zero lines** again: a stamp is a `TypedFn`
-and a lifted functional method is a `TypedFn`. If that holds it gets stated.
-The parser is expected to change by zero lines; the parse floor must read
-**exactly 614** afterwards, and anything else means work leaked into it.
+## Next
+
+`compiler_tests/Compiled17.fss` -- generic methods on generic types, both
+halves of this milestone at once -- now gets as far as **`unknown name AND`**,
+which is library surface rather than a language rule.
+
+The blocker histogram moved where it should: dotted method 14 -> 3, unknown
+name 97 -> 87, unknown type 89 -> 84, `takes no static arguments` 7 -> 4, and a
+new honest bucket of 5 for generic functional methods.
+
+Levers, all measured against the stale 476 parser baseline and therefore due a
+re-spike -- and the bias is **low**: dotted/braced/foreign imports, `var`
+bindings, `opr` declarations, object expressions.
+
+This note **supersedes** the "Generic methods are out" and "Methods with a
+`self` parameter are out" scope items in the M3i note. Both were correct when
+written.

@@ -274,7 +274,7 @@ overload_set() {
 # --------------------------------------------------------------- mutations
 
 MUTATIONS=(
-  'crates/types/src/mono.rs|for instance in self.instances.values() {|for instance in self.instances.values().rev() {|emit instantiations in reverse name order'
+  'crates/types/src/mono.rs|for ((mangled, slot), instance) in &self.instances {|for ((mangled, slot), instance) in self.instances.iter().rev() {|emit instantiations in reverse name order'
   'crates/types/src/mono.rs|check_uniformity(component)?;|let _ = check_uniformity(component);|stop enforcing the uniformity rule'
   'crates/types/src/lib.rs|self.discharge_bounds(component)?;|let _ = self.discharge_bounds(component);|stop discharging bound obligations'
   'crates/types/src/mono.rs|if instance.origin == name && instance.member == member {|if instance.origin == name {|emit every instance once per source declaration of its name'

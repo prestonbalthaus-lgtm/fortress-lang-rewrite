@@ -526,7 +526,11 @@ impl Checker {
                 let mut params = vec![receiver];
                 let mut unresolved = false;
                 for p in &m.params {
-                    match self.storable(&p.ty, "a parameter") {
+                    // `Self` stands for the declaring type here exactly as it
+                    // does in a functional method. The two kinds disagreeing
+                    // about it would be a difference with no reason behind it.
+                    let written = substitute_self(&p.ty, owner);
+                    match self.storable(&written, "a parameter") {
                         Ok(ty) => params.push(ty),
                         Err(_) if abstract_ => {
                             unresolved = true;
@@ -539,7 +543,7 @@ impl Checker {
                     continue;
                 }
                 let returns = match &m.return_type {
-                    Some(t) => match self.registry.resolve(t) {
+                    Some(t) => match self.registry.resolve(&substitute_self(t, owner)) {
                         Ok(ty) => ty,
                         Err(_) if abstract_ => continue,
                         Err(e) => return Err(e),
@@ -690,11 +694,10 @@ impl Checker {
                     name: f.name.clone(),
                 });
             }
-            let params = f
-                .params
-                .iter()
-                .map(|p| self.storable(&p.ty, "a parameter"))
-                .collect::<Checked<Vec<Type>>>()?;
+            let mut params = Vec::with_capacity(f.params.len());
+            for p in &f.params {
+                params.push(self.storable(&p.ty, "a parameter")?);
+            }
             let returns = match &f.return_type {
                 Some(t) => self.registry.resolve(t)?,
                 // Inferred in pass two; Void until then, and overwritten there.

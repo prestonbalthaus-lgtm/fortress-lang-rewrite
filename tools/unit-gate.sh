@@ -174,7 +174,7 @@ CASES
 # file, and the tree has to be clean first. Restored either way.
 
 MUTATIONS=(
-  'crates/types/src/lib.rs|self.storable(&p.ty, "a parameter")|self.registry.resolve(&p.ty)|drop the void guard on parameters'
+  'crates/types/src/lib.rs|params.push(self.storable(&p.ty, "a parameter")?);|params.push(self.registry.resolve(&p.ty)?);|drop the void guard on parameters'
   'crates/parser/src/lib.rs|if elems.len() == 1 {|if false {|fold a one-element parenthesised type into Tuple'
   'crates/parser/src/lib.rs|return Ok(TypeRef::Tuple { elems, span });|return Ok(TypeRef::Named { name: "ZZ32".to_owned(), args: Vec::new(), span });|make a tuple type silently become ZZ32'
 )
