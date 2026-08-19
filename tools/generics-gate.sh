@@ -222,6 +222,7 @@ refusals() {
     local name pattern err status
     for entry in \
         "polyrec|$LIMIT|polymorphic recursion stops at the ceiling" \
+        "stampceiling|$LIMIT|a generic method that stamps itself larger stops there too" \
         "badoverload|uniformly generic or uniformly ground|a mixed overload set is refused" \
         "badbound|does not satisfy|an unsatisfied bound is refused"; do
         IFS='|' read -r name pattern label <<<"$entry"

@@ -127,6 +127,12 @@ literal takes no hint and defaults to `ZZ32`, and the program is blamed for a
 guess expansion made. `tests/prunedstamp.fss` prints `1 2 3`; with either half
 reverted it reports a diagnostic against source that is correct.
 
+The ceiling has its own witness on this path and not only on the type path:
+`tests/stampceiling.fss` is a generic method whose body demands itself at a
+strictly larger type, and it exits **1** naming the limit in 2.8s. The failure
+being pinned is a **hang**, not a wrong answer -- a compiler that never returns
+on user source is worse than one that refuses it.
+
 Stated limit: withdrawal covers the direct obligation. A *type* instantiation
 demanded only by a wrong stamp records ordinary, untagged obligations, so a
 bound failure one level down still refuses the component. Not built, because

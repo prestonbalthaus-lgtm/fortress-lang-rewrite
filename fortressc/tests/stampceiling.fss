@@ -1,0 +1,20 @@
+component stampceiling
+export Executable
+
+(* polyrec.fss for the STAMP path. A generic method whose body demands itself
+   at a strictly larger type generates instantiations without end, and the
+   ceiling that stops it is the same one type instantiation is counted against
+   -- one total per component, or each would be reachable while the total was
+   twice what was intended.
+
+   The failure mode this pins is not "the wrong answer", it is a HANG. A
+   compiler that never returns on user source is worse than one that refuses
+   it, so what is asserted is exit 1 with the limit named. *)
+object Cell[\T\](v: T) end
+
+object O
+   m[\S\](): ZZ32 = m[\Cell[\S\]\]()
+end
+
+run(): () = do println(O.m[\ZZ32\]()) end
+end

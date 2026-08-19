@@ -726,6 +726,28 @@ fn polymorphic_recursion_is_refused_rather_than_compiled_or_hung_on() {
     );
 }
 
+/// The same ceiling on the stamp path, which had no witness of its own. The
+/// failure this pins is a HANG rather than a wrong answer: a generic method
+/// demanding itself at a strictly larger type generates stamps without end.
+#[test]
+fn a_generic_method_that_stamps_itself_larger_stops_at_the_ceiling() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture("stampceiling.fss"))
+        .arg("--emit-ir")
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "a ceiling is a user diagnostic, not a compiler bug:\n{message}"
+    );
+    assert!(
+        message.contains("4096"),
+        "the limit must be named:\n{message}"
+    );
+}
+
 /// Tags are switch keys, and switch arms follow tag order. If instantiations
 /// were numbered as a worklist discovered them, the emitted module would depend
 /// on traversal order rather than on the source.
