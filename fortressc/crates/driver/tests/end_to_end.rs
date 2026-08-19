@@ -429,18 +429,24 @@ fn native_is_available_for_a_build_that_runs_where_it_was_built() {
 // place. The proof that memory stays flat is `tools/memory-gate.sh`, which
 // needs an RSS measurement cargo cannot make.
 
+/// M4 made the collector a STATIC archive, so its symbols are defined inside
+/// the binary rather than left for the loader. `nm -u` finds nothing now, and
+/// `ldd` showing no libgc is the assertion rather than the failure: a Fortress
+/// binary carries its collector and needs no library path to run, which is what
+/// makes it launchable under srun on a compute node.
 #[test]
 fn allocation_goes_through_the_collector() {
     let binary = compile_fixture("skeleton.fss", "gcsym");
     let symbols = Command::new("nm")
-        .arg("-u")
         .arg(&binary)
         .output()
         .expect("could not run nm");
-    let undefined = String::from_utf8_lossy(&symbols.stdout);
+    let defined = String::from_utf8_lossy(&symbols.stdout);
     assert!(
-        undefined.contains("GC_malloc_atomic"),
-        "the runtime is still allocating with malloc:\n{undefined}"
+        defined
+            .lines()
+            .any(|line| line.contains(" T GC_malloc_atomic")),
+        "the collector is not linked into the binary"
     );
 
     let deps = Command::new("ldd")
@@ -449,8 +455,8 @@ fn allocation_goes_through_the_collector() {
         .expect("could not run ldd");
     let deps = String::from_utf8_lossy(&deps.stdout);
     assert!(
-        deps.contains("libgc.so"),
-        "the collector is not linked:\n{deps}"
+        !deps.contains("libgc"),
+        "the collector must be static, not a runtime dependency:\n{deps}"
     );
     let _ = std::fs::remove_file(&binary);
 }
@@ -1020,5 +1026,91 @@ fn a_negative_exponent_and_a_failed_assert_both_halt_cleanly() {
         );
         assert!(stderr.contains(phrase), "{fixture}: {stderr}");
         let _ = std::fs::remove_file(&binary);
+    }
+}
+
+// ---------------------------------------------- M4: parallel execution
+
+/// The correctness claim, and it is the whole array rather than a sample:
+/// a million elements dumped in index order must be byte for byte what a
+/// serial fill produces, at every worker count.
+#[test]
+fn a_parallel_fill_is_byte_identical_to_a_serial_one() {
+    let binary = compile_fixture("parallelfill.fss", "parallelfill");
+    let run_with = |workers: &str| {
+        let out = Command::new(&binary)
+            .env("FORTRESS_WORKERS", workers)
+            .output()
+            .expect("could not run the fill");
+        assert_eq!(out.status.code(), Some(0));
+        out.stdout
+    };
+    let serial = run_with("1");
+    assert_eq!(serial.iter().filter(|b| **b == b'\n').count(), 1_000_000);
+    assert_eq!(serial, run_with("4"), "4 workers disagreed with serial");
+    assert_eq!(serial, run_with("8"), "8 workers disagreed with serial");
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// `seq(...)` is a promise about order, and 5000 is above the size at which
+/// everything else runs inline -- so this really does test the flag rather
+/// than the threshold.
+#[test]
+fn a_sequential_loop_runs_in_index_order() {
+    let binary = compile_fixture("parallelseq.fss", "parallelseq");
+    let out = run(&binary);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    for (index, line) in stdout.lines().enumerate() {
+        assert_eq!(line, index.to_string(), "out of order at line {index}");
+    }
+    assert_eq!(stdout.lines().count(), 5000);
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// The body is OUTLINED into a real function taking an index and an
+/// environment, and the environment is allocated ONCE -- outside the loop.
+/// Allocation inside the parallel region is what makes an allocating loop
+/// collect N times as often and run slower than the serial one.
+#[test]
+fn a_loop_body_is_outlined_and_its_environment_allocated_once() {
+    let ir = emit_ir("parallelfill.fss");
+    assert!(
+        ir.contains(r#"define void @"$loop1"(i64 %0, ptr %1)"#),
+        "the body was not outlined:\n{ir}"
+    );
+    let run_body = ir
+        .split("define void @run()")
+        .nth(1)
+        .and_then(|rest| rest.split("\n}").next())
+        .unwrap_or_default();
+    assert_eq!(
+        run_body.matches("call ptr @fortress_env_alloc").count(),
+        1,
+        "the environment must be allocated exactly once:\n{run_body}"
+    );
+    assert!(
+        run_body.contains("call void @fortress_parallel_for"),
+        "the loop does not reach the runtime:\n{run_body}"
+    );
+}
+
+/// The scope boundary, and it is the whole of M4's race freedom: a parallel
+/// body may only assign to storage its own iteration owns.
+#[test]
+fn a_parallel_body_may_not_assign_outside_itself() {
+    for (name, phrase) in [
+        ("badparallelescape.fss", "is declared outside this loop"),
+        ("badparallelindex.fss", "the element its own iteration owns"),
+    ] {
+        let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+            .arg(fixture(name))
+            .arg("--emit-obj")
+            .arg("-o")
+            .arg("/dev/null")
+            .output()
+            .expect("could not run fortressc");
+        let message = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{name}: {message}");
+        assert!(message.contains(phrase), "{name}: {message}");
     }
 }

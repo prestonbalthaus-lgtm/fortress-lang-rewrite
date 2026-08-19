@@ -1672,49 +1672,30 @@ impl Checker {
             }
         }
 
-        // One shape reaches codegen: a half-open [lo, hi). `a:b` adds one and
-        // `a#n` adds lo, so the difference between the two generator forms
-        // stops existing here rather than in the runtime.
-        let hi_typed = TypedExpr {
+        // One shape reaches codegen: a half-open [lo, hi). `a:b` is inclusive,
+        // so its end is b + 1; `a#n` is a count, so its end is a + n. The
+        // difference between the two generator forms stops existing here
+        // rather than in the runtime.
+        let add = |left: TypedExpr, right: TypedExpr| TypedExpr {
             kind: TypedExprKind::Apply {
                 target: Target::Arith {
                     op: ArithOp::Add,
                     ty: Type::ZZ64,
                 },
-                args: vec![
-                    if inclusive {
-                        lo_typed.clone()
-                    } else {
-                        lo_typed.clone()
-                    },
-                    bound.clone(),
-                ],
+                args: vec![left, right],
             },
             ty: Type::ZZ64,
             span,
         };
+        let one = TypedExpr {
+            kind: TypedExprKind::IntConst(1),
+            ty: Type::ZZ64,
+            span,
+        };
         let hi_typed = if inclusive {
-            // lo:hi is inclusive, so the half-open end is hi + 1.
-            TypedExpr {
-                kind: TypedExprKind::Apply {
-                    target: Target::Arith {
-                        op: ArithOp::Add,
-                        ty: Type::ZZ64,
-                    },
-                    args: vec![
-                        bound,
-                        TypedExpr {
-                            kind: TypedExprKind::IntConst(1),
-                            ty: Type::ZZ64,
-                            span,
-                        },
-                    ],
-                },
-                ty: Type::ZZ64,
-                span,
-            }
+            add(bound, one)
         } else {
-            hi_typed
+            add(lo_typed.clone(), bound)
         };
 
         let mut scope = HashMap::new();
