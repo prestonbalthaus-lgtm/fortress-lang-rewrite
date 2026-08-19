@@ -237,7 +237,7 @@ fn the_acceptance_programs_vocabulary_is_not_reserved() {
 #[test]
 fn the_other_reserved_words_are_reserved_not_identifiers() {
     for word in [
-        "atomic", "opr", "grammar", "for", "getter", "syntax", "value",
+        "atomic", "opr", "grammar", "for", "abstract", "syntax", "value",
     ] {
         assert_eq!(
             kinds(word),

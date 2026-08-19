@@ -1,0 +1,12 @@
+component badvaluebinding
+export Executable
+
+(* A component-level value binding parses, and is refused. Carrying it as a
+   nullary function would compile this program and silently never run the
+   initializer, because nothing can reference the name. *)
+noisy: ZZ32 = do println("INITIALIZER RAN"); 7 end
+
+run(): () = do
+  println("run")
+end
+end

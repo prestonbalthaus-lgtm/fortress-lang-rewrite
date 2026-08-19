@@ -692,3 +692,53 @@ fn a_chain_does_not_hoist_literals() {
         other => panic!("expected a block, got {other:?}"),
     }
 }
+
+// ------------------------------------------------------------------- M3h
+
+/// A component-level value binding parses into a nullary `FnDecl` carrying the
+/// marker. The marker is the whole point: without it the checker cannot tell a
+/// value from a function, and a value carried as a nullary function compiles a
+/// program whose initializer never runs.
+#[test]
+fn a_component_level_value_declaration_is_marked_as_one() {
+    for src in ["pi: ZZ32 = 3", "v = 1", "x := 0"] {
+        match &component(src).decls[..] {
+            [Decl::Function(f)] => {
+                assert!(f.value_binding, "`{src}` is a value binding");
+                assert!(f.params.is_empty(), "`{src}` takes no parameters");
+            }
+            other => panic!("expected one function declaration from `{src}`, got {other:?}"),
+        }
+    }
+}
+
+/// The branch that recognises a value must not steal a function. A function is
+/// always an identifier then `[\` or `(`, so the two cannot collide -- but the
+/// lookahead is one token and this is what pins it.
+#[test]
+fn a_value_declaration_does_not_steal_a_function() {
+    for src in ["f(x: ZZ32): ZZ32 = x", "id[\\T\\](x: T): T = x"] {
+        match &component(src).decls[..] {
+            [Decl::Function(f)] => {
+                assert!(!f.value_binding, "`{src}` is a function, not a value");
+            }
+            other => panic!("expected one function declaration from `{src}`, got {other:?}"),
+        }
+    }
+}
+
+/// `getter`, `setter` and a `self` parameter all parse inside a trait body.
+/// None of them is checked -- dotted method dispatch is not implemented -- so
+/// this pins the parse and nothing further.
+#[test]
+fn getters_setters_and_self_parameters_parse_in_a_trait_body() {
+    let src = "trait Shape\n  \
+                 getter size(): ZZ32\n  \
+                 setter size(n: ZZ32): ()\n  \
+                 area(self, k: ZZ32): ZZ32\n\
+               end";
+    match &component(src).decls[..] {
+        [Decl::Trait(t)] => assert_eq!(t.members.len(), 3, "three members: {:?}", t.members),
+        other => panic!("expected one trait declaration, got {other:?}"),
+    }
+}

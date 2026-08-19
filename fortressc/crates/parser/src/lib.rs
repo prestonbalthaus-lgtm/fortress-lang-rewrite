@@ -287,8 +287,58 @@ impl<'t, 'a> Parser<'t, 'a> {
         match self.peek_kind() {
             Some(Kind::KwTrait) => Ok(Decl::Trait(self.trait_decl()?)),
             Some(Kind::KwObject) => Ok(Decl::Object(self.object_decl()?)),
+            // `pi: RR64 = 3.14`, `v = 1`, `x := 0`, and the initializer-less
+            // `stdIn: Reader` an api declares. A function declaration is always
+            // `Ident` then `[\` or `(`, so none of these three tokens can begin
+            // one and the branch cannot steal a function.
+            Some(Kind::Ident(_))
+                if matches!(
+                    self.peek_ahead(1),
+                    Some(Kind::Colon | Kind::Eq | Kind::ColonEq)
+                ) =>
+            {
+                Ok(Decl::Function(self.value_decl()?))
+            }
             _ => Ok(Decl::Function(self.fn_decl(signature_only)?)),
         }
+    }
+
+    /// A component-level value declaration, carried as a nullary `FnDecl`
+    /// because the AST has no declaration node for a value yet. Deliberate
+    /// approximation: this is a parse-only spike, and mutability is dropped.
+    fn value_decl(&mut self) -> Parsed<FnDecl> {
+        let (name, name_span) = self.identifier("a value name")?;
+        let ty = if self.at(&Kind::Colon) {
+            self.pos += 1;
+            Some(self.type_ref()?)
+        } else {
+            None
+        };
+        // `:=` needs no type annotation here, unlike in a block: component
+        // level has no assignment statements, so there is nothing for a bare
+        // `x := 0` to be confused with.
+        let save = self.pos;
+        self.skip_newlines();
+        let body = if self.at(&Kind::Eq) || self.at(&Kind::ColonEq) {
+            self.pos += 1;
+            self.skip_newlines();
+            Some(self.expr()?)
+        } else {
+            self.pos = save;
+            None
+        };
+        let end = body
+            .as_ref()
+            .map_or_else(|| ty.as_ref().map_or(name_span, TypeRef::span), Expr::span);
+        Ok(FnDecl {
+            name,
+            static_params: Vec::new(),
+            params: Vec::new(),
+            return_type: ty,
+            body,
+            value_binding: true,
+            span: Span::new(name_span.start, end.end),
+        })
     }
 
     // ------------------------------------------------------ traits and objects
@@ -417,6 +467,13 @@ impl<'t, 'a> Parser<'t, 'a> {
     /// and never checked, so their bodies may say anything the grammar allows.
     fn member(&mut self) -> Parsed<Member> {
         let start = self.span_here();
+        // `getter f(): T = e` and `setter f(x: T) = e`. Consumed and dropped:
+        // the modifier changes how the member is *invoked* (`x.f` rather than
+        // `x.f()`), and nothing downstream invokes a method at all yet, so
+        // recording it would be recording a fact no pass can act on.
+        if self.at(&Kind::KwGetter) || self.at(&Kind::KwSetter) {
+            self.pos += 1;
+        }
         let mutable = if self.at(&Kind::KwVar) {
             self.pos += 1;
             true
@@ -556,6 +613,7 @@ impl<'t, 'a> Parser<'t, 'a> {
             params,
             return_type,
             body,
+            value_binding: false,
             span,
         })
     }
@@ -567,6 +625,30 @@ impl<'t, 'a> Parser<'t, 'a> {
             return Ok(params);
         }
         loop {
+            // `self` is a parameter with no written type: it stands for the
+            // enclosing trait or object, which is what makes the declaration a
+            // functional method rather than a function. `Self` is a reserved
+            // word, so the placeholder cannot collide with a declared type.
+            if self.at(&Kind::KwSelf) {
+                let span = self.span_here();
+                self.pos += 1;
+                params.push(Param {
+                    name: "self".to_owned(),
+                    ty: TypeRef::Named {
+                        name: "Self".to_owned(),
+                        args: Vec::new(),
+                        span,
+                    },
+                    span,
+                });
+                self.skip_newlines();
+                if !self.at(&Kind::Comma) {
+                    break;
+                }
+                self.pos += 1;
+                self.skip_newlines();
+                continue;
+            }
             let (name, name_span) = self.identifier("a parameter name")?;
             self.expect(&Kind::Colon, "`:`")?;
             let ty = self.type_ref()?;

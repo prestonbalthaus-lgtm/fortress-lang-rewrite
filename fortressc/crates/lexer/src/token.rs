@@ -1,7 +1,7 @@
 use fortress_ast::Span;
 
 /// The 90 reserved words of `Keyword.rats:21-49`. Twenty are acted on by the
-/// parser, `true`/`false` become literals, and the remaining 68 are reserved so
+/// parser, `true`/`false` become literals, and the remaining 66 are reserved so
 /// the namespace stays closed: reserving late would be a breaking change.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Kind<'a> {
@@ -38,8 +38,13 @@ pub enum Kind<'a> {
     /// The receiver of a dotted method. Method bodies are parsed and not
     /// checked, so this never reaches the type checker.
     KwSelf,
+    /// Member modifiers. A getter is read without an argument list and a setter
+    /// is written to; both are declared like a method and only the invocation
+    /// syntax differs, so the parser treats them as modifiers on one.
+    KwGetter,
+    KwSetter,
 
-    /// One of the other 80 reserved words. The parser rejects these with
+    /// One of the other 66 reserved words. The parser rejects these with
     /// "not in the M1 subset".
     Reserved(&'a str),
     Ident(&'a str),
@@ -125,9 +130,9 @@ impl<'a> Token<'a> {
     }
 }
 
-/// The 79 reserved words outside the implemented subset, sorted for binary
+/// The reserved words outside the implemented subset, sorted for binary
 /// search.
-pub(crate) const RESERVED: [&str; 68] = [
+pub(crate) const RESERVED: [&str; 66] = [
     "BIG",
     "FORALL",
     "SI_unit",
@@ -155,7 +160,6 @@ pub(crate) const RESERVED: [&str; 68] = [
     "fn",
     "for",
     "forbid",
-    "getter",
     "goto",
     "grammar",
     "hidden",
@@ -179,7 +183,6 @@ pub(crate) const RESERVED: [&str; 68] = [
     "reciprocal",
     "requires",
     "settable",
-    "setter",
     "spawn",
     "static",
     "syntax",
@@ -218,6 +221,8 @@ pub(crate) fn classify_word(word: &str) -> Kind<'_> {
         "where" => Kind::KwWhere,
         "var" => Kind::KwVar,
         "self" => Kind::KwSelf,
+        "getter" => Kind::KwGetter,
+        "setter" => Kind::KwSetter,
         "import" => Kind::KwImport,
         "except" => Kind::KwExcept,
         "true" => Kind::True,

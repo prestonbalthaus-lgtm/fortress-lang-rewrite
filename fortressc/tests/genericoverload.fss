@@ -1,0 +1,18 @@
+component genericoverload
+export Executable
+
+object Red end
+object Blue end
+
+(* A generic overload set with more than one member. Both are uniformly
+   generic, so 1.0's uniformity rule admits the set; instantiating it at one
+   static argument must produce a ground overload set of two, not one. *)
+tag[\T\](x: Red): ZZ32 = 1
+tag[\T\](x: Blue): ZZ32 = 2
+
+run(): () = do
+  println(tag[\Red\](Red))
+  println(tag[\Red\](Blue))
+  println(tag[\Blue\](Red))
+end
+end

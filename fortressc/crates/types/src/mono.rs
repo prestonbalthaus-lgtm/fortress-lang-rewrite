@@ -39,7 +39,12 @@ type Subst = BTreeMap<String, TypeRef>;
 /// emitted in this map's order, tags follow declaration order, and switch arms
 /// follow tags -- so a hash map here would make the emitted object depend on
 /// iteration order instead of on the source text.
-type Instances = BTreeMap<String, Instance>;
+///
+/// Keyed by mangled name *and member index*, because a generic overload set
+/// instantiates to a ground overload set: every member is a distinct
+/// declaration that happens to share one mangled name. Keying by the name alone
+/// kept exactly one of them.
+type Instances = BTreeMap<(String, usize), Instance>;
 
 /// One instantiation still to be produced.
 struct Job {
@@ -51,6 +56,9 @@ struct Job {
 
 struct Instance {
     origin: String,
+    /// Which member of the origin's overload set this came from. Emission uses
+    /// it to place each instance under its own source declaration exactly once.
+    member: usize,
     decl: Decl,
 }
 
@@ -59,7 +67,9 @@ pub fn expand(component: &Component) -> Result<Component, TypeError> {
 }
 
 struct Expander<'a> {
-    generics: BTreeMap<String, &'a Decl>,
+    /// Every member, in declaration order. A generic overload set has more than
+    /// one, and each needs its own body instantiated.
+    generics: BTreeMap<String, Vec<&'a Decl>>,
     /// Mangled name to the instantiation, ordered so emission is a pure
     /// function of the source rather than of worklist discovery order.
     instances: Instances,
@@ -70,12 +80,15 @@ struct Expander<'a> {
 
 impl<'a> Expander<'a> {
     fn new(component: &'a Component) -> Result<Self, TypeError> {
-        let mut generics: BTreeMap<String, &'a Decl> = BTreeMap::new();
+        let mut generics: BTreeMap<String, Vec<&'a Decl>> = BTreeMap::new();
         for decl in &component.decls {
             if static_params(decl).is_empty() {
                 continue;
             }
-            generics.insert(decl_name(decl).to_owned(), decl);
+            generics
+                .entry(decl_name(decl).to_owned())
+                .or_default()
+                .push(decl);
         }
         check_uniformity(component)?;
         Ok(Self {
@@ -104,7 +117,7 @@ impl<'a> Expander<'a> {
 
         // Pass two: the worklist, to a fixpoint.
         while let Some(job) = self.queue.pop_front() {
-            if self.instances.contains_key(&job.mangled) {
+            if self.instances.contains_key(&(job.mangled.clone(), 0)) {
                 continue;
             }
             if self.instances.len() >= MAX_INSTANTIATIONS {
@@ -114,40 +127,48 @@ impl<'a> Expander<'a> {
                     limit: MAX_INSTANTIATIONS,
                 });
             }
-            let Some(template) = self.generics.get(&job.origin).copied() else {
+            let Some(templates) = self.generics.get(&job.origin).cloned() else {
                 return Err(TypeError::UnknownType {
                     span: job.span,
                     name: job.origin,
                 });
             };
-            let params = static_params(template);
-            if params.len() != job.args.len() {
-                return Err(TypeError::StaticArgumentCountMismatch {
-                    span: job.span,
-                    name: job.origin.clone(),
-                    expected: params.len(),
-                    found: job.args.len(),
-                });
-            }
-            let mut subst = Subst::new();
-            for (param, arg) in params.iter().zip(&job.args) {
-                subst.insert(param.name.clone(), arg.clone());
-            }
-            // Reserve the key before substituting, so a declaration that
-            // mentions itself -- which every F-bound does -- is a memo hit on
-            // the first lookup instead of an infinite descent.
-            self.instances.insert(
-                job.mangled.clone(),
-                Instance {
-                    origin: job.origin.clone(),
-                    decl: template.clone(),
-                },
-            );
-            self.record_bounds(params, &subst, job.span)?;
-            let built = self.decl(template, &subst, Some(&job.mangled))?;
-            self.drain()?;
-            if let Some(slot) = self.instances.get_mut(&job.mangled) {
-                slot.decl = built;
+            // Every member of the set instantiates at these arguments.
+            // `check_uniformity` has already established that they agree on how
+            // many static parameters they take, but not on what those are
+            // *called*, so each member substitutes under its own names.
+            for (member, template) in templates.iter().enumerate() {
+                let params = static_params(template);
+                if params.len() != job.args.len() {
+                    return Err(TypeError::StaticArgumentCountMismatch {
+                        span: job.span,
+                        name: job.origin.clone(),
+                        expected: params.len(),
+                        found: job.args.len(),
+                    });
+                }
+                let mut subst = Subst::new();
+                for (param, arg) in params.iter().zip(&job.args) {
+                    subst.insert(param.name.clone(), arg.clone());
+                }
+                let key = (job.mangled.clone(), member);
+                // Reserve the key before substituting, so a declaration that
+                // mentions itself -- which every F-bound does -- is a memo hit
+                // on the first lookup instead of an infinite descent.
+                self.instances.insert(
+                    key.clone(),
+                    Instance {
+                        origin: job.origin.clone(),
+                        member,
+                        decl: (*template).clone(),
+                    },
+                );
+                self.record_bounds(params, &subst, job.span)?;
+                let built = self.decl(template, &subst, Some(&job.mangled))?;
+                self.drain()?;
+                if let Some(slot) = self.instances.get_mut(&key) {
+                    slot.decl = built;
+                }
             }
         }
 
@@ -156,6 +177,7 @@ impl<'a> Expander<'a> {
         // stays a pure function of the source text -- which is what keeps tags,
         // and therefore switch arms, deterministic.
         let mut decls: Vec<Decl> = Vec::new();
+        let mut seen_members: BTreeMap<&str, usize> = BTreeMap::new();
         let mut ground = ground.into_iter().peekable();
         for (index, decl) in component.decls.iter().enumerate() {
             if static_params(decl).is_empty() {
@@ -164,9 +186,15 @@ impl<'a> Expander<'a> {
                 }
                 continue;
             }
+            // Each source declaration emits only the instances built from
+            // *it*. Matching on the name alone pushed every member's instance
+            // once per member, so a two-member set emitted each body twice and
+            // the checker reported it as a duplicate definition.
             let name = decl_name(decl);
+            let member = *seen_members.entry(name).or_insert(0);
+            seen_members.insert(name, member + 1);
             for instance in self.instances.values() {
-                if instance.origin == name {
+                if instance.origin == name && instance.member == member {
                     decls.push(instance.decl.clone());
                 }
             }
@@ -283,7 +311,9 @@ impl<'a> Expander<'a> {
     }
 
     fn request(&mut self, origin: &str, args: Vec<TypeRef>, mangled: &str, span: Span) {
-        if self.instances.contains_key(mangled) {
+        // Member 0 is reserved first, so its presence means the whole set has
+        // already been requested at these arguments.
+        if self.instances.contains_key(&(mangled.to_owned(), 0)) {
             return;
         }
         self.demand.push(Job {
@@ -335,6 +365,7 @@ impl<'a> Expander<'a> {
                     Some(b) => Some(self.expr(b, subst)?),
                     None => None,
                 },
+                value_binding: f.value_binding,
                 span: f.span,
             }),
             Decl::Trait(t) => Decl::Trait(TraitDecl {
@@ -416,6 +447,18 @@ impl<'a> Expander<'a> {
 
             Expr::Instantiate { callee, args, span } => {
                 let Expr::Var { name, .. } = callee.as_ref() else {
+                    // `o.m[\String\]()` is a generic *method* call. Its static
+                    // arguments are written; what is missing is dotted method
+                    // dispatch, and expansion runs before the checker, so this
+                    // pass reports it or nothing does. Saying "write its static
+                    // arguments" about a site that has written them sent nine
+                    // corpus files into the wrong blocker bucket.
+                    if let Expr::Field { name, .. } = callee.as_ref() {
+                        return Err(TypeError::DottedMethodUnsupported {
+                            span: *span,
+                            name: name.clone(),
+                        });
+                    }
                     return Err(TypeError::StaticArgumentsRequired {
                         span: *span,
                         name: "<expression>".to_owned(),

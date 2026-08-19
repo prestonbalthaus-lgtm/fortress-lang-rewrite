@@ -1,0 +1,14 @@
+component selfgetter
+export Executable
+
+(* Both forms parse. Neither is checked: a getter is read as a dotted access
+   and a `self` parameter is a functional method, and dotted method dispatch is
+   not implemented. This fixture exists to pin the PARSE, which is what M3h
+   moved. *)
+trait Shape
+  getter size(): ZZ32
+  area(self, k: ZZ32): ZZ32
+end
+
+run(): () = ()
+end

@@ -118,8 +118,12 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
     // as an equality operator took it to 477, and M3f's chain sense check gave
     // one back: XXXchain1.fss is the legacy suite's negative test for that rule
     // and its own source says (* SHOULD NOT PARSE *).
+    // M3h's bundle -- getter/setter, `self` parameters and component-level
+    // value declarations -- took it 476 -> 614. The three were spiked
+    // separately first and measured +35, +36 and +53; together they are +138,
+    // because a file blocked on one usually contains another.
     assert!(
-        parsed >= 476,
-        "parser corpus regressed: {parsed} files parse, floor is 476"
+        parsed >= 614,
+        "parser corpus regressed: {parsed} files parse, floor is 614"
     );
 }

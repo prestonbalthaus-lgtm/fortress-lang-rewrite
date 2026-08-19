@@ -156,6 +156,13 @@ pub enum TypeError {
         span: Span,
         name: String,
     },
+    /// A component-level value binding. It parses, so the metric counts the
+    /// files, but it is not a nullary function: its initializer runs at
+    /// component initialization, and there is no component initialization yet.
+    ValueBindingUnsupported {
+        span: Span,
+        name: String,
+    },
     MutableFieldUnsupported {
         span: Span,
         name: String,
@@ -296,6 +303,7 @@ impl TypeError {
             | Self::ReturnTypeNotCovariant { span, .. }
             | Self::DispatchTableTooLarge { span, .. }
             | Self::NotPrintable { span, .. }
+            | Self::ValueBindingUnsupported { span, .. }
             | Self::StaticArgumentsRequired { span, .. }
             | Self::NotGeneric { span, .. }
             | Self::StaticArgumentCountMismatch { span, .. }
@@ -430,6 +438,12 @@ impl core::fmt::Display for TypeError {
                 f,
                 "dotted method `.{name}` is parsed but not implemented; \
                  it is not the same declaration as a function `{name}`"
+            ),
+            Self::ValueBindingUnsupported { name, .. } => write!(
+                f,
+                "`{name}`: a component-level value declaration is parsed but \
+                 not implemented; its initializer would have to run at \
+                 component initialization, and it is not a nullary function"
             ),
             Self::MutableFieldUnsupported { name, .. } => {
                 write!(f, "`var {name}`: mutable fields are not implemented")

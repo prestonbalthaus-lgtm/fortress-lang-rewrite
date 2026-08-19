@@ -360,6 +360,12 @@ impl Checker {
         }
         for decl in &component.decls {
             let Decl::Function(f) = decl else { continue };
+            if f.value_binding {
+                return Err(TypeError::ValueBindingUnsupported {
+                    span: f.span,
+                    name: f.name.clone(),
+                });
+            }
             if f.name == "run" && !f.params.is_empty() {
                 return Err(TypeError::EntryPointTakesArguments {
                     span: f.span,
