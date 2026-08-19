@@ -1,0 +1,26 @@
+component exponent
+export Executable
+
+(* `^` is above tight juxtaposition, above loose juxtaposition and above every
+   infix operator, and its group is LEFT associative -- so `2^3^2` is 64 and
+   not 512. Every line here is a precedence claim with a number attached.
+
+   The four mixed pairs are ProjectFortress/tests/expTest.fss restated: 1.0
+   declares `^` on every base-exponent combination, so requiring the operands
+   to agree would have been wrong. *)
+run(): () = do
+   println(2^10)
+   println(2^3^2)
+   println(2 (3^2))
+   println(2 3^2)
+   println(2^2 + 1)
+   xr: RR64 = 0.25
+   xz: ZZ64 = 4
+   rz: ZZ64 = 4
+   rr: RR64 = 4.0
+   println(xr^rz)
+   println(xz^rz)
+   println(xr^rr)
+   println(xz^rr)
+end
+end

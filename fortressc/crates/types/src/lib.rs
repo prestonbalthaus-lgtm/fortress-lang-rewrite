@@ -1752,14 +1752,14 @@ impl Checker {
         span: Span,
         expected: Option<Type>,
     ) -> Checked<TypedExpr> {
+        // Only `Mismatch` is rewritten. `LiteralNotApplicable` carries the
+        // type the slot REQUIRED, not the one the operand had, so reusing its
+        // payload here reported "this one is Boolean" about the literal `1`.
+        // Its own message already names the literal correctly.
         let inner = self
             .expr(operand, Some(Type::Boolean))
             .map_err(|e| match e {
-                TypeError::Mismatch { span, found, .. }
-                | TypeError::LiteralNotApplicable {
-                    span,
-                    required: found,
-                } => TypeError::LogicalOperandNotBoolean {
+                TypeError::Mismatch { span, found, .. } => TypeError::LogicalOperandNotBoolean {
                     span,
                     op: "NOT",
                     found,
@@ -1804,15 +1804,13 @@ impl Checker {
             let typed = checker
                 .expr(e, Some(Type::Boolean))
                 .map_err(|err| match err {
-                    TypeError::Mismatch { span, found, .. }
-                    | TypeError::LiteralNotApplicable {
-                        span,
-                        required: found,
-                    } => TypeError::LogicalOperandNotBoolean {
-                        span,
-                        op: name,
-                        found,
-                    },
+                    TypeError::Mismatch { span, found, .. } => {
+                        TypeError::LogicalOperandNotBoolean {
+                            span,
+                            op: name,
+                            found,
+                        }
+                    }
                     other => other,
                 })?;
             if typed.ty == Type::Boolean {

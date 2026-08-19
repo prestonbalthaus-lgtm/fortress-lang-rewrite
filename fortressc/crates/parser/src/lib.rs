@@ -831,6 +831,13 @@ impl<'t, 'a> Parser<'t, 'a> {
         matches!(self.peek_kind(), Some(Kind::Ident(name)) if *name == word)
     }
 
+    /// An infix word operator, which the juxtaposition run must stop at. `NOT`
+    /// is deliberately not one: it is prefix, it DOES start an operand, and
+    /// `unary` consumes it there.
+    fn word_operator_here(&self) -> bool {
+        self.at_word_op("AND") || self.at_word_op("OR")
+    }
+
     /// Comparison operators chain. One operator is left exactly as it was: no
     /// block, no temporaries, and nothing about existing generated code moves.
     fn comparison(&mut self) -> Parsed<Expr> {
@@ -1018,7 +1025,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         // `NOT` is left in: it does start an operand, and `a NOT b` then fails
         // as the multiplication of `a` by a Boolean rather than as a name that
         // does not exist.
-        if self.at_word_op("AND") || self.at_word_op("OR") {
+        if self.word_operator_here() {
             return false;
         }
         match self.peek_kind() {

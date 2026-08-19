@@ -1,0 +1,12 @@
+component negexponent
+export Executable
+
+(* A negative exponent has no integer answer. The shim halts with a diagnostic
+   and exit 1 rather than inventing zero -- the same stance
+   `fortress_array_slot` takes on an out of bounds subscript. *)
+run(): () = do
+   e: ZZ32 = 0 - 1
+   println("before")
+   println(2^e)
+end
+end

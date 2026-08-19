@@ -122,8 +122,11 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
     // value declarations -- took it 476 -> 614. The three were spiked
     // separately first and measured +35, +36 and +53; together they are +138,
     // because a file blocked on one usually contains another.
+    // M3k's `^` took it 614 -> 625, and it is the only part of that milestone
+    // that moves this number: AND, OR and NOT already parsed as identifiers
+    // and died in the checker, where `^` died here.
     assert!(
-        parsed >= 614,
-        "parser corpus regressed: {parsed} files parse, floor is 614"
+        parsed >= 625,
+        "parser corpus regressed: {parsed} files parse, floor is 625"
     );
 }

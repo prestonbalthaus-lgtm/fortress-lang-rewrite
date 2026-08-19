@@ -1,0 +1,10 @@
+component badassert
+export Executable
+
+(* An assert is an `if` over `=`, so it can only compare what `=` compares.
+   Saying that is the point: silently accepting it would promise a comparison
+   that is not there. *)
+run(): () = do
+   assert("a", "b")
+end
+end

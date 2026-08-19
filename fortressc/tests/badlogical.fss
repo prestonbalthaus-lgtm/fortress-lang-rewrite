@@ -1,0 +1,16 @@
+component badlogical
+export Executable
+
+(* The operand is named against the OPERATOR. Desugaring AND in the parser
+   would have been cheaper and would have reported a condition of an `if` the
+   user never wrote, which is how files land in the wrong blocker bucket.
+
+   `n` is a variable rather than the literal `1` on purpose: a literal in a
+   Boolean slot is already reported by the literal rule, and rewriting THAT
+   error into this one printed the type the slot required instead of the type
+   the operand had -- "this one is Boolean", about an integer. *)
+run(): () = do
+   n: ZZ32 = 1
+   println(n AND true)
+end
+end

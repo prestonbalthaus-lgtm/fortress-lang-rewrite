@@ -940,3 +940,85 @@ fn a_stamp_lands_on_every_matching_type_and_no_other() {
         "an arity that matches nothing must take no stamp:\n{ir}"
     );
 }
+
+// ------------------------------ M3k: primitive operators and builtins
+
+/// AND and OR short circuit. The truth table cannot show it -- `true AND
+/// false` is false either way -- so the witness is a right operand that
+/// prints, and its output being absent.
+#[test]
+fn and_and_or_never_evaluate_a_right_operand_they_do_not_need() {
+    let binary = compile_fixture("logical.fss", "logical");
+    let out = run(&binary);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        stdout,
+        "true\nfalse\ntrue\nfalse\nfalse\ntrue\nfalse\ntrue\nfalse\ntrue\ntrue\n"
+    );
+    assert_eq!(
+        stdout.matches("RHS").count(),
+        0,
+        "a right operand ran that should not have: {stdout}"
+    );
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// And the shape underneath it: a conditional branch and a phi. A `select`
+/// would compute both sides, which is the thing being ruled out.
+#[test]
+fn a_short_circuit_is_a_branch_and_a_phi_and_not_a_select() {
+    let ir = emit_ir("logical.fss");
+    assert!(ir.contains("br i1"), "no conditional branch emitted:\n{ir}");
+    assert!(ir.contains("phi i1"), "no phi over the two arms:\n{ir}");
+    assert!(
+        !ir.contains("select i1"),
+        "a select evaluates both operands:\n{ir}"
+    );
+}
+
+/// `^` is left associative and above juxtaposition. `2^3^2` is 64 under left
+/// association and 512 under right, so the number is the whole assertion.
+#[test]
+fn exponentiation_is_left_associative_and_binds_above_juxtaposition() {
+    let binary = compile_fixture("exponent.fss", "exponent");
+    let out = run(&binary);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "1024\n64\n18\n18\n5\n0.00390625\n256\n0.00390625\n256\n"
+    );
+    let _ = std::fs::remove_file(&binary);
+}
+
+#[test]
+fn print_writes_no_newline_and_ignore_still_evaluates() {
+    let binary = compile_fixture("builtins.fss", "builtins");
+    let out = run(&binary);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "ab1true\nSIDE\ndone\n"
+    );
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// A negative integer exponent has no integer answer, and a failed assert has
+/// nothing left to do. Both halt with a diagnostic and exit 1 rather than
+/// inventing a value or carrying on.
+#[test]
+fn a_negative_exponent_and_a_failed_assert_both_halt_cleanly() {
+    for (fixture, phrase) in [
+        ("negexponent.fss", "negative exponent"),
+        ("assertfail.fss", "assertion failed"),
+    ] {
+        let name = fixture.trim_end_matches(".fss");
+        let binary = compile_fixture(fixture, name);
+        let out = run(&binary);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "{fixture} must halt with exit 1: {stderr}"
+        );
+        assert!(stderr.contains(phrase), "{fixture}: {stderr}");
+        let _ = std::fs::remove_file(&binary);
+    }
+}

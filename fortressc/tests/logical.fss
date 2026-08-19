@@ -1,0 +1,29 @@
+component logical
+export Executable
+
+(* AND and OR SHORT CIRCUIT, and that is the whole reason they are not ordinary
+   two-argument calls. `loud` prints when it runs, so the absence of RHS in the
+   output is the proof -- reading `br` and `phi` out of the emitted module says
+   the shape is right, not that the semantics are.
+
+   NOT is a prefix operator, which 1.0 puts above every infix operator, so
+   `NOT true AND true` is `(NOT true) AND true` and is false. *)
+loud(): Boolean = do
+   println("RHS")
+   true
+end
+
+run(): () = do
+   println(true AND true)
+   println(true AND false)
+   println(false OR true)
+   println(false OR false)
+   println(NOT true)
+   println(NOT false)
+   println(NOT true AND true)
+   println(true AND true OR false)
+   println(false AND loud())
+   println(true OR loud())
+   println((true = true) AND (false =/= true))
+end
+end
