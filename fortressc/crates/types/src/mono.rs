@@ -267,6 +267,9 @@ impl<'a> Expander<'a> {
                 Some((template.owner_name.clone(), request.mangled.clone())),
             )?;
             let built = MethodDecl {
+                // Copied, never re-defaulted: a monomorphized stamp that
+                // silently lost `abstract` would be a lie the AST tells.
+                modifiers: template.decl.modifiers,
                 name: request.mangled.clone(),
                 static_params: Vec::new(),
                 params: self.params(&template.decl.params, &subst)?,
@@ -568,6 +571,7 @@ impl<'a> Expander<'a> {
     ) -> Result<Decl, TypeError> {
         Ok(match decl {
             Decl::Function(f) => Decl::Function(FnDecl {
+                modifiers: f.modifiers,
                 name: rename.unwrap_or(&f.name).to_owned(),
                 static_params: Vec::new(),
                 params: self.params(&f.params, subst)?,
@@ -583,6 +587,7 @@ impl<'a> Expander<'a> {
                 span: f.span,
             }),
             Decl::Trait(t) => Decl::Trait(TraitDecl {
+                modifiers: t.modifiers,
                 name: rename.unwrap_or(&t.name).to_owned(),
                 static_params: Vec::new(),
                 extends: self.types(&t.extends, subst)?,
@@ -592,6 +597,7 @@ impl<'a> Expander<'a> {
                 span: t.span,
             }),
             Decl::Object(o) => Decl::Object(ObjectDecl {
+                modifiers: o.modifiers,
                 name: rename.unwrap_or(&o.name).to_owned(),
                 static_params: Vec::new(),
                 params: match &o.params {
@@ -599,6 +605,8 @@ impl<'a> Expander<'a> {
                     None => None,
                 },
                 extends: self.types(&o.extends, subst)?,
+                comprises: self.types(&o.comprises, subst)?,
+                excludes: self.types(&o.excludes, subst)?,
                 members: self.members(&o.members, subst)?,
                 span: o.span,
             }),
@@ -629,6 +637,7 @@ impl<'a> Expander<'a> {
                     span: f.span,
                 }),
                 Member::Method(m) if m.static_params.is_empty() => Member::Method(MethodDecl {
+                    modifiers: m.modifiers,
                     name: m.name.clone(),
                     static_params: Vec::new(),
                     params: self.params(&m.params, subst)?,

@@ -945,3 +945,159 @@ fn a_bare_backslash_does_not_swallow_a_static_parameter_list() {
     let names = opr_names("api t\nopr |\\self/|: ZZ32\nend\n");
     assert_eq!(names, ["|\\_/|"]);
 }
+
+// -------------------------------------------- modifiers and topology clauses
+
+/// All four modifiers are already RESERVED words, so every one of these tests
+/// failed on the pre-M6 parser with `reserved word ... is not in the
+/// implemented subset` -- the branch is reachable only on a token that was
+/// always an error.
+#[test]
+fn declaration_modifiers_are_recorded_on_the_declaration() {
+    let c = component(
+        "component t\n\
+         value trait L[\\T\\] end\n\
+         value object V(s: ZZ32) end\n\
+         private scale(x: ZZ32): ZZ32 = x\n\
+         end\n",
+    );
+    let mods: Vec<fortress_ast::Modifiers> = c
+        .decls
+        .iter()
+        .map(|d| match d {
+            Decl::Trait(t) => t.modifiers,
+            Decl::Object(o) => o.modifiers,
+            Decl::Function(f) => f.modifiers,
+        })
+        .collect();
+    let at = |i: usize| *mods.get(i).expect("three declarations");
+    assert!(at(0).value && !at(0).private);
+    assert!(at(1).value);
+    assert!(at(2).private && !at(2).value);
+}
+
+/// `abstract opr <(self, other: T): Boolean` -- `Library/CompilerAlgebra.fss:18`,
+/// which is a member, an operator and a modifier at once. The flag is recorded
+/// and NOT read: M3c decides abstractness from `body.is_none()`, and giving one
+/// fact two sources is how they come to disagree.
+#[test]
+fn a_member_takes_the_same_modifiers_a_declaration_does() {
+    let c = component(
+        "component t\n\
+         trait T\n\
+         abstract opr <(self, other: T): Boolean\n\
+         private Min_W: ZZ32 = -1\n\
+         end\n\
+         end\n",
+    );
+    let Some(Decl::Trait(t)) = c.decls.into_iter().next() else {
+        panic!("expected a trait");
+    };
+    match t.members.first().expect("a member") {
+        fortress_ast::Member::Method(m) => {
+            assert_eq!(m.name, "<");
+            assert!(m.modifiers.abstract_);
+            assert!(m.body.is_none(), "the flag is stored, not consulted");
+        }
+        other => panic!("expected a method, got {other:?}"),
+    }
+}
+
+/// The 22 library files. The clause is on the line BELOW the header, and the
+/// diagnostic used to come from the wrong side -- `expected a field or method
+/// name, found KwExtends` on something that is not a member at all.
+#[test]
+fn a_topology_clause_may_sit_on_the_line_below_its_header() {
+    let c = component(
+        "component t\n\
+         trait A end\n\
+         trait B end\n\
+         object KeyOverlap(k: ZZ32)\n\
+         \x20       extends A\n\
+         end\n\
+         trait L\n\
+         \x20       extends { A, B }\n\
+         \x20       excludes { A }\n\
+         end\n\
+         end\n",
+    );
+    let objects: Vec<&fortress_ast::ObjectDecl> = c
+        .decls
+        .iter()
+        .filter_map(|d| match d {
+            Decl::Object(o) => Some(o),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(objects.first().expect("an object").extends.len(), 1);
+    let Some(Decl::Trait(l)) = c
+        .decls
+        .iter()
+        .find(|d| matches!(d, Decl::Trait(t) if t.name == "L"))
+    else {
+        panic!("expected trait L");
+    };
+    assert_eq!(l.extends.len(), 2);
+    assert_eq!(l.excludes.len(), 1);
+}
+
+/// `ProjectFortress/parser_tests/XXXtraitClauses.fss:17` writes them backwards.
+/// Reading the three in a loop rather than in a fixed order costs nothing and
+/// removes a second way to be wrong.
+#[test]
+fn topology_clauses_may_come_in_any_order() {
+    let c = component(
+        "component t\n\
+         trait W end\n\
+         trait S end\n\
+         trait T excludes W extends S comprises {U, V} end\n\
+         end\n",
+    );
+    let Some(Decl::Trait(t)) = c
+        .decls
+        .iter()
+        .find(|d| matches!(d, Decl::Trait(t) if t.name == "T"))
+    else {
+        panic!("expected trait T");
+    };
+    assert_eq!(t.extends.len(), 1);
+    assert_eq!(t.excludes.len(), 1);
+    assert_eq!(t.comprises.len(), 2);
+}
+
+/// `comprises { ... }`, 32 corpus sites. There is no `...` token, so it is three
+/// `Dot`s, and the open-set marker is DROPPED -- honest while nothing reads
+/// `comprises`, because an open set and an unwritten one are the same empty
+/// list today.
+#[test]
+fn an_open_comprises_set_parses_to_an_empty_list() {
+    let c = component("api t\ntrait T comprises { ... } end\nend\n");
+    let Some(Decl::Trait(t)) = c.decls.into_iter().next() else {
+        panic!("expected a trait");
+    };
+    assert!(t.comprises.is_empty());
+}
+
+/// `native component File` -- the modifier belongs to the COMPONENT, which is
+/// not the `native f()` shape the feature is usually described by and is the
+/// only one the corpus writes. Read and dropped: a native body lives in C, and
+/// that is a milestone rather than a flag.
+#[test]
+fn a_component_header_may_carry_a_modifier() {
+    let c = component("native component AnyType\ntrait Any end\nend\n");
+    assert_eq!(c.name, "AnyType");
+    assert_eq!(c.decls.len(), 1);
+}
+
+/// An object may `excludes`, so both clause lists are carried on `ObjectDecl`
+/// as well -- one loop reads them for both declaration kinds.
+#[test]
+fn an_object_carries_the_clause_lists_a_trait_does() {
+    let c = component("api t\ntrait A end\nobject O extends A excludes A end\nend\n");
+    let Some(Decl::Object(o)) = c.decls.iter().find(|d| matches!(d, Decl::Object(_))) else {
+        panic!("expected an object");
+    };
+    assert_eq!(o.extends.len(), 1);
+    assert_eq!(o.excludes.len(), 1);
+    assert!(o.comprises.is_empty());
+}

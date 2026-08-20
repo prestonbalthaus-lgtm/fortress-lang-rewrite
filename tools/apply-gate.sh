@@ -45,7 +45,10 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # one of the pre-existing 280 emits byte-identical IR. The floor stays one below
 # the count for the same reason it did at 279 -- XXXimmutable0.fss is a must-FAIL
 # negative test we accept, and refusing it properly must not break this floor.
-COMPILE_FLOOR=284
+# 291 at the M6 declaration parser: +6 for modifiers, continuation-line topology
+# clauses and `comprises { ... }`, zero lost, and every one of the 285 that
+# compiled at the opr spike emits byte-identical IR.
+COMPILE_FLOOR=290
 
 passed=0
 failed=0

@@ -16,7 +16,8 @@ pub use error::ParseError;
 
 use fortress_ast::{
     Assign, BinOp, Binding, BlockItem, Component, Decl, Expr, FieldDecl, Fixity, FnDecl,
-    ImportDecl, Member, MethodDecl, ObjectDecl, Param, Span, StaticParam, TraitDecl, TypeRef, UnOp,
+    ImportDecl, Member, MethodDecl, Modifiers, ObjectDecl, Param, Span, StaticParam, TraitDecl,
+    TypeRef, UnOp,
 };
 use fortress_lexer::{Kind, Token};
 
@@ -248,6 +249,13 @@ impl<'t, 'a> Parser<'t, 'a> {
         // headerless file, which `Compilation.rats:14-19` gives four productions
         // for -- exports, imports and declarations straight to end of file with
         // no wrapper and no `end`.
+        // `native component File`. The modifier belongs to the component, not
+        // to whatever follows it, and reading it here is what stops `native`
+        // being consumed by `decl` and leaving `component` where a function
+        // name was expected. It is read and DROPPED: `Component` has no
+        // modifiers field, and a native component's bodies live in C -- which
+        // is a milestone, not a flag.
+        self.modifiers();
         let headerless = !self.at(&Kind::KwComponent) && !self.at(&Kind::KwApi);
         let mut is_api = false;
         let mut name = String::new();
@@ -359,13 +367,19 @@ impl<'t, 'a> Parser<'t, 'a> {
     }
 
     fn decl(&mut self, signature_only: bool) -> Parsed<Decl> {
+        // `value object`, `private scale(x: ZZ32) = ...`, `abstract` -- the
+        // modifiers come before whatever they modify, so they are read before
+        // the shape is decided rather than in each branch.
+        let modifiers = self.modifiers();
         match self.peek_kind() {
-            Some(Kind::KwTrait) => Ok(Decl::Trait(self.trait_decl()?)),
-            Some(Kind::KwObject) => Ok(Decl::Object(self.object_decl()?)),
+            Some(Kind::KwTrait) => Ok(Decl::Trait(self.trait_decl(modifiers)?)),
+            Some(Kind::KwObject) => Ok(Decl::Object(self.object_decl(modifiers)?)),
             // `opr` reached the parser only to be refused as a reserved word,
             // so this branch cannot change how anything that parses today
             // parses -- it is entered on a token that was always an error.
-            Some(Kind::Reserved("opr")) => Ok(Decl::Function(self.opr_decl(signature_only)?)),
+            Some(Kind::Reserved("opr")) => {
+                Ok(Decl::Function(self.opr_decl(modifiers, signature_only)?))
+            }
             // `pi: RR64 = 3.14`, `v = 1`, `x := 0`, and the initializer-less
             // `stdIn: Reader` an api declares. A function declaration is always
             // `Ident` then `[\` or `(`, so none of these three tokens can begin
@@ -376,16 +390,16 @@ impl<'t, 'a> Parser<'t, 'a> {
                     Some(Kind::Colon | Kind::Eq | Kind::ColonEq)
                 ) =>
             {
-                Ok(Decl::Function(self.value_decl()?))
+                Ok(Decl::Function(self.value_decl(modifiers)?))
             }
-            _ => Ok(Decl::Function(self.fn_decl(signature_only)?)),
+            _ => Ok(Decl::Function(self.fn_decl(modifiers, signature_only)?)),
         }
     }
 
     /// A component-level value declaration, carried as a nullary `FnDecl`
     /// because the AST has no declaration node for a value yet. Deliberate
     /// approximation: this is a parse-only spike, and mutability is dropped.
-    fn value_decl(&mut self) -> Parsed<FnDecl> {
+    fn value_decl(&mut self, modifiers: Modifiers) -> Parsed<FnDecl> {
         let (name, name_span) = self.identifier("a value name")?;
         let ty = if self.at(&Kind::Colon) {
             self.pos += 1;
@@ -410,6 +424,7 @@ impl<'t, 'a> Parser<'t, 'a> {
             .as_ref()
             .map_or_else(|| ty.as_ref().map_or(name_span, TypeRef::span), Expr::span);
         Ok(FnDecl {
+            modifiers,
             name,
             static_params: Vec::new(),
             params: Vec::new(),
@@ -425,17 +440,16 @@ impl<'t, 'a> Parser<'t, 'a> {
     /// `comprises` and `excludes` are recorded and never read: exclusion is
     /// decided from the concrete types the program actually declares, which a
     /// whole-program compiler can see and a modular one cannot.
-    fn trait_decl(&mut self) -> Parsed<TraitDecl> {
+    fn trait_decl(&mut self, modifiers: Modifiers) -> Parsed<TraitDecl> {
         let start = self.expect(&Kind::KwTrait, "`trait`")?.span;
         let (name, _) = self.identifier("a trait name")?;
         let static_params = self.static_params()?;
-        let extends = self.extends_clause()?;
-        let comprises = self.type_set_after(&Kind::KwComprises)?;
-        let excludes = self.type_set_after(&Kind::KwExcludes)?;
+        let (extends, comprises, excludes) = self.topology_clauses()?;
         self.skip_where()?;
         let members = self.members()?;
         let end = self.expect(&Kind::KwEnd, "`end`")?.span;
         Ok(TraitDecl {
+            modifiers,
             name,
             static_params,
             extends,
@@ -448,7 +462,7 @@ impl<'t, 'a> Parser<'t, 'a> {
 
     /// No parameter list at all is a singleton: one instance, constructed once
     /// before `run`. `object O() ... end` is a constructor taking nothing.
-    fn object_decl(&mut self) -> Parsed<ObjectDecl> {
+    fn object_decl(&mut self, modifiers: Modifiers) -> Parsed<ObjectDecl> {
         let start = self.expect(&Kind::KwObject, "`object`")?.span;
         let (name, _) = self.identifier("an object name")?;
         let static_params = self.static_params()?;
@@ -460,29 +474,99 @@ impl<'t, 'a> Parser<'t, 'a> {
         } else {
             None
         };
-        let extends = self.extends_clause()?;
+        let (extends, comprises, excludes) = self.topology_clauses()?;
         self.skip_where()?;
         let members = self.members()?;
         let end = self.expect(&Kind::KwEnd, "`end`")?.span;
         Ok(ObjectDecl {
+            modifiers,
             name,
             static_params,
             params,
             extends,
+            comprises,
+            excludes,
             members,
             span: Span::new(start.start, end.end),
         })
     }
 
-    fn extends_clause(&mut self) -> Parsed<Vec<TypeRef>> {
-        self.type_set_after(&Kind::KwExtends)
+    /// Any run of `abstract`, `value`, `native` and `private`, in any order.
+    ///
+    /// All four are already RESERVED words, so this branch is reachable only on
+    /// a token that was previously always an error -- which is the whole
+    /// regression argument, the same one the `opr` intercept rests on.
+    ///
+    /// `atomic`, `io` and `test` are NOT read here. The first two are named
+    /// deviations with diagnostics of their own and swallowing them would make
+    /// them silent; `test` waits for a measurement rather than a guess.
+    fn modifiers(&mut self) -> Modifiers {
+        let mut found = Modifiers::default();
+        loop {
+            let slot = match self.peek_kind() {
+                Some(Kind::Reserved("abstract")) => &mut found.abstract_,
+                Some(Kind::Reserved("value")) => &mut found.value,
+                Some(Kind::Reserved("native")) => &mut found.native,
+                Some(Kind::Reserved("private")) => &mut found.private,
+                _ => return found,
+            };
+            *slot = true;
+            self.pos += 1;
+        }
     }
 
-    fn type_set_after(&mut self, keyword: &Kind<'_>) -> Parsed<Vec<TypeRef>> {
-        if !self.at(keyword) {
+    /// `extends`, `comprises` and `excludes`, in ANY order and each ON ITS OWN
+    /// LINE if the source puts it there.
+    ///
+    /// The newline is what 22 of the library's 114 files were dying on, and the
+    /// diagnostic said so from the wrong side: the clause landed where a member
+    /// was expected, so the parser reported `expected a field or method name,
+    /// found KwExtends` on something that is not a member at all.
+    ///
+    /// ```text
+    /// object KeyOverlap[\Key, Val\](key: Key, val1: Val, val2: Val)
+    ///         extends UncheckedException
+    /// end
+    /// ```
+    ///
+    /// Reading them in a loop rather than in a fixed order costs nothing and
+    /// removes a second way to be wrong; `members()` opens with `skip_newlines`
+    /// either way, so the position is restored when no clause follows.
+    fn topology_clauses(&mut self) -> Parsed<(Vec<TypeRef>, Vec<TypeRef>, Vec<TypeRef>)> {
+        let (mut extends, mut comprises, mut excludes) = (Vec::new(), Vec::new(), Vec::new());
+        loop {
+            let save = self.pos;
+            self.skip_newlines();
+            let slot = match self.peek_kind() {
+                Some(Kind::KwExtends) => &mut extends,
+                Some(Kind::KwComprises) => &mut comprises,
+                Some(Kind::KwExcludes) => &mut excludes,
+                _ => {
+                    self.pos = save;
+                    return Ok((extends, comprises, excludes));
+                }
+            };
+            if !slot.is_empty() {
+                return Err(self.error("one `extends`, `comprises` or `excludes` clause each"));
+            }
+            self.pos += 1;
+            *slot = self.type_set()?;
+        }
+    }
+
+    /// `T extends U` in a static-parameter list. A bound is not a topology
+    /// clause -- it constrains one parameter and cannot be followed by
+    /// `comprises` -- so it reads the type list directly.
+    fn extends_clause(&mut self) -> Parsed<Vec<TypeRef>> {
+        if !self.at(&Kind::KwExtends) {
             return Ok(Vec::new());
         }
         self.pos += 1;
+        self.type_set()
+    }
+
+    /// The type list a topology clause names: one type, or a braced set.
+    fn type_set(&mut self) -> Parsed<Vec<TypeRef>> {
         self.skip_newlines();
         if !self.at(&Kind::LBrace) {
             return Ok(vec![self.type_ref()?]);
@@ -492,6 +576,18 @@ impl<'t, 'a> Parser<'t, 'a> {
         let mut out = Vec::new();
         if self.at(&Kind::RBrace) {
             self.pos += 1;
+            return Ok(out);
+        }
+        // `comprises { ... }` -- 32 corpus sites -- says the set is open rather
+        // than naming it. There is no `...` token, so it is three `Dot`s. The
+        // marker is DROPPED, which is honest while nothing reads `comprises`:
+        // an open set and an unwritten one are the same empty list today.
+        if self.at(&Kind::Dot) {
+            while self.at(&Kind::Dot) {
+                self.pos += 1;
+            }
+            self.skip_newlines();
+            self.expect(&Kind::RBrace, "`}`")?;
             return Ok(out);
         }
         loop {
@@ -546,6 +642,10 @@ impl<'t, 'a> Parser<'t, 'a> {
     /// and never checked, so their bodies may say anything the grammar allows.
     fn member(&mut self) -> Parsed<Member> {
         let start = self.span_here();
+        // A member takes the same modifiers a declaration does -- `abstract opr
+        // <(self, other: T)`, `private Min_W: ZZ32 = -1` -- and they come
+        // first, before `getter`/`setter`.
+        let modifiers = self.modifiers();
         // `getter f(): T = e` and `setter f(x: T) = e`. The modifier changes
         // how the member is *invoked* -- `x.f` rather than `x.f()` -- so it is
         // recorded and M3i leaves accessors out of the dotted method sets.
@@ -563,7 +663,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         // `opr |self| : ZZ64` is a member of `trait Integral`, `opr COMPOSE`
         // is top level.
         if !accessor && !mutable && self.at(&Kind::Reserved("opr")) {
-            return Ok(Member::Method(self.opr_member()?));
+            return Ok(Member::Method(self.opr_member(modifiers)?));
         }
         let (name, name_span) = self.identifier("a field or method name")?;
 
@@ -585,6 +685,7 @@ impl<'t, 'a> Parser<'t, 'a> {
             let body = self.optional_definition()?;
             let end = body.as_ref().map_or(rparen, Expr::span);
             return Ok(Member::Method(MethodDecl {
+                modifiers,
                 name,
                 static_params,
                 params,
@@ -666,7 +767,7 @@ impl<'t, 'a> Parser<'t, 'a> {
 
     // ------------------------------------------------------------- fn decls
 
-    fn fn_decl(&mut self, signature_only: bool) -> Parsed<FnDecl> {
+    fn fn_decl(&mut self, modifiers: Modifiers, signature_only: bool) -> Parsed<FnDecl> {
         let (name, name_span) = self.identifier("a function name")?;
         let static_params = self.static_params()?;
         self.expect(&Kind::LParen, "`(`")?;
@@ -694,6 +795,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         let end = body.as_ref().map_or(rparen, Expr::span);
         let span = Span::new(name_span.start, end.end);
         Ok(FnDecl {
+            modifiers,
             name,
             static_params,
             params,
@@ -709,7 +811,7 @@ impl<'t, 'a> Parser<'t, 'a> {
     /// `opr` at declaration level. Lifted to an ordinary `FnDecl` whose name is
     /// the operator's own text, which is what makes this a parse spike and not
     /// a language feature: nothing downstream learns a new node.
-    fn opr_decl(&mut self, signature_only: bool) -> Parsed<FnDecl> {
+    fn opr_decl(&mut self, modifiers: Modifiers, signature_only: bool) -> Parsed<FnDecl> {
         let start = self.span_here();
         self.pos += 1;
         let sig = self.opr_signature()?;
@@ -723,6 +825,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         };
         let end = body.as_ref().map_or(sig.end, Expr::span);
         Ok(FnDecl {
+            modifiers,
             name: sig.name,
             static_params: sig.static_params,
             params: sig.params,
@@ -735,13 +838,14 @@ impl<'t, 'a> Parser<'t, 'a> {
 
     /// `opr` inside a trait or object. A member, so its body is optional in a
     /// `.fss` too -- an abstract operator declaration is ordinary Fortress.
-    fn opr_member(&mut self) -> Parsed<MethodDecl> {
+    fn opr_member(&mut self, modifiers: Modifiers) -> Parsed<MethodDecl> {
         let start = self.span_here();
         self.pos += 1;
         let sig = self.opr_signature()?;
         let body = self.optional_definition()?;
         let end = body.as_ref().map_or(sig.end, Expr::span);
         Ok(MethodDecl {
+            modifiers,
             name: sig.name,
             static_params: sig.static_params,
             params: sig.params,

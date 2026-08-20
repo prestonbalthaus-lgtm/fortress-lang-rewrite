@@ -37,9 +37,33 @@ pub enum Decl {
     Trait(TraitDecl),
     Object(ObjectDecl),
 }
+/// The declaration modifiers this parser ingests. They are RECORDED AND NOT
+/// READ: M6's spike is the grammar, and the semantics of value types, native
+/// bodies and access control are each a milestone of their own.
+///
+/// `abstract` in particular is stored and NOT consulted, on purpose. M3c
+/// already decides abstractness from `body.is_none()` -- that is what keeps an
+/// unimplemented abstract method out of the dispatch table -- so wiring the
+/// flag in would give one fact two sources that could disagree.
+///
+/// `atomic` and `io` are deliberately NOT here. Both are real modifiers in 1.0
+/// with real meaning, both are refused today with a diagnostic that names them,
+/// and swallowing them here would turn a named deviation into a silent one.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Modifiers {
+    /// `abstract opr <(self, other: T): Boolean`.
+    pub abstract_: bool,
+    /// `value object CaseInsensitiveString(s: String)`.
+    pub value: bool,
+    /// `native component File`, and a member whose body lives in C.
+    pub native: bool,
+    /// `private scale(x: ZZ32): ZZ32 = ...`.
+    pub private: bool,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FnDecl {
+    pub modifiers: Modifiers,
     pub name: String,
     pub static_params: Vec<StaticParam>,
     pub params: Vec<Param>,
@@ -61,6 +85,7 @@ pub struct FnDecl {
 /// exclusion is decided extensionally from the concrete types in the program.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TraitDecl {
+    pub modifiers: Modifiers,
     pub name: String,
     pub static_params: Vec<StaticParam>,
     pub extends: Vec<TypeRef>,
@@ -74,11 +99,17 @@ pub struct TraitDecl {
 /// singleton: one instance, built once before `run`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectDecl {
+    pub modifiers: Modifiers,
     pub name: String,
     pub static_params: Vec<StaticParam>,
     /// `None` is a singleton. `Some(vec![])` is `object O() ... end`.
     pub params: Option<Vec<Param>>,
     pub extends: Vec<TypeRef>,
+    /// An object cannot `comprises` in 1.0, but it may `excludes`, and both
+    /// clauses are read by one loop shared with `trait` -- so `comprises` is
+    /// carried rather than special-cased away at the parser.
+    pub comprises: Vec<TypeRef>,
+    pub excludes: Vec<TypeRef>,
     pub members: Vec<Member>,
     pub span: Span,
 }
@@ -104,6 +135,7 @@ pub struct FieldDecl {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MethodDecl {
+    pub modifiers: Modifiers,
     pub name: String,
     pub static_params: Vec<StaticParam>,
     pub params: Vec<Param>,
