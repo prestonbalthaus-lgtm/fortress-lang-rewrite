@@ -21,9 +21,10 @@ pub use mono::{expand, mangle_static, MAX_INSTANTIATIONS};
 pub use error::TypeError;
 pub use types::{
     intern, ArithOp, AssignTarget, CompareOp, DispatchFn, DispatchNode, Elem, MpiOp, Target, Type,
-    TypedBlockItem, TypedComponent, TypedExpr, TypedExprKind, TypedField, TypedFn, TypedObject,
-    TypedParam, ARRAY_ALLOC, ARRAY_LENGTH, ARRAY_SLOT, ASSERT_FAILED, DISPATCH_FAILED, ENV_ALLOC,
-    FIRST_TAG, OBJECT_ALLOC, PARALLEL_FOR,
+    TypedBlockItem, TypedCapture, TypedComponent, TypedExpr, TypedExprKind, TypedField, TypedFn,
+    TypedObject, TypedParam, TypedReduction, ARRAY_ALLOC, ARRAY_LENGTH, ARRAY_SLOT, ASSERT_FAILED,
+    ATOMIC_ENTER, ATOMIC_LEAVE, DISPATCH_FAILED, ENV_ALLOC, FIRST_TAG, OBJECT_ALLOC, PARALLEL_FOR,
+    REDUCTION_ALLOC, REDUCTION_WORKERS,
 };
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -95,6 +96,26 @@ struct LoopCtx {
     /// resolves below this is a capture; at or above it is loop-local.
     floor: usize,
     captures: BTreeMap<String, Type>,
+    /// Names from below the floor that the body ASSIGNS. `assign` resolves its
+    /// target with `lookup`, which records nothing, so a name the body only
+    /// WRITES would never reach the environment at all -- and codegen would
+    /// meet an assignment to a name it has no binding for.
+    assigned: BTreeMap<String, AssignRecord>,
+}
+
+/// What the body did to one escaping name, collected across the whole walk.
+/// The verdict cannot be reached at the assignment: reduction.tex:35 asks
+/// whether the name is otherwise READ, and the read may not have happened yet.
+struct AssignRecord {
+    ty: Type,
+    /// The first assignment, which is what a failed recogniser points at.
+    span: Span,
+    /// Every assignment to this name was `+=` or `-=` -- reduction.tex:30-31.
+    /// One `l := e` disqualifies it for good.
+    only_compound: bool,
+    /// Every assignment to this name was inside an `atomic`. That is the other
+    /// carve-out, and it is the one that actually takes the lock.
+    all_atomic: bool,
 }
 
 struct Checker {
@@ -146,6 +167,10 @@ struct Checker {
     object_init: bool,
     /// Numbers the outlined loop bodies so their symbols are unique.
     loops: usize,
+    /// How deep inside `atomic` the walk is. A parallel body MAY assign to an
+    /// escaping name inside one: the lock serialises the write, and the
+    /// capture becomes a by-reference one so the write lands on real storage.
+    atomic_depth: usize,
 }
 
 /// A method lives in its own namespace, so its symbol must not be able to
@@ -388,6 +413,7 @@ impl Checker {
             dispatches: BTreeMap::new(),
             object_init: false,
             loop_ctx: Vec::new(),
+            atomic_depth: 0,
             loops: 0,
         };
         let counts = overload_counts(component);
@@ -1350,6 +1376,50 @@ impl Checker {
         Some(local)
     }
 
+    /// Records an assignment to `name` in every enclosing loop whose floor it
+    /// resolves below. The counterpart to `lookup_capturing`, and it exists
+    /// because `assign` reads its target with `lookup`, which records nothing:
+    /// a name the body only writes has no crossing READ to notice.
+    fn record_assignment(&mut self, name: &str, compound: bool, in_atomic: bool, span: Span) {
+        let Some(depth) = self.depth_of(name) else {
+            return;
+        };
+        let Some(ty) = self.lookup(name).map(|local| local.ty) else {
+            return;
+        };
+        for ctx in &mut self.loop_ctx {
+            if depth >= ctx.floor || name == ctx.binder {
+                continue;
+            }
+            let record = ctx.assigned.entry(name.to_owned()).or_insert(AssignRecord {
+                ty,
+                span,
+                only_compound: true,
+                all_atomic: true,
+            });
+            record.only_compound &= compound;
+            record.all_atomic &= in_atomic;
+        }
+    }
+
+    /// `atomic e`. The depth is what the assignment carve-out reads, and it is
+    /// a depth rather than a flag because atomic.tex:72-75 permits nesting and
+    /// `ProjectFortress/tests/atomic4.fss` uses it.
+    fn atomic(&mut self, body: &Expr, span: Span, expected: Option<Type>) -> Checked<TypedExpr> {
+        self.atomic_depth += 1;
+        let checked = self.expr(body, expected);
+        self.atomic_depth -= 1;
+        let body = checked?;
+        let ty = body.ty;
+        Ok(TypedExpr {
+            kind: TypedExprKind::Atomic {
+                body: Box::new(body),
+            },
+            ty,
+            span,
+        })
+    }
+
     fn declare(&mut self, name: String, ty: Type, mutable: bool) {
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(name, Local { ty, mutable });
@@ -1442,6 +1512,7 @@ impl Checker {
                 *span,
                 expected,
             ),
+            Expr::Atomic { body, span } => self.atomic(body, *span, expected),
             // Unreachable: expansion rewrites every instantiation to a plain
             // name before the checker is constructed.
             Expr::Instantiate { callee, span, .. } => Err(TypeError::NotGeneric {
@@ -1712,6 +1783,7 @@ impl Checker {
             parallel: !sequential,
             floor: self.scopes.len() - 1,
             captures: BTreeMap::new(),
+            assigned: BTreeMap::new(),
         });
 
         let checked = self.expr(body, Some(Type::Void));
@@ -1732,11 +1804,67 @@ impl Checker {
             });
         }
 
-        let captures: Vec<TypedParam> = ctx
+        // THE ORDER OF THESE THREE DECISIONS IS FIXED, and two of the other
+        // orderings are races.
+        //
+        // 1. the body walk is done, so `ctx.captures` is finally complete;
+        // 2. recognise reductions against it -- decide this at the assignment
+        //    instead and `atomic sum += a[i]` followed by `println(sum)` reads
+        //    as a private accumulator AND a captured read of the same name;
+        // 3. only then compute capture mode. A recognised reduction is
+        //    captured NOT AT ALL, by value or by reference; a name that stays
+        //    on the lock path is captured by reference. Do it the other way
+        //    round and a reduction lands in the environment as a shared
+        //    pointer with the lock already elided, which is an unsynchronised
+        //    load-add-store from up to sixteen threads.
+        let mut reductions: Vec<TypedReduction> = Vec::new();
+        let mut by_ref: BTreeMap<String, Type> = BTreeMap::new();
+        for (name, record) in ctx.assigned {
+            let recognised = !sequential
+                && record.only_compound
+                && !ctx.captures.contains_key(&name)
+                && Self::reducible(record.ty);
+            if recognised {
+                reductions.push(TypedReduction {
+                    name,
+                    ty: record.ty,
+                });
+                continue;
+            }
+            // The compound carve-out let this through at the assignment on the
+            // promise that it would turn out to be a reduction. It did not, so
+            // the boundary applies after all -- unless the lock does.
+            if !sequential && !record.all_atomic {
+                return Err(TypeError::ParallelEscape {
+                    span: record.span,
+                    name,
+                });
+            }
+            by_ref.insert(name, record.ty);
+        }
+
+        let mut captures: Vec<TypedCapture> = ctx
             .captures
             .into_iter()
-            .map(|(name, ty)| TypedParam { name, ty, span })
+            .map(|(name, ty)| TypedCapture {
+                by_ref: by_ref.contains_key(&name),
+                name,
+                ty,
+            })
             .collect();
+        for (name, ty) in by_ref {
+            if !captures.iter().any(|c| c.name == name) {
+                captures.push(TypedCapture {
+                    name,
+                    ty,
+                    by_ref: true,
+                });
+            }
+        }
+        // Sorted, so the environment's field order is a function of the source
+        // and not of the order two maps happened to be drained in.
+        captures.sort_by(|a, b| a.name.cmp(&b.name));
+        reductions.sort_by(|a, b| a.name.cmp(&b.name));
 
         self.loops += 1;
         let symbol = format!("$loop{}", self.loops);
@@ -1748,6 +1876,7 @@ impl Checker {
                 hi: Box::new(hi_typed),
                 body: Box::new(body_typed),
                 captures,
+                reductions,
                 symbol,
                 sequential,
             },
@@ -1783,6 +1912,46 @@ impl Checker {
         })
     }
 
+    /// `x op= e`. Only `+` and `-` -- everything past them needs a
+    /// `Monoid[\\T,op\\]` and a user-declared identity, and `||=` is the
+    /// biggest single thing left on the table at 37 corpus uses.
+    ///
+    /// The refusal arm is unreachable through today's parser, which only reads
+    /// `+` and `-` as compound operators at all. It is a diagnostic rather than
+    /// an `unreachable!()` because the rule here is that malformed input is
+    /// never a crash, and the day the parser learns another operator this is
+    /// what it lands on.
+    fn compound_op(&self, op: Option<BinOp>, ty: Type, span: Span) -> Checked<Option<ArithOp>> {
+        let Some(op) = op else {
+            return Ok(None);
+        };
+        let arith = match op {
+            BinOp::Add => ArithOp::Add,
+            BinOp::Sub => ArithOp::Sub,
+            _ => {
+                return Err(TypeError::CompoundOperatorUnsupported {
+                    span,
+                    op: op_name(op),
+                })
+            }
+        };
+        if !ty.is_numeric() {
+            return Err(TypeError::Mismatch {
+                span,
+                found: ty,
+                required: Type::ZZ64,
+            });
+        }
+        Ok(Some(arith))
+    }
+
+    /// Whether a reduction on this type is one the merge can perform. Identity
+    /// for `+` and `-` is a zero bit pattern on all three, and every one of the
+    /// corpus files M5 unlocks declares `var count: ZZ32`.
+    const fn reducible(ty: Type) -> bool {
+        matches!(ty, Type::ZZ32 | Type::ZZ64 | Type::RR64)
+    }
+
     /// The innermost enclosing PARALLEL loop, if there is one. A `seq(...)`
     /// loop is not one: it runs in order on one thread and needs no boundary.
     fn parallel_loop(&self) -> Option<&LoopCtx> {
@@ -1807,22 +1976,37 @@ impl Checker {
     }
 
     fn assign(&mut self, a: &Assign) -> Checked<TypedBlockItem> {
-        // THE scope boundary, and it is one comparison. Everything M4 claims
-        // about data races reduces to this: a parallel body may only assign to
-        // storage it can prove belongs to its own iteration -- a binding it
-        // declared itself, or the array slot its own index names.
+        let in_atomic = self.atomic_depth > 0;
+        // Before anything can refuse it: the crossing has to be on the record
+        // whether it is legal or not, because the environment is built from
+        // exactly these two maps and a write-only name appears in neither
+        // otherwise.
+        if let Expr::Var { name, .. } = &a.target {
+            self.record_assignment(name, a.op.is_some(), in_atomic, a.span);
+        }
+        // THE scope boundary, and it is still one comparison. Everything M4
+        // claims about data races reduces to this: a parallel body may only
+        // assign to storage it can prove belongs to its own iteration -- a
+        // binding it declared itself, or the array slot its own index names.
+        //
+        // M5 gives it two carve-outs. `atomic` serialises the write, so it is
+        // allowed here and the capture becomes a by-reference one. A COMPOUND
+        // assignment is a candidate reduction, and its verdict needs the
+        // finished body -- reduction.tex:35 asks whether the name is otherwise
+        // READ, and the read may come later in the same body -- so it is
+        // deferred to `for_expr`, where `captures` is complete.
         if let Some(floor) = self.parallel_loop().map(|c| c.floor) {
             let binder = self.parallel_loop().map(|c| c.binder.clone());
             match &a.target {
                 Expr::Var { name, span } => {
-                    if self.escapes_loop(name, floor) {
+                    if self.escapes_loop(name, floor) && !in_atomic && a.op.is_none() {
                         return Err(TypeError::ParallelEscape {
                             span: *span,
                             name: name.clone(),
                         });
                     }
                 }
-                Expr::Index { base, index, span } => {
+                Expr::Index { base, index, span } if !in_atomic => {
                     // An array the body created ITSELF is private to this
                     // iteration, so any index into it is safe. Only a shared
                     // array -- one whose name resolves below the loop -- has to
@@ -1842,6 +2026,8 @@ impl Checker {
                         });
                     }
                 }
+                // Inside `atomic` the lock is what makes two iterations
+                // writing the same slot safe, so any index is allowed.
                 _ => {}
             }
         }
@@ -1859,12 +2045,14 @@ impl Checker {
                         name: name.clone(),
                     });
                 }
+                let op = self.compound_op(a.op, local.ty, *span)?;
                 let value = self.expr(&a.value, Some(local.ty))?;
                 Ok(TypedBlockItem::Assign {
                     target: AssignTarget::Var {
                         name: name.clone(),
                         ty: local.ty,
                     },
+                    op,
                     value,
                     span: a.span,
                 })
@@ -1880,6 +2068,7 @@ impl Checker {
                     });
                 };
                 let index = self.expr(index, Some(Type::ZZ64))?;
+                let op = self.compound_op(a.op, elem.as_type(), *span)?;
                 let value = self.expr(&a.value, Some(elem.as_type()))?;
                 Ok(TypedBlockItem::Assign {
                     target: AssignTarget::Element {
@@ -1887,6 +2076,7 @@ impl Checker {
                         index: Box::new(index),
                         elem,
                     },
+                    op,
                     value,
                     span: a.span,
                 })
@@ -2511,10 +2701,50 @@ impl Checker {
             "array" => self.array_new(args, span, expected),
             "length" => self.array_length(args, span, expected),
             _ if self.registry.is_object(name) => {
+                self.refuse_shared_array_argument(args)?;
                 self.construct(name, args, span, *callee_span, expected)
             }
-            _ => self.user_call(name, args, span, *callee_span, expected),
+            _ => {
+                self.refuse_shared_array_argument(args)?;
+                self.user_call(name, args, span, *callee_span, expected)
+            }
         }
+    }
+
+    /// M4's boundary is one comparison over an assignment WRITTEN IN THE BODY.
+    /// An array is captured by pointer, so handing one to a callee moves the
+    /// store somewhere `assign` never looks and the guard never runs -- the
+    /// loop rules go quiet rather than refusing. Refused at every call site
+    /// until a whole-program reachability pass exists; the compiler is already
+    /// whole-program for M3c's dispatch, so the machinery is not far away.
+    ///
+    /// Bare `Var` arguments only, and that composes: `f(g(a))` is refused at
+    /// `g(a)`, because the inner call is checked as an argument expression and
+    /// arrives here itself. `f(a[i])` passes an element and is left alone.
+    ///
+    /// Inside `atomic` the lock serialises the callee's writes too, so the
+    /// refusal lifts with the rest of the boundary.
+    fn refuse_shared_array_argument(&mut self, args: &[Expr]) -> Checked<()> {
+        if self.atomic_depth > 0 {
+            return Ok(());
+        }
+        let Some(floor) = self.parallel_loop().map(|c| c.floor) else {
+            return Ok(());
+        };
+        for arg in args {
+            let Expr::Var { name, span } = arg else {
+                continue;
+            };
+            let shared_array = matches!(self.lookup(name).map(|l| l.ty), Some(Type::Array(_)))
+                && self.escapes_loop(name, floor);
+            if shared_array {
+                return Err(TypeError::ParallelSharedArrayArgument {
+                    span: *span,
+                    name: name.clone(),
+                });
+            }
+        }
+        Ok(())
     }
 
     fn construct(

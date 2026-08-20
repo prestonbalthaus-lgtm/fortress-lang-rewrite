@@ -1,0 +1,13 @@
+component badreductionread
+
+export Executable
+
+run():()=do
+   sum: ZZ64 := 0
+   for i <- 0#100000 do
+      sum += i
+      println(sum)
+   end
+   println(sum)
+end
+end

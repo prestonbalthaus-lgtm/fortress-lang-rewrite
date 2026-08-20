@@ -1,0 +1,16 @@
+component atomicoutside
+
+export Executable
+
+run():()=do
+   counter: ZZ64 := 0
+   atomic do
+      for i <- 0#1000000 do
+         atomic do
+            counter := counter + 1
+         end
+      end
+   end
+   println(counter)
+end
+end

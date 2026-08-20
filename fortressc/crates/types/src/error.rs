@@ -258,6 +258,24 @@ pub enum TypeError {
         span: Span,
         binder: String,
     },
+    /// A loop-captured array handed to a call from inside a parallel body.
+    /// M4's boundary is LEXICAL -- `assign` only ever sees an assignment
+    /// written in the body itself -- and an array travels by pointer, so the
+    /// callee's `a[j] := v` is checked against an empty loop context and
+    /// refused by nothing. Measured: four million iterations calling one such
+    /// function print 567137, 775186, 895320 on consecutive runs and 4000000
+    /// under FORTRESS_WORKERS=1.
+    ParallelSharedArrayArgument {
+        span: Span,
+        name: String,
+    },
+    /// `x op= e` for an operator with no identity the compiler knows. `||=`,
+    /// `UNIONCAT=` and the rest need `Monoid[\\T,op\\]` and a user-declared
+    /// identity element.
+    CompoundOperatorUnsupported {
+        span: Span,
+        op: &'static str,
+    },
     /// A `for` construct outside the M4 subset, named rather than reported as
     /// a syntax error so the file lands in its own bucket.
     ParallelFormUnsupported {
@@ -363,6 +381,8 @@ impl TypeError {
             | Self::NotComparable { span, .. }
             | Self::ParallelEscape { span, .. }
             | Self::ParallelIndexNotBinder { span, .. }
+            | Self::ParallelSharedArrayArgument { span, .. }
+            | Self::CompoundOperatorUnsupported { span, .. }
             | Self::ParallelFormUnsupported { span, .. }
             | Self::AccessorUnsupported { span, .. }
             | Self::GenericFunctionalMethodUnsupported { span, .. }
@@ -587,6 +607,18 @@ impl core::fmt::Display for TypeError {
                 "a parallel loop may only assign to `a[{binder}]`, the element \
                  its own iteration owns; any other index needs a proof that two \
                  iterations cannot collide"
+            ),
+            Self::ParallelSharedArrayArgument { name, .. } => write!(
+                f,
+                "`{name}` is an array every iteration of this parallel loop \
+                 shares, and passing it to a call puts any assignment to it \
+                 out of reach of the loop's own rules, which are lexical. \
+                 Wrap the call in `atomic`, or write `for ... <- seq(...)`"
+            ),
+            Self::CompoundOperatorUnsupported { op, .. } => write!(
+                f,
+                "`{op}=` needs an identity element for `{op}`; only `+=` and \
+                 `-=` are recognised"
             ),
             Self::ParallelFormUnsupported { form, .. } => write!(
                 f,

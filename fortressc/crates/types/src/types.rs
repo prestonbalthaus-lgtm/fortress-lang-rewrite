@@ -274,6 +274,18 @@ pub const ASSERT_FAILED: &str = "fortress_assert_failed";
 pub const PARALLEL_FOR: &str = "fortress_parallel_for";
 pub const ENV_ALLOC: &str = "fortress_env_alloc";
 
+/// `atomic`. One process-wide recursive mutex, and the pair also hands the
+/// runtime's `fortress_in_parallel` flag over so that a loop reached from
+/// inside an atomic region runs inline instead of deadlocking against it.
+pub const ATOMIC_ENTER: &str = "fortress_atomic_enter";
+pub const ATOMIC_LEAVE: &str = "fortress_atomic_leave";
+
+/// The per-worker reduction accumulators. The runtime owns the row count
+/// because a worker writes row `chunk`; codegen owns the stride and hands it
+/// over, so the two sides cannot disagree about the padding.
+pub const REDUCTION_ALLOC: &str = "fortress_reduction_alloc";
+pub const REDUCTION_WORKERS: &str = "fortress_reduction_workers";
+
 pub const ARRAY_ALLOC: &str = "fortress_array_alloc";
 pub const ARRAY_LENGTH: &str = "fortress_array_length";
 pub const ARRAY_SLOT: &str = "fortress_array_slot";
@@ -532,9 +544,18 @@ pub enum TypedExprKind {
         lo: Box<TypedExpr>,
         hi: Box<TypedExpr>,
         body: Box<TypedExpr>,
-        captures: Vec<TypedParam>,
+        captures: Vec<TypedCapture>,
+        /// The names the body reduces into. NOT captures: each worker adds
+        /// into a private accumulator and the caller folds them afterwards, so
+        /// there is nothing shared for the iterations to race on.
+        reductions: Vec<TypedReduction>,
         symbol: String,
         sequential: bool,
+    },
+    /// `atomic e`. Serialised against every other atomic region in the
+    /// process; the mechanism is the runtime's choice -- atomic.tex:89-90.
+    Atomic {
+        body: Box<TypedExpr>,
     },
     /// The one instance of a singleton object.
     Singleton {
@@ -555,10 +576,42 @@ pub enum TypedBlockItem {
     },
     Assign {
         target: AssignTarget,
+        /// `Some` for `x op= e`. Kept folded this far on purpose: splitting it
+        /// into `x := x op e` makes the target a READ, and reduction.tex:35's
+        /// third condition is that a reduction variable is not otherwise read.
+        /// Codegen is what splits it.
+        op: Option<ArithOp>,
         value: TypedExpr,
         span: Span,
     },
     Expr(TypedExpr),
+}
+
+/// A value an outlined loop body reads or writes from the enclosing scope.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypedCapture {
+    pub name: String,
+    pub ty: Type,
+    /// The environment carries the ADDRESS of the caller's storage rather than
+    /// a copy of its value. Anything the body assigns to needs it: a copy has
+    /// no store target at all, which is the exit-70 internal error, and under
+    /// the atomic lock it would be a lock around a private copy -- every
+    /// worker incrementing its own loop-entry value, update lost with the lock
+    /// held.
+    ///
+    /// The lifetime is safe by construction: `fortress_parallel_for` blocks on
+    /// its done-wait before it returns, so the caller's stack slot outlives
+    /// every worker's use of it. No heap box and no escape analysis.
+    pub by_ref: bool,
+}
+
+/// A recognised reduction variable -- reduction.tex:28-39. It needs no syntax:
+/// the shape is what is recognised, and `atomic` is neither required nor an
+/// obstacle.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypedReduction {
+    pub name: String,
+    pub ty: Type,
 }
 
 #[derive(Debug, Clone, PartialEq)]

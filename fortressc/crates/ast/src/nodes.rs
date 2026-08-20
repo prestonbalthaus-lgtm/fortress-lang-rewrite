@@ -371,6 +371,12 @@ pub enum Expr {
         args: Vec<TypeRef>,
         span: Span,
     },
+    /// `atomic do ... end`, and `atomic <statement>`, which the parser wraps
+    /// into the same one-item block so there is one node here rather than two.
+    Atomic {
+        body: Box<Expr>,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -385,6 +391,14 @@ pub enum BlockItem {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Assign {
     pub target: Expr,
+    /// `None` for `:=`; `Some(op)` for `x op= e`, and it stays folded that way
+    /// through the whole checker. The moment `l += e` becomes `l := l + e` the
+    /// target counts as READ, which is reduction.tex:35's third condition, and
+    /// every reduction in the program disqualifies itself. Only codegen
+    /// splits it. This is exactly where the reference implementation lost the
+    /// feature: Operators.scala:521-529 desugars in the typechecker and
+    /// CodeGen.java:1682-1688 throws on whatever compound form survives.
+    pub op: Option<BinOp>,
     pub value: Expr,
     pub span: Span,
 }
@@ -422,6 +436,7 @@ impl Expr {
             | Self::While { span, .. }
             | Self::Field { span, .. }
             | Self::For { span, .. }
+            | Self::Atomic { span, .. }
             | Self::Instantiate { span, .. } => *span,
         }
     }

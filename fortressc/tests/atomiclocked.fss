@@ -1,0 +1,14 @@
+component atomiclocked
+
+export Executable
+
+run():()=do
+   seen: ZZ64 := 0
+   for i <- 0#200000 do
+      atomic do
+         seen := seen + 1
+      end
+   end
+   println(seen)
+end
+end

@@ -254,7 +254,7 @@ MUTATIONS=(
   'runtime/shims.c|if (requested == 1 |if (0 |hand a sequential loop to the pool'
   'runtime/shims.c|    fortress_run_chunk(&task, 0);|    (void)0;|let the calling thread skip its own chunk'
   'crates/types/src/lib.rs|matches!(self.depth_of(name), Some(depth) if depth < floor)|false|let a parallel body assign to a binding outside it'
-  'crates/codegen/src/lib.rs|scope.insert(binder.to_owned(), Slot::Value(index));|scope.insert(binder.to_owned(), Slot::Value(self.context.i64_type().const_zero().into()));|give every iteration the same index'
+  'crates/codegen/src/lib.rs|scope.insert(loop_.binder.to_owned(), Slot::Value(index));|scope.insert(loop_.binder.to_owned(), Slot::Value(self.context.i64_type().const_zero().into()));|give every iteration the same index'
 )
 
 mutate() {

@@ -36,7 +36,12 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # M4's parallel `for` takes it to 266: four legacy files whose first blocker was
 # the reserved word `for`. The milestone's evidence is tools/parallel-gate.sh,
 # not this number.
-COMPILE_FLOOR=266
+# 280 files compile at the M5 tip. The floor is 279 rather than 280 on purpose:
+# ProjectFortress/tests/XXXimmutable0.fss is a must-FAIL negative test that we
+# ACCEPT, because the shadowing rule it exercises has never been implemented and
+# the file used to fail earlier, on the block-level `var` M5 added. Refusing it
+# properly must not break this floor.
+COMPILE_FLOOR=279
 
 passed=0
 failed=0

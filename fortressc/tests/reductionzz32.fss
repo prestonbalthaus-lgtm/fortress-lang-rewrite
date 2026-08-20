@@ -1,0 +1,14 @@
+component reductionzz32
+
+export Executable
+
+run():()=do
+   var hits : ZZ32 = 0
+   var miss : ZZ32 = 1000
+   for i <- 0#100000 do
+      atomic do hits+= 1; miss-=1 end
+   end
+   println(hits)
+   println(miss)
+end
+end

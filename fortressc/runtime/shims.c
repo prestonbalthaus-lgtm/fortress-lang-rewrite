@@ -24,6 +24,16 @@
  * unknown thread", every run. That is not a documented risk, it is a measured
  * one, and tools/parallel-gate.sh mutates this line to show it.
  */
+/*
+ * XSI, for pthread_mutexattr_settype and PTHREAD_MUTEX_RECURSIVE. Declared
+ * here rather than left to the compiler's default because tools/memory-gate.sh
+ * builds this file under -std=c11, which turns every glibc extension off
+ * unless a feature test macro asks for it. _DEFAULT_SOURCE keeps everything
+ * the ordinary gnu11 build already had.
+ */
+#define _XOPEN_SOURCE 700
+#define _DEFAULT_SOURCE
+
 #define GC_THREADS
 
 #include <math.h>
@@ -80,7 +90,14 @@ void fortress_runtime_init(void) {
  * parallel loop slower than a serial one is a bug, not a tradeoff. */
 #define FORTRESS_PARALLEL_MIN 4096
 
-typedef void (*fortress_loop_body)(int64_t index, void *env);
+/*
+ * M5 appended `chunk`, and appending is the point: putting the worker index
+ * second would renumber `env` from get_nth_param(1) to (2) in codegen, and
+ * get_nth_param returns an Option -- a wrong index is a run-time internal
+ * error rather than a compile error. Every serial path passes 0, so one
+ * lowering serves the distributed and the sequential case.
+ */
+typedef void (*fortress_loop_body)(int64_t index, void *env, int64_t chunk);
 
 /* The chunk worker `w` of `workers` owns. Contiguous, and every index in
  * [lo, hi) belongs to exactly one worker: the first `remainder` chunks take one
@@ -121,7 +138,7 @@ static void fortress_run_chunk(const struct fortress_task *task, int w) {
     int64_t start, end;
     fortress_chunk(task->lo, task->hi, w, task->workers, &start, &end);
     for (int64_t i = start; i < end; i++) {
-        task->body(i, task->env);
+        task->body(i, task->env, w);
     }
 }
 
@@ -248,7 +265,7 @@ void fortress_parallel_for(int64_t lo, int64_t hi, fortress_loop_body body, void
      * running -- one pool, one level. */
     if (requested == 1 || hi - lo < FORTRESS_PARALLEL_MIN || fortress_in_parallel) {
         for (int64_t i = lo; i < hi; i++) {
-            body(i, env);
+            body(i, env, 0);
         }
         return;
     }
@@ -258,7 +275,7 @@ void fortress_parallel_for(int64_t lo, int64_t hi, fortress_loop_body body, void
     }
     if (parallelism <= 1) {
         for (int64_t i = lo; i < hi; i++) {
-            body(i, env);
+            body(i, env, 0);
         }
         return;
     }
@@ -294,6 +311,60 @@ void fortress_parallel_chunk(int64_t lo, int64_t hi, int w, int workers,
     fortress_chunk(lo, hi, w, workers, start, end);
 }
 
+/* ------------------------------------------------------------------ M5
+ *
+ * `atomic`. One process-wide RECURSIVE mutex. atomic.tex:89-90 leaves the
+ * serialization mechanism to the implementation and the reference
+ * implementation was a global lock underneath as well -- Transaction.java's
+ * one AtomicInteger, CASed above the nested-commit branch.
+ *
+ * RECURSIVE is measured, not defensive. atomic.tex:72-75 permits arbitrary
+ * nesting, tests/atomic4.fss nests two, and a PTHREAD_MUTEX_DEFAULT
+ * self-deadlocks on the inner acquisition.
+ *
+ * THE SECOND HALF IS THE `fortress_in_parallel` HANDOFF, and without it an
+ * `atomic` written around a parallel loop is a HARD DEADLOCK: the inner loop
+ * really distributes, the workers block on the mutex the calling thread holds,
+ * and the calling thread parks at the join below. Recursion does not rescue
+ * that -- recursion rescues re-entry by the SAME thread and the workers are
+ * different threads. Setting the flag makes any loop reached from inside an
+ * atomic region run inline, which is also exactly what atomic.tex:77-81 asks
+ * for when it requires implicit threads created inside an atomic to finish
+ * before it does.
+ *
+ * The flag is SAVED and RESTORED rather than zeroed: an atomic taken inside a
+ * worker already has it set, and clearing it on the way out would let a later
+ * nested loop reach the pool from inside a running one.
+ */
+static pthread_mutex_t fortress_atomic_mutex;
+static pthread_once_t fortress_atomic_once = PTHREAD_ONCE_INIT;
+static __thread int fortress_atomic_depth = 0;
+static __thread int fortress_atomic_outer_parallel = 0;
+
+static void fortress_atomic_init(void) {
+    pthread_mutexattr_t attr;
+    pthread_mutexattr_init(&attr);
+    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+    pthread_mutex_init(&fortress_atomic_mutex, &attr);
+    pthread_mutexattr_destroy(&attr);
+}
+
+void fortress_atomic_enter(void) {
+    pthread_once(&fortress_atomic_once, fortress_atomic_init);
+    pthread_mutex_lock(&fortress_atomic_mutex);
+    if (fortress_atomic_depth++ == 0) {
+        fortress_atomic_outer_parallel = fortress_in_parallel;
+        fortress_in_parallel = 1;
+    }
+}
+
+void fortress_atomic_leave(void) {
+    if (--fortress_atomic_depth == 0) {
+        fortress_in_parallel = fortress_atomic_outer_parallel;
+    }
+    pthread_mutex_unlock(&fortress_atomic_mutex);
+}
+
 static void *checked(void *p) {
     if (p == NULL) {
         fputs("fortress: out of memory\n", stderr);
@@ -324,13 +395,63 @@ void *fortress_env_alloc(int64_t bytes) {
 }
 
 /*
+ * How many rows fortress_reduction_alloc lays down, and therefore how many the
+ * merge folds. Exported rather than duplicated as a constant in codegen: a
+ * worker writes row `chunk` and chunk is at most workers-1, so the two numbers
+ * disagreeing is an out of bounds store from a thread.
+ */
+int64_t fortress_reduction_workers(void) { return FORTRESS_MAX_WORKERS; }
+
+/*
+ * The per-worker accumulators, one scanned-free block of workers x reductions
+ * slots, allocated once beside the environment and never touched again by this
+ * file -- codegen owns the arithmetic.
+ *
+ * ATOMIC, not scanned, and the checker is what makes that safe: a reduction
+ * variable is ZZ32, ZZ64 or RR64 and nothing else, so no slot ever holds a
+ * pointer. Widening the reduction set to a reference type has to come back
+ * through this allocator.
+ *
+ * `stride` comes from the CALLER so the two sides cannot disagree about the
+ * padding. It is a cacheline, and that is measured rather than hygiene: 20M
+ * updates, padded against a plain int64_t[16], best of 3 -- 0.0055 vs 0.0078
+ * at 8 workers and 0.0036 vs 0.0093 at 14, and the unpadded one gets WORSE
+ * from 8 workers to 14.
+ */
+void *fortress_reduction_alloc(int64_t reductions, int64_t stride) {
+    if (reductions <= 0 || stride <= 0) {
+        return NULL;
+    }
+    size_t bytes = (size_t)FORTRESS_MAX_WORKERS * (size_t)reductions * (size_t)stride;
+    void *block = fortress_alloc(bytes);
+    /* Identity for `+` and `-` on all three reducible types is a zero bit
+     * pattern. Written explicitly: the atomic allocator does not zero, and
+     * neither does the FORTRESS_NO_GC negative control. */
+    memset(block, 0, bytes);
+    return block;
+}
+
+/*
  * A runtime fault the program cannot be allowed to continue past. Clean exit
  * with a diagnostic, never a segmentation fault: an out of bounds subscript is
  * a fact about the program, and it should read like one.
+ *
+ * _exit AND NOT exit, and it is M5 that makes the difference load bearing.
+ * fortress_pool_stop is an atexit handler whose body is pthread_join over the
+ * pool, and a worker parked in fortress_atomic_enter on a mutex this thread
+ * still holds can never be joined -- the diagnostic prints and the process
+ * hangs forever, which under srun is a job burning its whole allocation. An
+ * abnormal halt has no business running atexit handlers, so it does not.
+ * fflush(NULL) first, because _exit does not flush stdio either.
  */
+static void fortress_abnormal_exit(void) {
+    fflush(NULL);
+    _exit(1);
+}
+
 static void fortress_halt(const char *what, long long a, long long b) {
     fprintf(stderr, "fortress: %s (%lld, %lld)\n", what, a, b);
-    exit(1);
+    fortress_abnormal_exit();
 }
 
 void println_string(const char *s) { printf("%s\n", s); }
@@ -402,7 +523,7 @@ void print_void(void) {}
 void fortress_assert_failed(const char *message) {
     fflush(stdout);
     fprintf(stderr, "fortress: assertion failed: %s\n", message);
-    exit(1);
+    fortress_abnormal_exit();
 }
 
 char *to_string_zz32(int v) {
@@ -526,7 +647,7 @@ void *fortress_object_alloc(long long bytes, int tag) {
 void fortress_dispatch_failed(const char *name, int position, int tag) {
     fprintf(stderr, "fortress: no declaration of %s for argument %d with type tag %d\n", name,
             position, tag);
-    exit(1);
+    fortress_abnormal_exit();
 }
 
 void *fortress_array_slot(void *array, long long index) {

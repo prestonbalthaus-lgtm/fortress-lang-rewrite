@@ -226,8 +226,12 @@ fn a_newline_before_the_equals_means_it_is_not_a_binding() {
 
 #[test]
 fn a_reserved_word_is_rejected_by_name() {
-    match expr_error("atomic") {
-        ParseError::ReservedWord { word, .. } => assert_eq!(word, "atomic"),
+    // Was `atomic` until M5 implemented it. `for` and `atomic` are both still
+    // in the lexer's reserved list -- that is what keeps them out of the
+    // identifier namespace -- and the parser intercepts them by name before
+    // this arm is reached.
+    match expr_error("spawn") {
+        ParseError::ReservedWord { word, .. } => assert_eq!(word, "spawn"),
         other => panic!("expected a reserved word error, got {other:?}"),
     }
 }
@@ -740,5 +744,78 @@ fn getters_setters_and_self_parameters_parse_in_a_trait_body() {
     match &component(src).decls[..] {
         [Decl::Trait(t)] => assert_eq!(t.members.len(), 3, "three members: {:?}", t.members),
         other => panic!("expected one trait declaration, got {other:?}"),
+    }
+}
+
+// ------------------------------------------------------------------------ M5
+
+/// `+=` is two tokens joined by adjacency, the same trade `<-` and `for` take.
+/// Both spellings the corpus uses: glued on both sides, and spaced.
+#[test]
+fn a_compound_assignment_is_read_from_adjacency() {
+    for src in ["do count+= 1 end", "do count += 1 end", "do count -= 1 end"] {
+        let e = expr(src);
+        let Expr::Block { items, .. } = &e else {
+            panic!("expected a block, got {e:?}");
+        };
+        match items.first() {
+            Some(BlockItem::Assign(a)) => assert!(
+                a.op.is_some(),
+                "`{src}` did not read as a compound assignment"
+            ),
+            other => panic!("`{src}` produced {other:?}"),
+        }
+    }
+}
+
+/// A plain `:=` keeps `op: None`, so nothing about M4's assignments moved.
+#[test]
+fn a_plain_assignment_carries_no_operator() {
+    let e = expr("do count := 1 end");
+    let Expr::Block { items, .. } = &e else {
+        panic!("expected a block");
+    };
+    match items.first() {
+        Some(BlockItem::Assign(a)) => assert!(a.op.is_none()),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// 1.0 spells a mutable local two ways and the corpus uses both. The modifier
+/// is what makes the `=` form unambiguous, so it needs no type annotation.
+#[test]
+fn var_declares_a_mutable_local() {
+    for (src, mutable) in [
+        ("do var count : ZZ32 = 0 end", true),
+        ("do var count = 0 end", true),
+        ("do count : ZZ32 := 0 end", true),
+        ("do count : ZZ32 = 0 end", false),
+    ] {
+        let e = expr(src);
+        let Expr::Block { items, .. } = &e else {
+            panic!("expected a block for `{src}`");
+        };
+        match items.first() {
+            Some(BlockItem::Binding(b)) => {
+                assert_eq!(b.mutable, mutable, "`{src}`");
+            }
+            other => panic!("`{src}` produced {other:?}"),
+        }
+    }
+}
+
+/// `atomic` is intercepted at statement level, so `atomic do ... end` and a
+/// bare `atomic sum += a[i]` become the same node.
+#[test]
+fn atomic_wraps_a_statement_or_a_block() {
+    for src in ["do atomic do x := 1 end end", "do atomic x += 1 end"] {
+        let e = expr(src);
+        let Expr::Block { items, .. } = &e else {
+            panic!("expected a block for `{src}`");
+        };
+        match items.first() {
+            Some(BlockItem::Expr(Expr::Atomic { .. })) => {}
+            other => panic!("`{src}` produced {other:?}"),
+        }
     }
 }

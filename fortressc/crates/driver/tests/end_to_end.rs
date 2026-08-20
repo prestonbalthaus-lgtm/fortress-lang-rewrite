@@ -1075,7 +1075,7 @@ fn a_sequential_loop_runs_in_index_order() {
 fn a_loop_body_is_outlined_and_its_environment_allocated_once() {
     let ir = emit_ir("parallelfill.fss");
     assert!(
-        ir.contains(r#"define void @"$loop1"(i64 %0, ptr %1)"#),
+        ir.contains(r#"define void @"$loop1"(i64 %0, ptr %1, i64 %2)"#),
         "the body was not outlined:\n{ir}"
     );
     let run_body = ir
@@ -1113,4 +1113,125 @@ fn a_parallel_body_may_not_assign_outside_itself() {
         assert_eq!(out.status.code(), Some(1), "{name}: {message}");
         assert!(message.contains(phrase), "{name}: {message}");
     }
+}
+
+// ------------------------------------------------------------------------ M5
+
+/// The headline. A reduction over a range well above the runtime's inline
+/// threshold folds to the serial answer exactly, at every worker count --
+/// ZZ64 addition is associative whatever the grouping, so this is an equality
+/// and not a tolerance.
+#[test]
+fn a_reduction_folds_to_the_serial_answer_at_every_worker_count() {
+    let binary = compile_fixture("reductionsum.fss", "reductionsum");
+    for workers in ["1", "2", "8", "16"] {
+        let out = Command::new(&binary)
+            .env("FORTRESS_WORKERS", workers)
+            .output()
+            .expect("could not run the produced binary");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "499999500000\n",
+            "the sum of 0..999999 on {workers} worker(s)"
+        );
+    }
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// `+=` and `-=` on two ZZ32 variables inside one `atomic`. The negative
+/// answer is the point: `-=` accumulates `Identity - e` and the merge folds
+/// with `+`, so a merge using the wrong operator comes back positive.
+#[test]
+fn two_zz32_reductions_in_one_atomic_block_are_exact() {
+    let binary = compile_fixture("reductionzz32.fss", "reductionzz32");
+    let out = Command::new(&binary)
+        .env("FORTRESS_WORKERS", "8")
+        .output()
+        .expect("could not run the produced binary");
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "100000\n-99000\n");
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// The exit-70 internal error M4 shipped latent, and its own diagnostic walked
+/// the user into it: refuse the parallel form, recommend `seq(...)`, and the
+/// seq form crashed. No corpus file writes this shape, which is why M4's
+/// full-driver sweep found nothing to catch it with.
+#[test]
+fn a_seq_loop_may_assign_to_a_scalar_outside_it() {
+    let binary = compile_fixture("seqouterassign.fss", "seqouterassign");
+    let out = run(&binary);
+    assert_eq!(out.status.code(), Some(0), "this used to be exit 70");
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "499500\n");
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// The lock path. A build that kept M4's by-value capture would be silently
+/// wrong WITH THE LOCK HELD -- every worker incrementing its own loop-entry
+/// copy, the update lost anyway.
+#[test]
+fn an_atomic_assignment_reaches_the_callers_storage() {
+    let binary = compile_fixture("atomiclocked.fss", "atomiclocked");
+    let out = Command::new(&binary)
+        .env("FORTRESS_WORKERS", "8")
+        .output()
+        .expect("could not run the produced binary");
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "200000\n");
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// `atomic` around a parallel loop. `fortress_atomic_enter` hands over the
+/// runtime's in-parallel flag so the inner loop runs inline; without it the
+/// workers block on the mutex the calling thread holds and the calling thread
+/// parks at the join. A recursive mutex does not help -- recursion rescues
+/// re-entry by the same thread, and the workers are different threads.
+#[test]
+fn an_atomic_around_a_parallel_loop_does_not_deadlock() {
+    let binary = compile_fixture("atomicoutside.fss", "atomicoutside");
+    let out = Command::new(&binary)
+        .env("FORTRESS_WORKERS", "8")
+        .output()
+        .expect("could not run the produced binary");
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "1000000\n");
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// M4's boundary is LEXICAL, and an array travels by pointer, so a callee's
+/// `a[j] := v` is checked against an empty loop context and refused by
+/// nothing. M5 may not weaken the loop rules while that is open.
+#[test]
+fn a_shared_array_may_not_be_handed_to_a_call_in_a_parallel_body() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture("badsharedarray.fss"))
+        .arg("--emit-obj")
+        .arg("-o")
+        .arg("/dev/null")
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{message}");
+    assert!(
+        message.contains("out of reach of the loop's own rules"),
+        "{message}"
+    );
+}
+
+/// reduction.tex:35's third condition. A name the body also READS is not a
+/// reduction, and the verdict needs the finished body -- decide it at the
+/// assignment and this file reads as a private accumulator AND a captured read
+/// of the same storage.
+#[test]
+fn a_compound_assignment_to_a_name_the_body_reads_is_not_a_reduction() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture("badreductionread.fss"))
+        .arg("--emit-obj")
+        .arg("-o")
+        .arg("/dev/null")
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{message}");
+    assert!(
+        message.contains("is declared outside this loop"),
+        "{message}"
+    );
 }

@@ -82,6 +82,15 @@ impl<'t, 'a> Parser<'t, 'a> {
         self.peek().map_or(Span::new(0, 0), |t| t.span)
     }
 
+    /// The span of the token just consumed, for a construct whose end is a
+    /// statement rather than a closing token.
+    fn previous_span(&self) -> Span {
+        self.pos
+            .checked_sub(1)
+            .and_then(|i| self.tokens.get(i))
+            .map_or_else(|| self.span_here(), |t| t.span)
+    }
+
     fn error(&self, expected: &'static str) -> ParseError {
         match self.peek() {
             None => ParseError::UnexpectedEndOfInput { expected },
@@ -150,6 +159,21 @@ impl<'t, 'a> Parser<'t, 'a> {
             return false;
         }
         here.span.end == next.span.start
+    }
+
+    /// `x += e`. `+=` is two tokens -- `Plus` then `Eq` -- and adjacency is
+    /// what joins them, the same trade `<-` and `for` take: no lexer change, so
+    /// no file in the corpus lexes differently. The last one was M3h.
+    fn compound_op_at(&self, index: usize) -> Option<BinOp> {
+        let op = match self.tokens.get(index)?.kind {
+            Kind::Plus => BinOp::Add,
+            Kind::Minus => BinOp::Sub,
+            _ => return None,
+        };
+        if !matches!(self.tokens.get(index + 1)?.kind, Kind::Eq) {
+            return None;
+        }
+        self.glued_right(index).then_some(op)
     }
 
     /// The four readings of an operator, from adjacency alone.
@@ -954,6 +978,13 @@ impl<'t, 'a> Parser<'t, 'a> {
                 _ => break,
             };
             let index = self.pos;
+            // `count+= 1` reads as a tight infix `+` whose right operand is
+            // `=`, which is where "expected an expression, found Eq" came
+            // from. The compound form is one operator and belongs to the
+            // statement above, so the climb stops here and leaves it.
+            if self.compound_op_at(index).is_some() {
+                break;
+            }
             let Some(fixity) = self.infix_fixity(index)? else {
                 break;
             };
@@ -1041,8 +1072,15 @@ impl<'t, 'a> Parser<'t, 'a> {
             ) => true,
             // A minus that is spaced on the left and glued on the right is a
             // prefix operator on the next operand, not subtraction.
+            //
+            // `x += 1` reads as Prefix by that rule -- spaced left, glued
+            // right -- so without the compound test the run consumes the `+`
+            // and then asks for an operand and finds `=`. That is why the
+            // spaced form failed while `count+= 1` worked: the glued one reads
+            // as a tight infix and never reaches here.
             Some(Kind::Minus | Kind::Plus) => {
-                matches!(self.fixity_at(self.pos), OperatorShape::Prefix)
+                self.compound_op_at(self.pos).is_none()
+                    && matches!(self.fixity_at(self.pos), OperatorShape::Prefix)
             }
             _ => false,
         }
@@ -1333,6 +1371,10 @@ impl<'t, 'a> Parser<'t, 'a> {
             // a keyword token is the same trade `<-` takes: no lexer change,
             // so no file in the corpus lexes differently.
             Kind::Reserved("for") => self.for_expr(),
+            // `atomic` is one of the 66 words the lexer keeps out of the
+            // identifier namespace, so it is intercepted here rather than
+            // given a keyword token -- again, no lexer change.
+            Kind::Reserved("atomic") => self.atomic_expr(),
             Kind::Reserved(word) => Err(ParseError::ReservedWord {
                 span,
                 word: (*word).to_owned(),
@@ -1486,6 +1528,30 @@ impl<'t, 'a> Parser<'t, 'a> {
     /// A binding is `Ident (: Type)? = Expr`. `LocalDecl.rats:159` writes `s`
     /// before the `=`, so a newline there means this is not a binding at all.
     fn block_item(&mut self) -> Parsed<BlockItem> {
+        // `atomic <statement>`. The specification writes both `atomic do ...
+        // end` and a bare `atomic sum += a[i]`, and an assignment is not an
+        // expression here, so the modifier is read at statement level and
+        // whatever it covers becomes a one-item block. `atomic do ... end`
+        // takes the same path and its block is already the body.
+        if matches!(self.peek_kind(), Some(Kind::Reserved("atomic"))) {
+            let start = self.span_here();
+            self.pos += 1;
+            self.skip_newlines();
+            let inner = self.block_item()?;
+            let end = self.previous_span();
+            let span = Span::new(start.start, end.end);
+            let body = match inner {
+                BlockItem::Expr(e) => e,
+                other => Expr::Block {
+                    items: vec![other],
+                    span,
+                },
+            };
+            return Ok(BlockItem::Expr(Expr::Atomic {
+                body: Box::new(body),
+                span,
+            }));
+        }
         let save = self.pos;
         if let Some(binding) = self.try_binding()? {
             return Ok(BlockItem::Binding(binding));
@@ -1508,31 +1574,60 @@ impl<'t, 'a> Parser<'t, 'a> {
             self.pos = probe;
         }
         let target = self.expr()?;
-        if !self.at(&Kind::ColonEq) {
+        let op = if let Some(op) = self.compound_op_at(self.pos) {
+            self.pos += 2;
+            Some(op)
+        } else if self.at(&Kind::ColonEq) {
+            self.pos += 1;
+            None
+        } else {
             return Ok(BlockItem::Expr(target));
-        }
-        self.pos += 1;
+        };
         self.skip_newlines();
         let value = self.expr()?;
         let span = Span::new(target.span().start, value.span().end);
         Ok(BlockItem::Assign(Assign {
             target,
+            op,
             value,
             span,
         }))
     }
 
+    /// `atomic <expr>`, for the operand positions `block_item` never reaches.
+    fn atomic_expr(&mut self) -> Parsed<Expr> {
+        let start = self.span_here();
+        self.pos += 1;
+        self.skip_newlines();
+        let body = self.expr()?;
+        let span = Span::new(start.start, body.span().end);
+        Ok(Expr::Atomic {
+            body: Box::new(body),
+            span,
+        })
+    }
+
     fn try_binding(&mut self) -> Parsed<Option<Binding>> {
+        let save = self.pos;
+        // 1.0 spells a mutable local two ways and the corpus uses both:
+        // `var count: ZZ32 = 0` with the modifier and an ordinary `=`, and
+        // `count: ZZ32 := 0` with the operator. The modifier is what makes the
+        // `=` form unambiguous, so it does not need the type annotation the
+        // bare `:=` form does.
+        let modifier = self.at(&Kind::KwVar);
+        if modifier {
+            self.pos += 1;
+        }
         let Some(Token {
             kind: Kind::Ident(name),
             span: name_span,
         }) = self.peek()
         else {
+            self.pos = save;
             return Ok(None);
         };
         let name = (*name).to_owned();
         let name_span = *name_span;
-        let save = self.pos;
         self.pos += 1;
 
         let ty = if self.at(&Kind::Colon) {
@@ -1553,7 +1648,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         // without one `i := 0` would be a declaration in some scopes and an
         // assignment in others, which is how a typo silently shadows.
         let mutable = match self.peek_kind() {
-            Some(Kind::Eq) => false,
+            Some(Kind::Eq) => modifier,
             Some(Kind::ColonEq) if ty.is_some() => true,
             _ => {
                 self.pos = save;
@@ -1564,7 +1659,11 @@ impl<'t, 'a> Parser<'t, 'a> {
         self.skip_newlines(); // `w` after the `=` does permit one
 
         let value = self.expr()?;
-        let span = Span::new(name_span.start, value.span().end);
+        let start = self
+            .tokens
+            .get(save)
+            .map_or(name_span.start, |t| t.span.start);
+        let span = Span::new(start, value.span().end);
         Ok(Some(Binding {
             name,
             ty,

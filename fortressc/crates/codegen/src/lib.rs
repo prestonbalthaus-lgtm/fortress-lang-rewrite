@@ -4,14 +4,14 @@
 //! [`Target`], so nothing here dispatches: lowering is a translation, not a
 //! decision. Failures are compiler bugs, not user errors.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use fortress_types::{
     ArithOp, AssignTarget, CompareOp, DispatchFn, DispatchNode, Elem, Target, Type, TypedBlockItem,
-    TypedComponent, TypedExpr, TypedExprKind, TypedFn, TypedObject, TypedParam, ARRAY_ALLOC,
-    ARRAY_LENGTH, ARRAY_SLOT, ASSERT_FAILED, DISPATCH_FAILED, ENV_ALLOC, OBJECT_ALLOC,
-    PARALLEL_FOR,
+    TypedCapture, TypedComponent, TypedExpr, TypedExprKind, TypedFn, TypedObject, TypedReduction,
+    ARRAY_ALLOC, ARRAY_LENGTH, ARRAY_SLOT, ASSERT_FAILED, ATOMIC_ENTER, ATOMIC_LEAVE,
+    DISPATCH_FAILED, ENV_ALLOC, OBJECT_ALLOC, PARALLEL_FOR, REDUCTION_ALLOC, REDUCTION_WORKERS,
 };
 use inkwell::attributes::AttributeLoc;
 use inkwell::builder::Builder;
@@ -22,7 +22,7 @@ use inkwell::targets::{
 };
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, PointerType, StructType};
 use inkwell::values::{
-    BasicMetadataValueEnum, BasicValueEnum, FunctionValue, GlobalValue, PointerValue,
+    BasicMetadataValueEnum, BasicValueEnum, FunctionValue, GlobalValue, IntValue, PointerValue,
 };
 use inkwell::{AddressSpace, IntPredicate, OptimizationLevel};
 
@@ -34,6 +34,15 @@ const ENTRY: &str = "run";
 
 /// Starts the collector. Emitted as the first instruction of `main`.
 const RUNTIME_INIT: &str = "fortress_runtime_init";
+
+/// Bytes between one worker's reduction slot and the next. A cacheline, and it
+/// is measured rather than hygiene: 20M updates, padded against a plain
+/// `int64_t[16]`, best of 3 -- 0.0055 against 0.0078 at 8 workers and 0.0036
+/// against 0.0093 at 14, and the unpadded version gets WORSE from 8 to 14.
+///
+/// Handed to the allocator rather than duplicated in C, so the two sides
+/// cannot disagree about how big the block is.
+const REDUCTION_STRIDE: u64 = 64;
 
 /// The processor an object is built for. This is chosen, not detected: the
 /// machine that runs the compiler is a login node or a laptop, and the machine
@@ -93,6 +102,7 @@ fn build_module<'ctx>(
         objects: HashMap::new(),
         singletons: HashMap::new(),
         scopes: Vec::new(),
+        reductions: HashSet::new(),
     };
     lowering.declare_runtime();
     if component.uses_mpi {
@@ -135,6 +145,24 @@ struct Lowering<'ctx> {
     objects: HashMap<&'static str, StructType<'ctx>>,
     singletons: HashMap<&'static str, GlobalValue<'ctx>>,
     scopes: Vec<HashMap<String, Slot<'ctx>>>,
+    /// The reduction variables of the loop body being emitted. Read only by
+    /// the `atomic` lowering, which drops the lock around a block that does
+    /// nothing but write them.
+    reductions: HashSet<String>,
+}
+
+/// Everything the outliner needs about one `for`. A struct rather than nine
+/// positional arguments, because `captures` and `reductions` are both slices
+/// of near-identical shape and swapping them would compile.
+struct ParallelLoop<'a> {
+    binder: &'a str,
+    lo: &'a TypedExpr,
+    hi: &'a TypedExpr,
+    body: &'a TypedExpr,
+    captures: &'a [TypedCapture],
+    reductions: &'a [TypedReduction],
+    symbol: &'a str,
+    sequential: bool,
 }
 
 /// An immutable binding is an SSA value and costs nothing. Only a binding that
@@ -340,6 +368,24 @@ impl<'ctx> Lowering<'ctx> {
         self.module.add_function(
             ENV_ALLOC,
             ptr.fn_type(&[i64t.into()], false),
+            Some(Linkage::External),
+        );
+
+        // `atomic`, and the reduction accumulators. Declared unconditionally
+        // like the rest: a program with neither never calls them, and a
+        // program with no `atomic` in it emits byte-identical IR to M4's.
+        for name in [ATOMIC_ENTER, ATOMIC_LEAVE] {
+            self.module
+                .add_function(name, void.fn_type(&[], false), Some(Linkage::External));
+        }
+        self.module.add_function(
+            REDUCTION_ALLOC,
+            ptr.fn_type(&[i64t.into(), i64t.into()], false),
+            Some(Linkage::External),
+        );
+        self.module.add_function(
+            REDUCTION_WORKERS,
+            i64t.fn_type(&[], false),
             Some(Linkage::External),
         );
 
@@ -839,11 +885,22 @@ impl<'ctx> Lowering<'ctx> {
                 hi,
                 body,
                 captures,
+                reductions,
                 symbol,
                 sequential,
             } => self
-                .parallel_for(binder, lo, hi, body, captures, symbol, *sequential)
+                .parallel_for(ParallelLoop {
+                    binder,
+                    lo,
+                    hi,
+                    body,
+                    captures,
+                    reductions,
+                    symbol,
+                    sequential: *sequential,
+                })
                 .map(|()| None),
+            TypedExprKind::Atomic { body } => self.atomic(body),
             TypedExprKind::Field { base, index } => self.load_field(base, *index, e.ty).map(Some),
             TypedExprKind::Singleton { name } => {
                 let global =
@@ -860,46 +917,52 @@ impl<'ctx> Lowering<'ctx> {
 
     /// The outliner.
     ///
-    /// The body becomes a real function `symbol(i64 index, ptr env)` so a
-    /// worker thread can call it, and the values it reads from the enclosing
-    /// scope are copied into one environment struct. The struct is filled and
-    /// allocated ONCE, here, before the loop starts -- allocation inside the
-    /// parallel region is what makes an allocating loop collect N times as
-    /// often and run slower than the serial one.
+    /// The body becomes a real function `symbol(i64 index, ptr env, i64 chunk)`
+    /// so a worker thread can call it, and the values it reads from the
+    /// enclosing scope are copied into one environment struct. The struct is
+    /// filled and allocated ONCE, here, before the loop starts -- allocation
+    /// inside the parallel region is what makes an allocating loop collect N
+    /// times as often and run slower than the serial one.
+    ///
+    /// `chunk` went LAST deliberately. Putting the worker index second would
+    /// renumber `env` from `get_nth_param(1)` to `(2)` below, and
+    /// `get_nth_param` returns an `Option` -- a wrong index is a run-time
+    /// internal error rather than a compile error.
     ///
     /// A `seq(...)` loop takes the same path. The runtime runs a range below
     /// its threshold inline anyway, so one lowering serves both and there is no
     /// second code path to keep correct.
-    #[allow(clippy::too_many_arguments)]
-    fn parallel_for(
-        &mut self,
-        binder: &str,
-        lo: &TypedExpr,
-        hi: &TypedExpr,
-        body: &TypedExpr,
-        captures: &[TypedParam],
-        symbol: &str,
-        sequential: bool,
-    ) -> Result<(), CodegenError> {
-        let lo_value = self.operand(lo)?;
-        let hi_value = self.operand(hi)?;
+    fn parallel_for(&mut self, loop_: ParallelLoop<'_>) -> Result<(), CodegenError> {
+        let lo_value = self.operand(loop_.lo)?;
+        let hi_value = self.operand(loop_.hi)?;
 
         // The environment: one field per captured value, in the order the
         // checker recorded them, which is sorted and therefore deterministic.
-        let field_types: Vec<BasicTypeEnum<'ctx>> = captures
+        // A by-reference capture carries the ADDRESS of the caller's storage,
+        // so its field is a pointer whatever the value's type is.
+        let mut field_types: Vec<BasicTypeEnum<'ctx>> = loop_
+            .captures
             .iter()
             .map(|c| {
+                if c.by_ref {
+                    return Ok(self.ptr());
+                }
                 self.basic_type(c.ty).ok_or_else(|| {
                     CodegenError::internal("a captured value has no type".to_owned())
                 })
             })
             .collect::<Result<_, _>>()?;
+        if !loop_.reductions.is_empty() {
+            field_types.push(self.ptr());
+        }
         let env_type = self.context.struct_type(&field_types, false);
+
+        let partials = self.reduction_alloc(loop_.reductions)?;
 
         // Scanned, not atomic: a capture may be a String or an Array, and the
         // collector has to see through the environment to it while a worker is
         // still using it.
-        let env = if captures.is_empty() {
+        let env = if field_types.is_empty() {
             self.ptr_type().const_null()
         } else {
             let size = env_type.size_of().ok_or_else(|| {
@@ -909,8 +972,12 @@ impl<'ctx> Lowering<'ctx> {
                 .call_runtime(ENV_ALLOC, &[size.into()], true)?
                 .ok_or_else(|| CodegenError::internal("no environment returned".to_owned()))?;
             let pointer = raw.into_pointer_value();
-            for (index, capture) in captures.iter().enumerate() {
-                let value = self.load_name(&capture.name)?;
+            for (index, capture) in loop_.captures.iter().enumerate() {
+                let value = if capture.by_ref {
+                    self.address_of(&capture.name)?.into()
+                } else {
+                    self.load_name(&capture.name)?
+                };
                 let slot = self
                     .builder
                     .build_struct_gep(env_type, pointer, index as u32, "env.slot")
@@ -919,13 +986,27 @@ impl<'ctx> Lowering<'ctx> {
                     .build_store(slot, value)
                     .map_err(CodegenError::from_builder)?;
             }
+            if let Some(block) = partials {
+                let slot = self
+                    .builder
+                    .build_struct_gep(
+                        env_type,
+                        pointer,
+                        loop_.captures.len() as u32,
+                        "env.partials",
+                    )
+                    .map_err(CodegenError::from_builder)?;
+                self.builder
+                    .build_store(slot, block)
+                    .map_err(CodegenError::from_builder)?;
+            }
             pointer
         };
 
-        let outlined = self.declare_loop_body(symbol);
-        self.define_loop_body(outlined, binder, body, captures, env_type)?;
+        let outlined = self.declare_loop_body(loop_.symbol);
+        self.define_loop_body(outlined, &loop_, env_type)?;
 
-        let workers = if sequential {
+        let workers = if loop_.sequential {
             // One worker means the runtime runs the whole range on the calling
             // thread. `seq` is a promise about ORDER, so it cannot be handed to
             // a pool however small the range is.
@@ -944,17 +1025,226 @@ impl<'ctx> Lowering<'ctx> {
             ],
             false,
         )?;
+
+        // The merge, and it is emitted HERE rather than in the runtime for two
+        // reasons: it is typed, and the shim has no type knowledge; and it is
+        // after `fortress_parallel_for`, which blocks on its done-wait before
+        // it returns, so "after the call" IS "after the join barrier".
+        //
+        // An empty range needs no special case: the runtime returns early on
+        // `hi <= lo`, the slots still hold Identity, and the fold yields the
+        // variable's entry value.
+        if let Some(block) = partials {
+            self.reduction_merge(block, loop_.reductions)?;
+        }
         Ok(())
+    }
+
+    /// One scanned-free block of `workers x reductions` cacheline slots, all
+    /// Identity. The row count belongs to the runtime because a worker writes
+    /// row `chunk`; the stride is handed over so the two cannot disagree.
+    fn reduction_alloc(
+        &mut self,
+        reductions: &[TypedReduction],
+    ) -> Result<Option<PointerValue<'ctx>>, CodegenError> {
+        if reductions.is_empty() {
+            return Ok(None);
+        }
+        let i64t = self.context.i64_type();
+        let raw = self
+            .call_runtime(
+                REDUCTION_ALLOC,
+                &[
+                    i64t.const_int(reductions.len() as u64, false).into(),
+                    i64t.const_int(REDUCTION_STRIDE, false).into(),
+                ],
+                true,
+            )?
+            .ok_or_else(|| CodegenError::internal("no accumulators returned".to_owned()))?;
+        Ok(Some(raw.into_pointer_value()))
+    }
+
+    /// The address of one worker's slot for one reduction:
+    /// `block + (chunk * reductions + k) * stride`.
+    fn reduction_slot(
+        &self,
+        block: PointerValue<'ctx>,
+        chunk: IntValue<'ctx>,
+        count: usize,
+        k: usize,
+    ) -> Result<PointerValue<'ctx>, CodegenError> {
+        let i64t = self.context.i64_type();
+        let row = self
+            .builder
+            .build_int_mul(chunk, i64t.const_int(count as u64, false), "reduce.row")
+            .map_err(CodegenError::from_builder)?;
+        let cell = self
+            .builder
+            .build_int_add(row, i64t.const_int(k as u64, false), "reduce.cell")
+            .map_err(CodegenError::from_builder)?;
+        let offset = self
+            .builder
+            .build_int_mul(
+                cell,
+                i64t.const_int(REDUCTION_STRIDE, false),
+                "reduce.offset",
+            )
+            .map_err(CodegenError::from_builder)?;
+        // Address arithmetic rather than a GEP, because inkwell's `build_gep`
+        // is an `unsafe fn` and this crate denies unsafe code. The block is
+        // kept alive by the environment struct, which is scanned and holds the
+        // BASE pointer, so a derived interior pointer retains nothing on its
+        // own and needs to retain nothing.
+        let base = self
+            .builder
+            .build_ptr_to_int(block, i64t, "reduce.base")
+            .map_err(CodegenError::from_builder)?;
+        let address = self
+            .builder
+            .build_int_add(base, offset, "reduce.address")
+            .map_err(CodegenError::from_builder)?;
+        self.builder
+            .build_int_to_ptr(address, self.ptr_type(), "reduce.slot")
+            .map_err(CodegenError::from_builder)
+    }
+
+    /// Folds every worker's accumulator into the variable, on the calling
+    /// thread, in worker order, starting from the value it held at loop entry
+    /// -- `reduction.tex:70-73`. A fixed order is what makes the answer
+    /// byte-identical run to run for a fixed worker count.
+    ///
+    /// RR64 is deterministic per worker count and NOT across worker counts.
+    /// That is inherent to reassociation, `reduction.tex:43-46` permits it, and
+    /// the gate pins FORTRESS_WORKERS rather than asserting an equality that is
+    /// not true. ZZ32 and ZZ64 are unaffected: two's-complement addition is
+    /// associative whatever the grouping, overflow included.
+    fn reduction_merge(
+        &mut self,
+        block: PointerValue<'ctx>,
+        reductions: &[TypedReduction],
+    ) -> Result<(), CodegenError> {
+        let i64t = self.context.i64_type();
+        let workers = self
+            .call_runtime(REDUCTION_WORKERS, &[], true)?
+            .ok_or_else(|| CodegenError::internal("no worker count returned".to_owned()))?
+            .into_int_value();
+
+        let function = self
+            .builder
+            .get_insert_block()
+            .and_then(inkwell::basic_block::BasicBlock::get_parent)
+            .ok_or_else(|| CodegenError::internal("no enclosing function".to_owned()))?;
+        let cond_bb = self.context.append_basic_block(function, "reduce.cond");
+        let body_bb = self.context.append_basic_block(function, "reduce.body");
+        let end_bb = self.context.append_basic_block(function, "reduce.end");
+
+        let counter = self.entry_alloca("reduce.w", i64t.into())?;
+        self.builder
+            .build_store(counter, i64t.const_zero())
+            .map_err(CodegenError::from_builder)?;
+        self.builder
+            .build_unconditional_branch(cond_bb)
+            .map_err(CodegenError::from_builder)?;
+
+        self.builder.position_at_end(cond_bb);
+        let w = self
+            .builder
+            .build_load(i64t, counter, "reduce.w")
+            .map_err(CodegenError::from_builder)?
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, w, workers, "reduce.more")
+            .map_err(CodegenError::from_builder)?;
+        self.builder
+            .build_conditional_branch(more, body_bb, end_bb)
+            .map_err(CodegenError::from_builder)?;
+
+        self.builder.position_at_end(body_bb);
+        for (k, reduction) in reductions.iter().enumerate() {
+            let ty = self.basic_type(reduction.ty).ok_or_else(|| {
+                CodegenError::internal("a reduction variable has no type".to_owned())
+            })?;
+            let slot = self.reduction_slot(block, w, reductions.len(), k)?;
+            let partial = self
+                .builder
+                .build_load(ty, slot, "reduce.partial")
+                .map_err(CodegenError::from_builder)?;
+            let target = self.address_of(&reduction.name)?;
+            let current = self
+                .builder
+                .build_load(ty, target, &reduction.name)
+                .map_err(CodegenError::from_builder)?;
+            // `+` for both operators: `-=` accumulated `Identity - e`, so the
+            // group inverse is already inside the partial and there is no
+            // second accumulator kind.
+            let merged = self.arith(ArithOp::Add, reduction.ty, current, partial)?;
+            self.builder
+                .build_store(target, merged)
+                .map_err(CodegenError::from_builder)?;
+        }
+        let next = self
+            .builder
+            .build_int_add(w, i64t.const_int(1, false), "reduce.next")
+            .map_err(CodegenError::from_builder)?;
+        self.builder
+            .build_store(counter, next)
+            .map_err(CodegenError::from_builder)?;
+        self.builder
+            .build_unconditional_branch(cond_bb)
+            .map_err(CodegenError::from_builder)?;
+
+        self.builder.position_at_end(end_bb);
+        Ok(())
+    }
+
+    /// `atomic e`.
+    ///
+    /// A block that does nothing but write recognised reduction variables
+    /// needs no lock: every worker is adding into storage only it can see, and
+    /// `reduction.tex:40-42` gives up atomic's visibility guarantee for exactly
+    /// that name. Without this, the one corpus file M5 unlocks that reaches the
+    /// pool would take a process-wide mutex 30000 times -- measured at 13.7x
+    /// SLOWER than the serial loop it replaced.
+    fn atomic(&mut self, body: &TypedExpr) -> Result<Option<BasicValueEnum<'ctx>>, CodegenError> {
+        if self.is_pure_reduction(body) {
+            return self.expr(body);
+        }
+        self.call_runtime(ATOMIC_ENTER, &[], false)?;
+        let value = self.expr(body)?;
+        self.call_runtime(ATOMIC_LEAVE, &[], false)?;
+        Ok(value)
+    }
+
+    fn is_pure_reduction(&self, body: &TypedExpr) -> bool {
+        if self.reductions.is_empty() {
+            return false;
+        }
+        let TypedExprKind::Block { items, tail: None } = &body.kind else {
+            return false;
+        };
+        !items.is_empty()
+            && items.iter().all(|item| {
+                matches!(
+                    item,
+                    TypedBlockItem::Assign {
+                        target: AssignTarget::Var { name, .. },
+                        op: Some(_),
+                        ..
+                    } if self.reductions.contains(name)
+                )
+            })
     }
 
     fn declare_loop_body(&mut self, symbol: &str) -> FunctionValue<'ctx> {
         if let Some(existing) = self.functions.get(symbol) {
             return *existing;
         }
+        let i64t = self.context.i64_type();
         let ty = self
             .context
             .void_type()
-            .fn_type(&[self.context.i64_type().into(), self.ptr().into()], false);
+            .fn_type(&[i64t.into(), self.ptr().into(), i64t.into()], false);
         let function = self.module.add_function(symbol, ty, None);
         self.functions.insert(symbol.to_owned(), function);
         function
@@ -965,13 +1255,12 @@ impl<'ctx> Lowering<'ctx> {
     fn define_loop_body(
         &mut self,
         function: FunctionValue<'ctx>,
-        binder: &str,
-        body: &TypedExpr,
-        captures: &[TypedParam],
+        loop_: &ParallelLoop<'_>,
         env_type: inkwell::types::StructType<'ctx>,
     ) -> Result<(), CodegenError> {
         let resume = self.builder.get_insert_block();
         let saved = std::mem::take(&mut self.scopes);
+        let saved_reductions = std::mem::take(&mut self.reductions);
 
         let entry = self.context.append_basic_block(function, "entry");
         self.builder.position_at_end(entry);
@@ -983,26 +1272,73 @@ impl<'ctx> Lowering<'ctx> {
             .get_nth_param(1)
             .ok_or_else(|| CodegenError::internal("the loop body has no environment".to_owned()))?
             .into_pointer_value();
+        let chunk = function
+            .get_nth_param(2)
+            .ok_or_else(|| CodegenError::internal("the loop body has no worker index".to_owned()))?
+            .into_int_value();
 
         let mut scope: HashMap<String, Slot<'ctx>> = HashMap::new();
-        scope.insert(binder.to_owned(), Slot::Value(index));
-        for (position, capture) in captures.iter().enumerate() {
+        scope.insert(loop_.binder.to_owned(), Slot::Value(index));
+        for (position, capture) in loop_.captures.iter().enumerate() {
             let ty = self
                 .basic_type(capture.ty)
                 .ok_or_else(|| CodegenError::internal("a captured value has no type".to_owned()))?;
-            let slot = self
+            let field = self
                 .builder
                 .build_struct_gep(env_type, env, position as u32, "env.read")
                 .map_err(CodegenError::from_builder)?;
-            let value = self
+            let slot = if capture.by_ref {
+                // The field holds the caller's `alloca`, so the read and the
+                // write inside the body both land on live storage. Its
+                // lifetime is safe by construction: the runtime blocks on its
+                // done-wait before `fortress_parallel_for` returns.
+                let pointer = self
+                    .builder
+                    .build_load(self.ptr(), field, &capture.name)
+                    .map_err(CodegenError::from_builder)?
+                    .into_pointer_value();
+                Slot::Cell { pointer, ty }
+            } else {
+                let value = self
+                    .builder
+                    .build_load(ty, field, &capture.name)
+                    .map_err(CodegenError::from_builder)?;
+                Slot::Value(value)
+            };
+            scope.insert(capture.name.clone(), slot);
+        }
+
+        // A reduction variable binds to this worker's own accumulator, which is
+        // why nothing downstream needs to know it is one: `l += e` is the
+        // ordinary compound assignment through an ordinary cell, and the cell
+        // is private.
+        if !loop_.reductions.is_empty() {
+            let field = self
                 .builder
-                .build_load(ty, slot, &capture.name)
+                .build_struct_gep(
+                    env_type,
+                    env,
+                    loop_.captures.len() as u32,
+                    "env.partials.read",
+                )
                 .map_err(CodegenError::from_builder)?;
-            scope.insert(capture.name.clone(), Slot::Value(value));
+            let block = self
+                .builder
+                .build_load(self.ptr(), field, "partials")
+                .map_err(CodegenError::from_builder)?
+                .into_pointer_value();
+            for (k, reduction) in loop_.reductions.iter().enumerate() {
+                let ty = self.basic_type(reduction.ty).ok_or_else(|| {
+                    CodegenError::internal("a reduction variable has no type".to_owned())
+                })?;
+                let pointer = self.reduction_slot(block, chunk, loop_.reductions.len(), k)?;
+                scope.insert(reduction.name.clone(), Slot::Cell { pointer, ty });
+                self.reductions.insert(reduction.name.clone());
+            }
         }
         self.scopes.push(scope);
 
-        let emitted = self.expr(body);
+        let emitted = self.expr(loop_.body);
         self.scopes.pop();
         emitted?;
 
@@ -1011,10 +1347,23 @@ impl<'ctx> Lowering<'ctx> {
             .map_err(CodegenError::from_builder)?;
 
         self.scopes = saved;
+        self.reductions = saved_reductions;
         if let Some(block) = resume {
             self.builder.position_at_end(block);
         }
         Ok(())
+    }
+
+    /// Where a name's storage lives, for a capture that travels by reference
+    /// and for the merge's target. Only a mutable binding has any, which is
+    /// exactly the set that can be assigned to.
+    fn address_of(&self, name: &str) -> Result<PointerValue<'ctx>, CodegenError> {
+        match self.lookup(name) {
+            Some(Slot::Cell { pointer, .. }) => Ok(pointer),
+            _ => Err(CodegenError::internal(format!(
+                "`{name}` needs storage to be captured by reference, and has none"
+            ))),
+        }
     }
 
     fn load_name(&mut self, name: &str) -> Result<BasicValueEnum<'ctx>, CodegenError> {
@@ -1522,8 +1871,10 @@ impl<'ctx> Lowering<'ctx> {
                         scope.insert(name.clone(), slot);
                     }
                 }
-                TypedBlockItem::Assign { target, value, .. } => {
-                    self.assign(target, value)?;
+                TypedBlockItem::Assign {
+                    target, op, value, ..
+                } => {
+                    self.assign(target, *op, value)?;
                 }
                 TypedBlockItem::Expr(e) => {
                     self.expr(e)?;
@@ -1536,23 +1887,57 @@ impl<'ctx> Lowering<'ctx> {
         }
     }
 
-    fn assign(&mut self, target: &AssignTarget, value: &TypedExpr) -> Result<(), CodegenError> {
+    /// `x := e`, and `x op= e`, which is where the compound form is finally
+    /// split. It could not be split earlier: `l := l + e` makes the target a
+    /// READ, and reduction.tex:35 disqualifies a reduction variable that is
+    /// read. Splitting it here is also what makes a reduction need no special
+    /// case at all -- the body's `l` is bound to a private accumulator cell,
+    /// and this is an ordinary load, add and store through it.
+    fn assign(
+        &mut self,
+        target: &AssignTarget,
+        op: Option<ArithOp>,
+        value: &TypedExpr,
+    ) -> Result<(), CodegenError> {
         let lowered = self.operand(value)?;
         match target {
-            AssignTarget::Var { name, .. } => {
-                let Some(Slot::Cell { pointer, .. }) = self.lookup(name) else {
+            AssignTarget::Var { name, ty } => {
+                let Some(Slot::Cell {
+                    pointer,
+                    ty: cell_ty,
+                }) = self.lookup(name)
+                else {
                     return Err(CodegenError::internal(format!(
                         "`{name}` was assigned to but has no storage"
                     )));
                 };
+                let stored = match op {
+                    None => lowered,
+                    Some(op) => {
+                        let current = self
+                            .builder
+                            .build_load(cell_ty, pointer, name)
+                            .map_err(CodegenError::from_builder)?;
+                        self.arith(op, *ty, current, lowered)?
+                    }
+                };
                 self.builder
-                    .build_store(pointer, lowered)
+                    .build_store(pointer, stored)
                     .map_err(CodegenError::from_builder)?;
                 Ok(())
             }
             AssignTarget::Element { base, index, elem } => {
+                // One `slot` call, so the base and the index are evaluated
+                // once for the read and the write alike.
                 let slot = self.slot(base, index)?;
-                self.store_element(*elem, slot, lowered)
+                let stored = match op {
+                    None => lowered,
+                    Some(op) => {
+                        let current = self.load_element(*elem, slot)?;
+                        self.arith(op, elem.as_type(), current, lowered)?
+                    }
+                };
+                self.store_element(*elem, slot, stored)
             }
         }
     }

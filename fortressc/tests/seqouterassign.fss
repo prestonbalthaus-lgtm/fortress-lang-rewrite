@@ -1,0 +1,12 @@
+component seqouterassign
+
+export Executable
+
+run():()=do
+   total: ZZ64 := 0
+   for i <- seq(0#1000) do
+      total := total + i
+   end
+   println(total)
+end
+end

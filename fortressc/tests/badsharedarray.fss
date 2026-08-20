@@ -1,0 +1,17 @@
+component badsharedarray
+
+export Executable
+
+bump(a: Array[\ZZ64\]): () = do
+   a[0] := a[0] + 1
+end
+
+run():()=do
+   a: Array[\ZZ64\] = array(1)
+   a[0] := 0
+   for i <- 0#4000000 do
+      bump(a)
+   end
+   println(a[0])
+end
+end

@@ -1,0 +1,15 @@
+component atomichalt
+
+export Executable
+
+run():()=do
+   a: Array[\ZZ64\] = array(4)
+   total: ZZ64 := 0
+   for i <- 0#100000 do
+      atomic do
+         total := total + a[i]
+      end
+   end
+   println(total)
+end
+end

@@ -836,6 +836,10 @@ impl<'a> Expander<'a> {
                 name: name.clone(),
                 span: *span,
             },
+            Expr::Atomic { body, span } => Expr::Atomic {
+                body: Box::new(self.expr(body, subst)?),
+                span: *span,
+            },
         })
     }
 
@@ -917,6 +921,7 @@ impl<'a> Expander<'a> {
                 }),
                 BlockItem::Assign(a) => BlockItem::Assign(Assign {
                     target: self.expr(&a.target, subst)?,
+                    op: a.op,
                     value: self.expr(&a.value, subst)?,
                     span: a.span,
                 }),
