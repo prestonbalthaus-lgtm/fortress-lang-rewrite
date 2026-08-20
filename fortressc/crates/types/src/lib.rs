@@ -118,6 +118,27 @@ struct AssignRecord {
     all_atomic: bool,
 }
 
+/// One declaration whose return type was INFERRED, and the slot that holds the
+/// signature to backpatch. Collected once and walked repeatedly, because the
+/// pre-pass is a fixpoint and the filters that decide membership have to read
+/// the same in both passes.
+enum InferredBody<'a> {
+    Function {
+        decl: &'a FnDecl,
+        index: usize,
+    },
+    Method {
+        decl: &'a MethodDecl,
+        owner: &'static str,
+        index: usize,
+    },
+    Functional {
+        decl: &'a MethodDecl,
+        owner: &'static str,
+        index: usize,
+    },
+}
+
 struct Checker {
     registry: Registry,
     functions: HashMap<String, Vec<Signature>>,
@@ -820,6 +841,10 @@ impl Checker {
         }
         self.discharge_bounds(component)?;
 
+        // Before ANY body is checked, including an object initializer's: the
+        // signatures a caller reads have to be finished first.
+        self.resolve_inferred_returns(component);
+
         let mut objects = Vec::new();
         for decl in &component.decls {
             if let Decl::Object(o) = decl {
@@ -952,6 +977,198 @@ impl Checker {
                 signature.concrete = false;
             }
         }
+    }
+
+    /// Pass one and a half: resolve every INFERRED return type before a single
+    /// caller body is checked.
+    ///
+    /// `function`, `method` and `functional_method` learn what a declaration
+    /// with no written return type returns by walking its body, and backpatch
+    /// `sig.returns` afterwards. That is too late for any call site typed
+    /// earlier -- and for a method it is EVERY call site, because method bodies
+    /// are checked after every function body whatever the source order. The
+    /// caller read the `Void` placeholder `build_signatures` left, so
+    /// `println(f())` printed an empty line and exited 0. No diagnostic, and
+    /// the compile metric cannot see it: exit 0 is exit 0.
+    ///
+    /// So the inferred bodies are walked here first, for their signatures only,
+    /// and everything else the walk produced is thrown away. This is the same
+    /// phase split M3d uses for expansion and M5 for the reduction recogniser,
+    /// and it is load bearing for the same reason: a caller must never be able
+    /// to observe a half-built signature.
+    ///
+    /// Three properties make the speculative walk safe:
+    ///
+    /// * only a declaration that INFERRED its return type is walked. A written
+    ///   one is already final, and re-walking it would buy nothing while
+    ///   multiplying the state churn below;
+    /// * an error is SWALLOWED. Round one reads placeholders, so a body may
+    ///   fail against a signature that simply is not resolved yet. Anything
+    ///   genuinely wrong recurs in the real pass, which walks every body, and
+    ///   the diagnostic comes from there -- with the signatures right, so
+    ///   `s: String = O.m()` reports what is actually wrong or compiles;
+    /// * every side effect is DISCARDED. `dispatch_target` memoises with
+    ///   `or_insert_with`, so a table computed against an unresolved `returns`
+    ///   would be the table codegen emitted -- that reset is the one that is
+    ///   not optional.
+    ///
+    /// A round that changes no signature is the fixpoint. Written worst case
+    /// -- `a() = b()`, `b() = c()`, `c() = "s"`, in that order -- one round in
+    /// declaration order resolves exactly one link, so the cap is the number of
+    /// inferred declarations and past it nothing can still be improving.
+    /// Reaching the cap is not an error: the real pass runs either way. A
+    /// self-recursive inferred function reads its own placeholder here exactly
+    /// as it did before, so no diagnostic changes shape for it.
+    ///
+    /// The cost is |inferred| x |rounds|, and rounds is CHAIN DEPTH IN
+    /// DECLARATION ORDER rather than a count -- a callee written above its
+    /// caller resolves in one. Measured rather than argued: the 1956-file
+    /// corpus sweep does not move (11.15/11.51/11.64s against
+    /// 11.62/10.90/11.12s), a 500-link chain written worst-order costs 0.12s
+    /// against 0.07s written best-order, and 2000 links cost 0.82s. There is
+    /// no cap here because nothing plausible approaches one.
+    fn resolve_inferred_returns(&mut self, component: &Component) {
+        let pending = self.inferred_bodies(component);
+        for _ in 0..pending.len() {
+            let before: Vec<Option<Type>> =
+                pending.iter().map(|b| self.inferred_return(b)).collect();
+            for body in &pending {
+                let _ = match body {
+                    InferredBody::Function { decl, index } => {
+                        self.function(decl, *index).map(|_| ())
+                    }
+                    InferredBody::Method { decl, owner, index } => {
+                        self.method(decl, owner, *index).map(|_| ())
+                    }
+                    InferredBody::Functional { decl, owner, index } => {
+                        self.functional_method(decl, owner, *index).map(|_| ())
+                    }
+                };
+                // A swallowed error can return from the middle of a body, so
+                // nothing a body pushed may be assumed to have been popped.
+                self.reset_body_state();
+            }
+            let after: Vec<Option<Type>> =
+                pending.iter().map(|b| self.inferred_return(b)).collect();
+            if after == before {
+                break;
+            }
+        }
+        self.discard_speculative_walk();
+    }
+
+    /// The declarations pass one and a half walks. The filters mirror `run`'s
+    /// three loops exactly -- a member this skips is a member `run` skips, and
+    /// the indices are counted the same way -- because a slot read differently
+    /// in the two passes lands the backpatch on the wrong overload.
+    fn inferred_bodies<'a>(&self, component: &'a Component) -> Vec<InferredBody<'a>> {
+        let mut out = Vec::new();
+
+        let mut index = 0usize;
+        for decl in &component.decls {
+            if let Decl::Function(f) = decl {
+                if f.return_type.is_none() && f.body.is_some() && !f.value_binding {
+                    out.push(InferredBody::Function { decl: f, index });
+                }
+                index += 1;
+            }
+        }
+
+        for decl in &component.decls {
+            let owner = match decl {
+                Decl::Trait(t) => intern(&t.name),
+                Decl::Object(o) => intern(&o.name),
+                Decl::Function(_) => continue,
+            };
+            for (index, member) in members_of(decl).iter().enumerate() {
+                let Member::Method(m) = member else { continue };
+                if m.return_type.is_some() || m.body.is_none() {
+                    continue;
+                }
+                if is_functional(m) {
+                    if self.functional_slots.contains_key(&(owner, index)) {
+                        out.push(InferredBody::Functional {
+                            decl: m,
+                            owner,
+                            index,
+                        });
+                    }
+                    continue;
+                }
+                if m.accessor || !m.static_params.is_empty() {
+                    continue;
+                }
+                if !self.method_slots.contains_key(&(owner, index))
+                    || self.pruned_method(owner, index)
+                {
+                    continue;
+                }
+                out.push(InferredBody::Method {
+                    decl: m,
+                    owner,
+                    index,
+                });
+            }
+        }
+        out
+    }
+
+    /// What one pending declaration's signature currently says it returns.
+    /// `None` means the slot is gone, which `run` reports as a diagnostic when
+    /// it reaches the same declaration.
+    fn inferred_return(&self, body: &InferredBody) -> Option<Type> {
+        let (sets, set, slot) = match body {
+            InferredBody::Function { index, .. } => {
+                let (set, slot) = self.slots.get(*index)?;
+                (&self.functions, set, *slot)
+            }
+            InferredBody::Method { owner, index, .. } => {
+                let (set, slot) = self.method_slots.get(&(*owner, *index))?;
+                (&self.methods, set, *slot)
+            }
+            InferredBody::Functional { owner, index, .. } => {
+                let (set, slot) = self.functional_slots.get(&(*owner, *index))?;
+                (&self.functions, set, *slot)
+            }
+        };
+        sets.get(set)?.get(slot).map(|s| s.returns)
+    }
+
+    /// The per-body walk state. Cleared rather than popped, because a swallowed
+    /// error may have returned from anywhere inside the body.
+    ///
+    /// It catches nothing TODAY and the mutation table says so: all six
+    /// `scopes.push` sites pop before they propagate, and `atomic` and
+    /// `for_expr` do the same for their own state, so a failed body already
+    /// unwinds clean. This is the invariant those six sites are keeping, held
+    /// in one place -- the first of them to grow an early `?` breaks a
+    /// speculative walk and nothing else, which is a defect that would not
+    /// surface as a compile error.
+    fn reset_body_state(&mut self) {
+        self.scopes.clear();
+        self.self_ctx = None;
+        self.loop_ctx.clear();
+        self.atomic_depth = 0;
+        self.object_init = false;
+    }
+
+    /// Everything pass one and a half produced other than the signatures.
+    /// `dispatches` is the one that MUST go: `dispatch_target` memoises with
+    /// `or_insert_with`, so the first table computed is the one codegen emits,
+    /// and a table built while a `returns` was still `Void` would carry that
+    /// hole into the output.
+    ///
+    /// `loops` and `uses_mpi` are hygiene rather than correctness, and the
+    /// mutation table separates them from `dispatches` on exactly that: leaving
+    /// `loops` alone renumbers `$loop1` to `$loop5` and the program still
+    /// prints the right answer, while leaving `dispatches` alone makes LLVM
+    /// reject the module. A symbol that is a function of how many rounds the
+    /// fixpoint took is still worth not having.
+    fn discard_speculative_walk(&mut self) {
+        self.dispatches.clear();
+        self.loops = 0;
+        self.uses_mpi = false;
+        self.reset_body_state();
     }
 
     fn object(&mut self, o: &ObjectDecl) -> Checked<TypedObject> {

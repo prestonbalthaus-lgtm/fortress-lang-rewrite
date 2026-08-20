@@ -1235,3 +1235,59 @@ fn a_compound_assignment_to_a_name_the_body_reads_is_not_a_reduction() {
         "{message}"
     );
 }
+
+/// The phase split, and it is a SILENT WRONG ANSWER without it: an inferred
+/// return type used to be backpatched after the body was walked, so every call
+/// site typed before that read the `Void` placeholder. `println(f())` printed
+/// an empty line at exit 0, which no compile metric can see.
+///
+/// `chainTop` is the part that needs a FIXPOINT rather than one ordered sweep:
+/// three inferred signatures in a chain, each written above the one it calls,
+/// so a single round in declaration order resolves exactly one of them and
+/// `chain` comes out as the empty line again.
+#[test]
+fn an_inferred_return_type_is_visible_to_a_caller_declared_above_it() {
+    let binary = compile_fixture("inferredreturn.fss", "inferredreturn");
+    let out = run(&binary);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "greeting\nchain\n42\ngreeting\ntag\n"
+    );
+    assert_eq!(out.status.code(), Some(0));
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// The same defect, and for a method it did not need a source order to trigger:
+/// every method body is checked after every function body, so a call from a
+/// top-level function ALWAYS read the placeholder.
+///
+/// The first line is
+/// `ProjectFortress/compiler_regressions/parent_method_override.fss`, which
+/// compiled to exit 0 and printed an empty line where PASS belongs -- inside
+/// the 280, and invisible to the number.
+#[test]
+fn an_inferred_method_return_type_is_resolved_before_any_function_body() {
+    let binary = compile_fixture("inferredmethod.fss", "inferredmethod");
+    let out = run(&binary);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "Child.foo(Child) PASS\n42\nCounter\nChild.foo(Child) PASS\n"
+    );
+    assert_eq!(out.status.code(), Some(0));
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// The other half, and a `.fss` file is the only way to reach it:
+/// `dispatch_target` memoises with `or_insert_with`, so the FIRST table
+/// computed for a set is the one codegen emits. The signature pass computes
+/// tables while the return types are still settling, and every one of them has
+/// to be thrown away -- keep them and LLVM rejects the module with `ret void`
+/// against an `i32` return.
+#[test]
+fn a_dispatch_table_built_while_signatures_were_settling_is_discarded() {
+    let binary = compile_fixture("inferreddispatch.fss", "inferreddispatch");
+    let out = run(&binary);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "1\n2\n1\n");
+    assert_eq!(out.status.code(), Some(0));
+    let _ = std::fs::remove_file(&binary);
+}

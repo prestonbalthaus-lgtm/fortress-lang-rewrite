@@ -1,0 +1,36 @@
+component inferredreturn
+export Executable
+
+(* An inferred return type has to be resolved before ANY caller body is
+   checked. Every callee here is declared AFTER its caller on purpose: the
+   backpatch used to happen once the body had been walked, so a call typed
+   earlier read the Void placeholder and printed an empty line at exit 0.
+
+   `chainTop` is what needs a FIXPOINT rather than one ordered sweep -- three
+   inferred signatures in a chain, each declared after the one that calls it,
+   so one round in declaration order resolves exactly one of them. *)
+
+object Boxed(text: String)
+   unwrap(): String = text
+end
+
+run(): () = do
+   println(greeting())
+   println(chainTop())
+   println(number())
+   s: String = greeting()
+   println(s)
+   println(Boxed(tag()).unwrap())
+end
+
+greeting() = "greeting"
+
+chainTop() = chainMid()
+chainMid() = chainEnd()
+chainEnd() = "chain"
+
+number() = 41 + 1
+
+tag() = "tag"
+
+end

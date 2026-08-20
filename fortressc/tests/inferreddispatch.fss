@@ -1,0 +1,36 @@
+component inferreddispatch
+export Executable
+
+(* The other half of the phase split, and the half a `.fss` file is the only
+   way to reach: `dispatch_target` memoises with `or_insert_with`, so the FIRST
+   table computed for a set is the one codegen emits. Pass one and a half walks
+   bodies while the signatures are still settling, so it computes tables against
+   a `returns` that is not final yet -- and every one of them is thrown away
+   before the real pass runs.
+
+   `noise` needs two concrete winners over a trait-typed receiver, or the tree
+   collapses to a direct call and no table is memoised at all. *)
+
+trait Animal
+   noise() = 0
+end
+
+object Dog extends Animal
+   noise() = 1
+end
+
+object Cat extends Animal
+   noise() = 2
+end
+
+pick(n: ZZ32): Animal = if n === 0 then Dog elif n === 1 then Cat else Dog end
+
+speak(a: Animal) = a.noise()
+
+run(): () = do
+   println(speak(pick(0)))
+   println(speak(pick(1)))
+   println(speak(Dog))
+end
+
+end

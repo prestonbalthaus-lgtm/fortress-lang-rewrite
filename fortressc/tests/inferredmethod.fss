@@ -1,0 +1,35 @@
+component inferredmethod
+export Executable
+
+(* Methods hit the same defect UNCONDITIONALLY, whatever the source order:
+   every method body is checked after every function body, so a call from a
+   top-level function always read the Void placeholder.
+
+   `foo` is ProjectFortress/compiler_regressions/parent_method_override.fss --
+   it compiled to exit 0 and printed an empty line where PASS belongs. *)
+
+trait Parent
+   foo(x: Parent) = "Parent.foo(Parent) FAIL"
+end
+
+trait Child extends Parent
+   foo(x: Child) = "Child.foo(Child) PASS"
+   foo(x: Parent) = "Child.foo(Parent) FAIL"
+end
+
+object SomeChild extends Child end
+
+object Counter(n: ZZ32)
+   doubled() = n + n
+   named(self) = "Counter"
+end
+
+run(): () = do
+   println(SomeChild.foo(SomeChild))
+   println(Counter(21).doubled())
+   println(named(Counter(1)))
+   s: String = SomeChild.foo(SomeChild)
+   println(s)
+end
+
+end
