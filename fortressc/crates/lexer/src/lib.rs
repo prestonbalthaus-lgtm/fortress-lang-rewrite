@@ -63,6 +63,7 @@ pub fn lex(source: &str) -> Result<Vec<Token<'_>>, LexError> {
             raw::Raw::RightBar => Kind::RightBar,
             raw::Raw::BarBar => Kind::BarBar,
             raw::Raw::Bar => Kind::Bar,
+            raw::Raw::Backslash => Kind::Backslash,
             raw::Raw::Caret => Kind::Caret,
             raw::Raw::Hash => Kind::Hash,
             raw::Raw::EqEqEq => Kind::EqEqEq,

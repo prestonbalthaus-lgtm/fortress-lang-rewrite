@@ -104,6 +104,9 @@ pub enum Kind<'a> {
     RightBar,
     BarBar,
     Bar,
+    /// `\`. Only ever part of an enclosing-operator name -- `[\` and `\]` are
+    /// their own tokens and win the longest match.
+    Backslash,
     /// `^`, exponentiation, and `#`, which the library uses as an operator.
     Caret,
     Hash,

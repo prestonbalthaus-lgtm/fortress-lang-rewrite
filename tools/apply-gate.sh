@@ -41,7 +41,11 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # ACCEPT, because the shadowing rule it exercises has never been implemented and
 # the file used to fail earlier, on the block-level `var` M5 added. Refusing it
 # properly must not break this floor.
-COMPILE_FLOOR=279
+# 285 at the opr parse spike: +5 for operator declarations, zero lost, and every
+# one of the pre-existing 280 emits byte-identical IR. The floor stays one below
+# the count for the same reason it did at 279 -- XXXimmutable0.fss is a must-FAIL
+# negative test we accept, and refusing it properly must not break this floor.
+COMPILE_FLOOR=284
 
 passed=0
 failed=0

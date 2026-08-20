@@ -369,6 +369,12 @@ pub(crate) enum Raw {
     BarBar,
     #[token("|")]
     Bar,
+    /// The bare backslash, which exists ONLY so the enclosing-operator names
+    /// `|\self/|` and `|/self\|` reach the parser. `[\` and `\]` stay ahead of
+    /// it by logos's longest match, exactly as `=>` stays ahead of `=`, so no
+    /// static-parameter list lexes differently for this being here.
+    #[token("\\")]
+    Backslash,
     #[token("^")]
     Caret,
     #[token("#")]

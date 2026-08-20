@@ -819,3 +819,129 @@ fn atomic_wraps_a_statement_or_a_block() {
         }
     }
 }
+
+// ------------------------------------------------------- operator declarations
+
+/// Every operator declaration is lifted to the ordinary declaration node whose
+/// name is the operator's own text. `opr` used to be refused as a reserved word
+/// wherever it appeared, so nothing that parsed before can reach these branches.
+fn opr_names(src: &str) -> Vec<String> {
+    let c = component(src);
+    let mut names: Vec<String> = Vec::new();
+    for decl in &c.decls {
+        match decl {
+            Decl::Function(f) => names.push(f.name.clone()),
+            Decl::Trait(t) => names.extend(method_names(&t.members)),
+            Decl::Object(o) => names.extend(method_names(&o.members)),
+        }
+    }
+    names
+}
+
+fn method_names(members: &[fortress_ast::Member]) -> Vec<String> {
+    members
+        .iter()
+        .filter_map(|m| match m {
+            fortress_ast::Member::Method(m) => Some(m.name.clone()),
+            fortress_ast::Member::Field(_) => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_symbolic_operator_declaration_is_named_by_its_characters() {
+    let names = opr_names(
+        "api t\n\
+         opr =(a: Any, b: Any): Boolean\n\
+         opr =/=(a: Any, b: Any): Boolean\n\
+         opr ||(a: String, b: String): String\n\
+         opr |||(a: String, b: String): String\n\
+         opr ///(a: Any, b: Any): Any\n\
+         opr <->(a: Any, b: Any): Any\n\
+         end\n",
+    );
+    assert_eq!(names, ["=", "=/=", "||", "|||", "///", "<->"]);
+}
+
+/// The run is glued, which is the same span-adjacency rule `->`, `+=` and `**`
+/// are decided by. `<->` is three tokens and one name for that reason, and no
+/// operator needed a lexer token of its own.
+#[test]
+fn an_operator_name_stops_at_its_parameter_list() {
+    let names = opr_names(
+        "api t\n\
+         opr -(x: ZZ32): ZZ32\n\
+         opr #(): ZZ32\n\
+         opr :[\\I\\](r: I): I\n\
+         opr CMP[\\A, B\\](t1: A, t2: B): ZZ32\n\
+         opr juxtaposition(a: Any, b: Any): Any\n\
+         end\n",
+    );
+    assert_eq!(names, ["-", "#", ":", "CMP", "juxtaposition"]);
+}
+
+/// `BIG` is a modifier and not the operator, so it folds into the name rather
+/// than being dropped -- `opr BIG SQCAP` and `opr SQCAP` are two declarations.
+#[test]
+fn big_folds_into_the_operator_name() {
+    let names = opr_names(
+        "api t\n\
+         opr BIG SQCAP[\\T\\](g: T): T\n\
+         opr SQCAP[\\T\\](a: T, b: T): T\n\
+         opr BIG ||(g: Any): String\n\
+         end\n",
+    );
+    assert_eq!(names, ["BIG SQCAP", "SQCAP", "BIG ||"]);
+}
+
+/// An enclosing operator writes its operand INSIDE the brackets, so there is no
+/// parameter list in the ordinary place. `_` marks where the operand goes, which
+/// is what stops `|self|` being given the name `||` -- a real, different infix
+/// operator that `FortressLibrary.fsi` also declares.
+#[test]
+fn an_enclosing_operator_is_named_around_its_operand() {
+    let names = opr_names(
+        "component t\n\
+         object O\n\
+         opr |self| : ZZ32 = 0\n\
+         opr |\\self/| : ZZ32 = 1\n\
+         opr |/self\\| : ZZ32 = 2\n\
+         opr [i: ZZ32]: ZZ32 = i\n\
+         end\n\
+         end\n",
+    );
+    assert_eq!(names, ["|_|", "|\\_/|", "|/_\\|", "[_]"]);
+}
+
+/// The operand written BEFORE the operator. Both lists flatten into one, because
+/// what comes out is a function and a function has one parameter list.
+#[test]
+fn a_leading_operand_joins_the_trailing_parameters() {
+    let c = component("api t\nopr (l: ZZ32)::[\\I\\](s: ZZ32): ZZ32\nend\n");
+    let Some(Decl::Function(f)) = c.decls.into_iter().next() else {
+        panic!("expected a function");
+    };
+    assert_eq!(f.name, "::");
+    assert_eq!(
+        f.params.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+        ["l", "s"]
+    );
+    assert_eq!(f.static_params.len(), 1);
+}
+
+/// `opr [i: ZZ32]: E throws NotFound` -- `Library/FortressLibrary.fsi:777`. The
+/// clause is skipped and recorded nowhere: the language has no exceptions, so
+/// there is nothing for it to mean yet.
+#[test]
+fn a_throws_clause_is_skipped_rather_than_refused() {
+    let names = opr_names("api t\nopr [i: ZZ32]: ZZ32 throws NotFound\nend\n");
+    assert_eq!(names, ["[_]"]);
+}
+
+/// The one lexer change the spike needed. `[\` and `\]` keep winning the longest
+/// match, so no static-parameter list lexes differently for it existing.
+#[test]
+fn a_bare_backslash_does_not_swallow_a_static_parameter_list() {
+    let names = opr_names("api t\nopr |\\self/|: ZZ32\nend\n");
+    assert_eq!(names, ["|\\_/|"]);
+}

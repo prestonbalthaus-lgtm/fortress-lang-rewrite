@@ -33,6 +33,57 @@ fn widen(t: TypeRef, span: Span) -> TypeRef {
     }
 }
 
+/// What `opr` parsed, before the caller decides whether a body follows.
+struct OprSignature {
+    name: String,
+    static_params: Vec<StaticParam>,
+    params: Vec<Param>,
+    return_type: Option<TypeRef>,
+    end: Span,
+}
+
+/// The characters an operator name may be spelled out of, as their own text.
+///
+/// `[\` and `\]` are deliberately absent: they open a static-parameter list,
+/// which is part of the declaration and not part of the operator's name. `(`
+/// is absent for the same reason.
+fn operator_text(kind: &Kind<'_>) -> Option<&'static str> {
+    Some(match kind {
+        Kind::Plus => "+",
+        Kind::Minus => "-",
+        Kind::Star => "*",
+        Kind::Slash => "/",
+        Kind::SlashSlash => "//",
+        Kind::SlashSlashSlash => "///",
+        Kind::Caret => "^",
+        Kind::Hash => "#",
+        Kind::Bar => "|",
+        Kind::BarBar => "||",
+        Kind::LeftBar => "<|",
+        Kind::RightBar => "|>",
+        Kind::Backslash => "\\",
+        Kind::Lt => "<",
+        Kind::Gt => ">",
+        Kind::Le => "<=",
+        Kind::Ge => ">=",
+        Kind::Eq => "=",
+        Kind::EqEqEq => "===",
+        Kind::NotEq => "=/=",
+        Kind::FatArrow => "=>",
+        Kind::Colon => ":",
+        Kind::ColonEq => ":=",
+        Kind::LBracket => "[",
+        Kind::RBracket => "]",
+        Kind::LBrace => "{",
+        Kind::RBrace => "}",
+        _ => return None,
+    })
+}
+
+fn join(run: &[&'static str]) -> String {
+    run.concat()
+}
+
 pub fn parse(tokens: &[Token<'_>]) -> Parsed<Component> {
     Parser {
         tokens,
@@ -311,6 +362,10 @@ impl<'t, 'a> Parser<'t, 'a> {
         match self.peek_kind() {
             Some(Kind::KwTrait) => Ok(Decl::Trait(self.trait_decl()?)),
             Some(Kind::KwObject) => Ok(Decl::Object(self.object_decl()?)),
+            // `opr` reached the parser only to be refused as a reserved word,
+            // so this branch cannot change how anything that parses today
+            // parses -- it is entered on a token that was always an error.
+            Some(Kind::Reserved("opr")) => Ok(Decl::Function(self.opr_decl(signature_only)?)),
             // `pi: RR64 = 3.14`, `v = 1`, `x := 0`, and the initializer-less
             // `stdIn: Reader` an api declares. A function declaration is always
             // `Ident` then `[\` or `(`, so none of these three tokens can begin
@@ -504,6 +559,12 @@ impl<'t, 'a> Parser<'t, 'a> {
         } else {
             false
         };
+        // Same intercept as at declaration level, and the library needs both:
+        // `opr |self| : ZZ64` is a member of `trait Integral`, `opr COMPOSE`
+        // is top level.
+        if !accessor && !mutable && self.at(&Kind::Reserved("opr")) {
+            return Ok(Member::Method(self.opr_member()?));
+        }
         let (name, name_span) = self.identifier("a field or method name")?;
 
         let static_params = self.static_params()?;
@@ -641,6 +702,199 @@ impl<'t, 'a> Parser<'t, 'a> {
             value_binding: false,
             span,
         })
+    }
+
+    // ------------------------------------------------------------ operators
+
+    /// `opr` at declaration level. Lifted to an ordinary `FnDecl` whose name is
+    /// the operator's own text, which is what makes this a parse spike and not
+    /// a language feature: nothing downstream learns a new node.
+    fn opr_decl(&mut self, signature_only: bool) -> Parsed<FnDecl> {
+        let start = self.span_here();
+        self.pos += 1;
+        let sig = self.opr_signature()?;
+        let body = match self.optional_definition()? {
+            Some(body) => Some(body),
+            None if signature_only => None,
+            None => {
+                self.skip_newlines();
+                return Err(self.error("`=`"));
+            }
+        };
+        let end = body.as_ref().map_or(sig.end, Expr::span);
+        Ok(FnDecl {
+            name: sig.name,
+            static_params: sig.static_params,
+            params: sig.params,
+            return_type: sig.return_type,
+            body,
+            value_binding: false,
+            span: Span::new(start.start, end.end),
+        })
+    }
+
+    /// `opr` inside a trait or object. A member, so its body is optional in a
+    /// `.fss` too -- an abstract operator declaration is ordinary Fortress.
+    fn opr_member(&mut self) -> Parsed<MethodDecl> {
+        let start = self.span_here();
+        self.pos += 1;
+        let sig = self.opr_signature()?;
+        let body = self.optional_definition()?;
+        let end = body.as_ref().map_or(sig.end, Expr::span);
+        Ok(MethodDecl {
+            name: sig.name,
+            static_params: sig.static_params,
+            params: sig.params,
+            return_type: sig.return_type,
+            body,
+            accessor: false,
+            span: Span::new(start.start, end.end),
+        })
+    }
+
+    /// Everything between `opr` and the optional `= body`, which is the same
+    /// text in both positions.
+    ///
+    /// FOUR SHAPES, and the corpus needs all four -- `Library/FortressLibrary.fsi`
+    /// alone writes 450 of them:
+    ///
+    /// * infix or prefix, `opr CMP(self, o: T): Comparison` and `opr -(self)`,
+    ///   which is the bulk;
+    /// * ENCLOSING, `opr |self| : ZZ64` and `opr |\self/| : ZZ64` -- the
+    ///   operand is written INSIDE the brackets, so there is no parameter list
+    ///   in the ordinary place;
+    /// * a LEADING OPERAND, `opr (l: I)::[\I\](s: I): I`, where the left
+    ///   operand is written before the operator. Both lists flatten into one;
+    /// * `BIG`, which is a modifier rather than a name: `opr BIG SQCAP[\T\]()`
+    ///   folds to the name `BIG SQCAP` and then reads like any of the above.
+    fn opr_signature(&mut self) -> Parsed<OprSignature> {
+        let mut name = String::new();
+        // `BIG` is a RESERVED word rather than an identifier, so it cannot be
+        // read as the operator's own name by accident.
+        if self.at(&Kind::Reserved("BIG")) {
+            self.pos += 1;
+            name.push_str("BIG ");
+        }
+
+        // The leading-operand form. Its parameters are written first and join
+        // the trailing ones, because a lifted operator is one function.
+        let mut params = Vec::new();
+        if self.at(&Kind::LParen) {
+            self.pos += 1;
+            params = self.params()?;
+            self.expect(&Kind::RParen, "`)`")?;
+        }
+
+        if let Some(Kind::Ident(word)) = self.peek_kind() {
+            name.push_str(word);
+            self.pos += 1;
+            return self.opr_tail(name, params);
+        }
+
+        let open = self.operator_run(usize::MAX);
+        if open.is_empty() {
+            return Err(self.error("an operator name after `opr`"));
+        }
+
+        // An operand written inside the brackets makes this an enclosing
+        // operator: `|self|`, `|\self/|`, `|/self\|`, `[i: ZZ32]`.
+        if self.at(&Kind::KwSelf) || matches!(self.peek_kind(), Some(Kind::Ident(_))) {
+            let inner = self.params()?;
+            let close = self.operator_run(open.len());
+            if close.len() != open.len() {
+                return Err(self.error("the closing half of an enclosing operator"));
+            }
+            params.extend(inner);
+            // `_` marks where the operand goes, and it is what keeps the
+            // enclosing `|self|` from being given the name `||`, which is a
+            // real and different infix operator.
+            name.push_str(&join(&open));
+            name.push('_');
+            name.push_str(&join(&close));
+            let mut end = self.previous_span();
+            let return_type = if self.at(&Kind::Colon) {
+                self.pos += 1;
+                let ty = self.type_ref()?;
+                end = ty.span();
+                Some(ty)
+            } else {
+                None
+            };
+            self.skip_throws()?;
+            return Ok(OprSignature {
+                name,
+                static_params: Vec::new(),
+                params,
+                return_type,
+                end,
+            });
+        }
+
+        name.push_str(&join(&open));
+        self.opr_tail(name, params)
+    }
+
+    /// The part an operator declaration shares with a function's:
+    /// `[\statics\] (params): T where {...} throws E`.
+    fn opr_tail(&mut self, name: String, mut params: Vec<Param>) -> Parsed<OprSignature> {
+        let static_params = self.static_params()?;
+        self.expect(&Kind::LParen, "`(`")?;
+        params.extend(self.params()?);
+        let mut end = self.expect(&Kind::RParen, "`)`")?.span;
+        let return_type = if self.at(&Kind::Colon) {
+            self.pos += 1;
+            let ty = self.type_ref()?;
+            end = ty.span();
+            Some(ty)
+        } else {
+            None
+        };
+        self.skip_where()?;
+        self.skip_throws()?;
+        Ok(OprSignature {
+            name,
+            static_params,
+            params,
+            return_type,
+            end,
+        })
+    }
+
+    /// Up to `limit` operator characters, glued to each other. Adjacency is what
+    /// makes `<->` one name and stops the run reaching into whatever follows --
+    /// the same rule six milestones have used for `->`, `+=` and `**`, and it
+    /// needs no lexer token per operator.
+    ///
+    /// It stops at `(`, `[\`, an identifier and `self` on purpose: each of those
+    /// begins the operand, and which one it is decides the shape.
+    fn operator_run(&mut self, limit: usize) -> Vec<&'static str> {
+        let mut run = Vec::new();
+        while run.len() < limit {
+            let Some(text) = self.peek_kind().and_then(operator_text) else {
+                break;
+            };
+            if !run.is_empty() && !self.glued_right(self.pos - 1) {
+                break;
+            }
+            run.push(text);
+            self.pos += 1;
+        }
+        run
+    }
+
+    /// `throws NotFound`. Recorded nowhere: this is a parse spike, and an
+    /// exception clause has no meaning until the language has exceptions.
+    fn skip_throws(&mut self) -> Parsed<()> {
+        if !self.at(&Kind::Reserved("throws")) {
+            return Ok(());
+        }
+        self.pos += 1;
+        self.type_ref()?;
+        while self.at(&Kind::Comma) {
+            self.pos += 1;
+            self.type_ref()?;
+        }
+        Ok(())
     }
 
     fn params(&mut self) -> Parsed<Vec<Param>> {
