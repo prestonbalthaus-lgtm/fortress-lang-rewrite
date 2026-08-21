@@ -5,13 +5,21 @@ constraint solving are four separate inference problems that happen to live in
 the same checker... Split phase 4 before starting it and give each part its own
 exit criterion."* The split has never been written. This is it.
 
-Status: **drafted, not adopted.** Written against master `f81f41ace` on
-2026-08-21; every measurement reproduced by hand with a sha256-pinned driver
-(`7e103205cb54`).
+Status, and it differs by section:
 
-**§1 is the part someone is blocked on. It is decided and it is actionable
-today.** §2 is the split. §3 and §4 are the two corrections the split cannot be
-written without.
+- **§1, the where-clause decision — FINALIZED and OPERATIVE.** Taken under the
+  Group 1 instruction to finalize it, because the `where`-clause discard fix
+  (DEF-4) is blocked on it and nothing else in the tree is. **Implement against
+  §1 now.** It does not need further sign-off.
+- **§2, §3, §4 — drafted, not adopted.** They need Preston's sign-off, and each
+  names the `ROADMAP.md` / `02-stack.md` amendment it implies without making it;
+  executing those amendments *is* the adoption.
+
+Written against master `f81f41ace` on 2026-08-21; every measurement reproduced by
+hand with a sha256-pinned driver (`7e103205cb54`).
+
+§2 is the split. §3 and §4 are the two corrections the split cannot be written
+without.
 
 ---
 
@@ -33,9 +41,9 @@ Concretely:
 | **`where [\ bool b, nat n \] { ... }`** — the BINDER form, which introduces static variables bound nowhere else | **out, refused by name.** This is the where-clause-variable feature |
 | `where { T extends Foo }` where `T` is NOT a declared static parameter | **out, refused by name.** Same feature as the row above, written in the constraint form |
 
-**This makes the narrow discard fix safe.** `skip_where` today brace-matches
-*tokens* and returns `Ok(())` at five call sites
-(`crates/parser/src/lib.rs:448, 478, 608, 684, 783, 956`), so
+**This makes the narrow discard fix safe.** `skip_where`
+(`crates/parser/src/lib.rs:608`) today brace-matches *tokens* and returns
+`Ok(())`. Five call sites — `:448`, `:478`, `:684`, `:783`, `:956` — so
 `f(x: ZZ32): ZZ32 where { this is total garbage } = x` compiles, links and runs.
 Under this decision the fix is bounded: parse the trait-constraint form, check
 its subject is a declared static parameter, route it to `discharge_bounds`, and

@@ -161,7 +161,7 @@ gate are one item, not two.
 |---|---|
 | **Owner** | Group 3, item 14 |
 | **Class** | silent wrong acceptance |
-| **Status** | **UNBLOCKED as of D6.** The decision it was waiting on is taken |
+| **Status** | **UNBLOCKED.** D6 §1 is FINALIZED and operative -- implement against it, it needs no further sign-off |
 
 `skip_where` brace-matches tokens and returns `Ok(())` at five call sites, so
 `f(x: ZZ32): ZZ32 where { this is total garbage } = x` compiles, links and runs.

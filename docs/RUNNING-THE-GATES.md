@@ -154,13 +154,20 @@ pattern must match exactly once, and formatting moves lines.
 ## 4. The traps, all paid for
 
 1. **A mutation script restores from HEAD, not from the index.** Restoring from
-   the index faithfully restores a defect if anything stages mid-run. Commit
-   before mutating; the gates refuse to start on a dirty tree for this reason.
+   the index faithfully restores a defect if anything stages mid-run, and the
+   worktree and the index then agree with each other while both are wrong.
+   Commit before mutating. **All seven tables enforce this**: each opens with a
+   `git diff --quiet HEAD -- <paths>` guard and refuses on a dirty tree, and each
+   restores with `git checkout HEAD -- <file>`.
 2. **A mutation whose pattern does not match is a mutation that never happened,
-   and it reports as a clean escape.** `oracle-gate.sh`'s `apply()` md5s the file
-   before and after and treats a no-op as a hard error. The other six tables do
-   not yet. Two of oracle-gate's six escaped on their first run and both were the
-   author's bug, not the gate's.
+   and it reports as a clean escape.** All seven tables guard against it, in two
+   different ways because they mutate in two different ways. The six literal
+   `from`/`to` tables count occurrences of `from` and refuse unless there is
+   **exactly one** (`apply-gate.sh:248`, and the same shape in the other five).
+   `oracle-gate.sh` mutates with `sed` expressions, where there is no `from`
+   string to count, so its `apply()` md5s the file before and after and treats a
+   no-op as a hard error. Two of oracle-gate's six escaped on their first run
+   before that existed, and both were the author's bug rather than the gate's.
 3. **A mutation aimed at a case the gate never reaches is not a mutation.** Pick
    a target that currently **passes**.
 4. **A mutation table split on `IFS='|'` cannot carry a `|`.** Anything about
