@@ -331,6 +331,10 @@ const fn merge_op(op: ArithOp) -> ArithOp {
         ArithOp::Add | ArithOp::Sub => ArithOp::Add,
         ArithOp::Mul => ArithOp::Mul,
         ArithOp::Div => ArithOp::Div,
+        // Idempotent and associative, so a partial maximum folds with the same
+        // operator that produced it.
+        ArithOp::Max => ArithOp::Max,
+        ArithOp::Min => ArithOp::Min,
     }
 }
 
@@ -430,6 +434,8 @@ const fn op_name(op: BinOp) -> &'static str {
         BinOp::Ge => ">=",
         BinOp::Eq => "=",
         BinOp::Ne => "=/=",
+        BinOp::Max => "MAX",
+        BinOp::Min => "MIN",
         BinOp::Pow => "^",
         BinOp::And => "AND",
         BinOp::Or => "OR",
@@ -2301,11 +2307,13 @@ impl Checker {
         let arith = match op {
             BinOp::Add => ArithOp::Add,
             BinOp::Sub => ArithOp::Sub,
-            // Reachable only from a `PROD` reduction: `*=` is not a compound
-            // operator this parser reads, deliberately, because the corpus
-            // writes none. The accumulator carries its own operator, so the
-            // merge folds with `*` and the identity is 1.
+            // Reachable only from a BIG reduction: none of these three is a
+            // compound operator this parser reads, deliberately, because the
+            // corpus writes none. The accumulator carries its own operator, so
+            // the merge folds with the same one and the identity follows it.
             BinOp::Mul => ArithOp::Mul,
+            BinOp::Max => ArithOp::Max,
+            BinOp::Min => ArithOp::Min,
             _ => {
                 return Err(TypeError::CompoundOperatorUnsupported {
                     span,
@@ -3050,6 +3058,16 @@ impl Checker {
                 },
                 left.ty,
             ),
+            // No source syntax constructs these -- `a MAX b` is a word
+            // operator this parser does not read -- so an infix one cannot
+            // arise. A diagnostic rather than a panic, because malformed input
+            // is never a crash here.
+            BinOp::Max | BinOp::Min => {
+                return Err(TypeError::CompoundOperatorUnsupported {
+                    span,
+                    op: op_name(op),
+                })
+            }
             // Routed above: `^` is the one operator whose operands may
             // differ in type, so it never reaches the agreement check.
             BinOp::Pow => {
@@ -4588,67 +4606,80 @@ impl Checker {
         let name = format!("$big{}", self.cases);
         self.cases = self.cases.saturating_add(1);
 
-        let identity = match (op, ty) {
-            (BinOp::Mul, Type::RR64) => Expr::FloatLit {
-                int_digits: "1".to_owned(),
-                frac_digits: "0".to_owned(),
-                span,
+        // THE IDENTITY IS A TYPED CONSTANT AND NOT A LITERAL, because MAX and
+        // MIN need the type's own extremum and no literal in this language
+        // spells `i64::MIN` or an infinity. Everything else about the
+        // desugaring is AST and goes through the ordinary checker; only this
+        // one value is built directly.
+        let identity = TypedExpr {
+            kind: match (op, ty) {
+                (BinOp::Max, Type::RR64) => TypedExprKind::FloatConst(f64::NEG_INFINITY),
+                (BinOp::Min, Type::RR64) => TypedExprKind::FloatConst(f64::INFINITY),
+                (_, Type::RR64) => {
+                    TypedExprKind::FloatConst(if op == BinOp::Mul { 1.0 } else { 0.0 })
+                }
+                (BinOp::Max, Type::ZZ32) => TypedExprKind::IntConst(i128::from(i32::MIN)),
+                (BinOp::Min, Type::ZZ32) => TypedExprKind::IntConst(i128::from(i32::MAX)),
+                (BinOp::Max, _) => TypedExprKind::IntConst(i128::from(i64::MIN)),
+                (BinOp::Min, _) => TypedExprKind::IntConst(i128::from(i64::MAX)),
+                (BinOp::Mul, _) => TypedExprKind::IntConst(1),
+                _ => TypedExprKind::IntConst(0),
             },
-            (BinOp::Mul, _) => Expr::IntLit {
-                digits: "1".to_owned(),
-                span,
-            },
-            (_, Type::RR64) => Expr::FloatLit {
-                int_digits: "0".to_owned(),
-                frac_digits: "0".to_owned(),
-                span,
-            },
-            _ => Expr::IntLit {
-                digits: "0".to_owned(),
-                span,
-            },
-        };
-        let desugared = Expr::Block {
-            items: vec![
-                BlockItem::Binding(fortress_ast::Binding {
-                    name: name.clone(),
-                    // WRITTEN, not inferred: an unannotated `0` is ZZ32 and the
-                    // body is usually ZZ64, so the accumulator has to say what
-                    // it is.
-                    ty: Some(TypeRef::Named {
-                        name: ty.name().to_owned(),
-                        args: Vec::new(),
-                        span,
-                    }),
-                    value: identity,
-                    mutable: true,
-                    span,
-                }),
-                BlockItem::Expr(Expr::For {
-                    binder: binder.to_owned(),
-                    lo: Box::new(lo.clone()),
-                    hi: Box::new(hi.clone()),
-                    inclusive,
-                    sequential,
-                    body: Box::new(Expr::Block {
-                        items: vec![BlockItem::Assign(Assign {
-                            target: Expr::Var {
-                                name: name.clone(),
-                                span,
-                            },
-                            op: Some(op),
-                            value: body.clone(),
-                            span,
-                        })],
-                        span,
-                    }),
-                    span,
-                }),
-                BlockItem::Expr(Expr::Var { name, span }),
-            ],
+            ty,
             span,
         };
-        self.expr(&desugared, expected)
+
+        let loop_ast = Expr::For {
+            binder: binder.to_owned(),
+            lo: Box::new(lo.clone()),
+            hi: Box::new(hi.clone()),
+            inclusive,
+            sequential,
+            body: Box::new(Expr::Block {
+                items: vec![BlockItem::Assign(Assign {
+                    target: Expr::Var {
+                        name: name.clone(),
+                        span,
+                    },
+                    op: Some(op),
+                    value: body.clone(),
+                    span,
+                })],
+                span,
+            }),
+            span,
+        };
+
+        // The accumulator is declared HERE rather than by checking a synthetic
+        // binding, so that its initial value can be the constant above. The
+        // loop and the final read are ordinary checking.
+        self.scopes.push(HashMap::new());
+        self.declare(name.clone(), ty, true);
+        let lowered = self.expr(&loop_ast, Some(Type::Void));
+        self.scopes.pop();
+        let lowered = lowered?;
+
+        Ok(TypedExpr {
+            kind: TypedExprKind::Block {
+                items: vec![
+                    TypedBlockItem::Binding {
+                        name: name.clone(),
+                        ty,
+                        value: identity,
+                        mutable: true,
+                        span,
+                    },
+                    TypedBlockItem::Expr(lowered),
+                ],
+                tail: Some(Box::new(TypedExpr {
+                    kind: TypedExprKind::Var(name),
+                    ty,
+                    span,
+                })),
+            },
+            ty,
+            span,
+        })
     }
 
     /// The type of an expression, walked for that alone.

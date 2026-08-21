@@ -171,6 +171,11 @@ pub enum ArithOp {
     Sub,
     Mul,
     Div,
+    /// Reachable only as a REDUCTION's fold operator: no source syntax spells
+    /// `MAX=`, and codegen lowers these two to a compare and a select rather
+    /// than to a call, so no `max_zz64_zz64` shim exists or is wanted.
+    Max,
+    Min,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -190,6 +195,8 @@ impl ArithOp {
             Self::Sub => "sub",
             Self::Mul => "mul",
             Self::Div => "div",
+            Self::Max => "max",
+            Self::Min => "min",
         }
     }
 }

@@ -53,11 +53,13 @@ pub enum ParseError {
         span: Span,
         form: &'static str,
     },
-    /// `MAX[i <- a:b] e` and `MIN` likewise. Recognised so that they are
-    /// refused by name rather than read as a subscript.
+    /// A BIG reduction this lowering does not reach: an operator other than
+    /// SUM, PROD, MAX and MIN, or a generator that is not a range. Recognised
+    /// so that it is refused by name rather than read as a subscript.
     BigReductionUnsupported {
         span: Span,
         name: String,
+        reason: &'static str,
     },
     /// An `also` block form outside the subset. `at` is the only one: regions
     /// are shelved with the cluster work, and a lowering that silently dropped
@@ -145,14 +147,9 @@ impl core::fmt::Display for ParseError {
                  `fn (x: T): R => ...` with every parameter typed",
                 span.start, span.end
             ),
-            Self::BigReductionUnsupported { span, name } => write!(
-                f,
-                "{}..{}: `{name}` over a range needs an identity element that \
-                 is the type's own extremum rather than zero, and a merge \
-                 operator the accumulator does not carry; only `SUM` and \
-                 `PROD` are lowered",
-                span.start, span.end
-            ),
+            Self::BigReductionUnsupported { span, name, reason } => {
+                write!(f, "{}..{}: `{name}` {reason}", span.start, span.end)
+            }
             Self::AlsoFormUnsupported { span, form } => write!(
                 f,
                 "{}..{}: {form} is not implemented; regions are shelved, and \

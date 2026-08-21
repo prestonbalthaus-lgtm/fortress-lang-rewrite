@@ -1238,6 +1238,52 @@ impl<'ctx> Lowering<'ctx> {
         reduction: &TypedReduction,
     ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
         let one = reduction.op == ArithOp::Mul;
+        // THE TYPE'S OWN EXTREMUM for `MAX` and `MIN`, which is the whole
+        // reason the identity moved out of the runtime's memset: it is a fact
+        // about the operator AND the type, and the allocator knows neither. A
+        // MAX slot starting at zero reports 0 as the maximum of a set of
+        // negative numbers, silently.
+        match (reduction.op, reduction.ty) {
+            (ArithOp::Max, Type::ZZ32) => {
+                return Ok(self
+                    .context
+                    .i32_type()
+                    .const_int(u64::from(i32::MIN.cast_unsigned()), false)
+                    .into())
+            }
+            (ArithOp::Min, Type::ZZ32) => {
+                return Ok(self
+                    .context
+                    .i32_type()
+                    .const_int(u64::from(i32::MAX.cast_unsigned()), false)
+                    .into())
+            }
+            (ArithOp::Max, Type::ZZ64) => {
+                return Ok(self
+                    .context
+                    .i64_type()
+                    .const_int(i64::MIN.cast_unsigned(), false)
+                    .into())
+            }
+            (ArithOp::Min, Type::ZZ64) => {
+                return Ok(self
+                    .context
+                    .i64_type()
+                    .const_int(i64::MAX.cast_unsigned(), false)
+                    .into())
+            }
+            (ArithOp::Max, Type::RR64) => {
+                return Ok(self
+                    .context
+                    .f64_type()
+                    .const_float(f64::NEG_INFINITY)
+                    .into())
+            }
+            (ArithOp::Min, Type::RR64) => {
+                return Ok(self.context.f64_type().const_float(f64::INFINITY).into())
+            }
+            _ => {}
+        }
         Ok(match reduction.ty {
             Type::ZZ32 => self
                 .context
@@ -1859,20 +1905,59 @@ impl<'ctx> Lowering<'ctx> {
     ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
         if ty == Type::RR64 {
             let (l, r) = (l.into_float_value(), r.into_float_value());
+            // A compare and a select, not a call: `max_rr64_rr64` would be a
+            // shim for two instructions, and the only thing that constructs
+            // these is a reduction's fold.
+            if matches!(op, ArithOp::Max | ArithOp::Min) {
+                let predicate = if op == ArithOp::Max {
+                    inkwell::FloatPredicate::OGT
+                } else {
+                    inkwell::FloatPredicate::OLT
+                };
+                let keep = self
+                    .builder
+                    .build_float_compare(predicate, l, r, "extremum")
+                    .map_err(CodegenError::from_builder)?;
+                return self
+                    .builder
+                    .build_select(keep, l, r, "extremum")
+                    .map_err(CodegenError::from_builder);
+            }
             let out = match op {
                 ArithOp::Add => self.builder.build_float_add(l, r, "add"),
                 ArithOp::Sub => self.builder.build_float_sub(l, r, "sub"),
                 ArithOp::Mul => self.builder.build_float_mul(l, r, "mul"),
                 ArithOp::Div => self.builder.build_float_div(l, r, "div"),
+                ArithOp::Max | ArithOp::Min => {
+                    return Err(CodegenError::internal("handled above".to_owned()))
+                }
             };
             return Ok(out.map_err(CodegenError::from_builder)?.into());
         }
         let (l, r) = (l.into_int_value(), r.into_int_value());
+        if matches!(op, ArithOp::Max | ArithOp::Min) {
+            let predicate = if op == ArithOp::Max {
+                IntPredicate::SGT
+            } else {
+                IntPredicate::SLT
+            };
+            let keep = self
+                .builder
+                .build_int_compare(predicate, l, r, "extremum")
+                .map_err(CodegenError::from_builder)?;
+            return self
+                .builder
+                .build_select(keep, l, r, "extremum")
+                .map_err(CodegenError::from_builder);
+        }
         let out = match op {
             ArithOp::Add => self.builder.build_int_add(l, r, "add"),
             ArithOp::Sub => self.builder.build_int_sub(l, r, "sub"),
             ArithOp::Mul => self.builder.build_int_mul(l, r, "mul"),
             ArithOp::Div => self.builder.build_int_signed_div(l, r, "div"),
+            ArithOp::Max | ArithOp::Min => {
+                return Err(CodegenError::internal("handled above".to_owned()))
+            }
         };
         Ok(out.map_err(CodegenError::from_builder)?.into())
     }

@@ -36,6 +36,14 @@ run(): () = do
     total: ZZ32 = SUM[i <- 1:10] 1
     println(total)
 
+    (* MAX and MIN, whose identity is the TYPE'S OWN EXTREMUM and not a zero
+       bit pattern. The third line is the one that catches a zero: the maximum
+       of ten negative numbers is -1, and a slot seeded with 0 reports 0. *)
+    println(MAX[i <- 1:10] i)
+    println(MIN[i <- 1:10] i)
+    println(MAX[i <- 1:10] 0 - i)
+    println(MIN[i <- seq(1:10)] i)
+
     println(SUM[i <- 0#1000000] i)
 end
 end

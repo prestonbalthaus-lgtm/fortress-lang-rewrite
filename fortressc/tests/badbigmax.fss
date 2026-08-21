@@ -2,9 +2,13 @@ component badbigmax
 
 export Executable
 
-(* MAX and MIN are recognised so that they are refused BY NAME rather than read
-   as a subscript, which is what they were. Their identity is the type's own
-   extremum rather than a zero bit pattern, and guessing zero would make a MAX
-   over negative numbers quietly wrong. *)
-run(): () = println(MAX[i <- 1:10] i)
+(* A BIG reduction over a COLLECTION rather than a range. `SUM`, `PROD`, `MAX`
+   and `MIN` are all lowered onto the M5 accumulator when the generator is a
+   range; iterating a collection needs the generator PROTOCOL, which needs a
+   name to cross a file boundary first. Refused by name rather than read as a
+   subscript, which is what it was. *)
+run(): () = do
+    a: Array[\ZZ64\] = array(4)
+    println(SUM[x <- a] x)
+end
 end

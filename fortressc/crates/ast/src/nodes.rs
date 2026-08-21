@@ -256,6 +256,14 @@ pub enum BinOp {
     /// `^`. 1.0 puts it above every other operator, including tight
     /// juxtaposition, and makes it LEFT associative -- `2^3^4` is `(2^3)^4`.
     Pow,
+    /// `MAX` and `MIN`, and they have NO SOURCE SYNTAX: no lexer token spells
+    /// `MAX=`, and `a MAX b` is a word operator this parser does not read. They
+    /// exist so a `MAX[i <- a:b] e` reduction can say what its accumulator
+    /// folds with, and the BIG desugaring is the only thing that constructs
+    /// one. Reaching `infix` is impossible today and is a diagnostic rather
+    /// than a panic if it ever stops being.
+    Max,
+    Min,
     /// `AND` and `OR`, the short-circuit boolean operators. They are infix
     /// nodes for one reason -- one expression walk rather than two -- and they
     /// are the only `BinOp`s whose right operand may not be evaluated. The

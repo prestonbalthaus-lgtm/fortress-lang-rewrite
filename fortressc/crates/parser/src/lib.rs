@@ -1491,11 +1491,11 @@ impl<'t, 'a> Parser<'t, 'a> {
 
     /// `SUM[i <- lo:hi] e`, and `PROD` likewise.
     ///
-    /// `MAX` and `MIN` are recognised and REFUSED by name. Their identity is
-    /// the type's own extremum rather than a zero bit pattern, and the merge
-    /// would need an operator the accumulator does not carry; guessing zero
-    /// there would make `MAX` over negative numbers quietly wrong, which is the
-    /// class this compiler refuses to join.
+    /// All four operators, and the identity is what separates them: 0 for SUM,
+    /// 1 for PROD, and THE TYPE'S OWN EXTREMUM for MAX and MIN. A MAX slot
+    /// starting at zero reports 0 as the maximum of a set of negative numbers,
+    /// silently, which is why the identity is codegen's rather than the
+    /// allocator's memset.
     fn big_reduction(&mut self) -> Parsed<Expr> {
         let start = self.span_here();
         if self.at(&Kind::Reserved("BIG")) {
@@ -1505,10 +1505,15 @@ impl<'t, 'a> Parser<'t, 'a> {
         let op = match name.as_str() {
             "SUM" => BinOp::Add,
             "PROD" => BinOp::Mul,
+            "MAX" => BinOp::Max,
+            "MIN" => BinOp::Min,
             other => {
                 return Err(ParseError::BigReductionUnsupported {
                     span: name_span,
                     name: other.to_owned(),
+                    reason: "is not one of the reduction operators this lowering reaches; \
+                             SUM, PROD, MAX and MIN fold onto the accumulator and the rest \
+                             need the Reduction trait",
                 })
             }
         };
@@ -1524,7 +1529,9 @@ impl<'t, 'a> Parser<'t, 'a> {
         let Some(hi) = hi else {
             return Err(ParseError::BigReductionUnsupported {
                 span: name_span,
-                name: format!("{name} over a collection"),
+                name,
+                reason: "over a collection needs the generator protocol; over a RANGE it \
+                         folds onto the accumulator directly",
             });
         };
         self.skip_newlines();
@@ -2594,6 +2601,9 @@ const fn op_text(op: BinOp) -> &'static str {
         BinOp::Sub => "-",
         BinOp::Mul => "*",
         BinOp::Div => "/",
+        // No source spells these; they exist for a BIG reduction's fold.
+        BinOp::Max => "MAX",
+        BinOp::Min => "MIN",
         BinOp::Pow => "^",
         BinOp::And => "AND",
         BinOp::Or => "OR",

@@ -1688,6 +1688,11 @@ fn a_lambda_may_not_capture_self() {
 /// is right at one worker and wrong at sixteen is the signature this project
 /// has measured twice, and the PROD line is the one that had it -- with the
 /// zero identity and the `+` merge it printed 1.
+///
+/// The `-1` is MAX's: the maximum of ten negative numbers, which a slot seeded
+/// with a zero bit pattern reports as 0. That is why the identity is a fact
+/// about the operator AND the type, computed in codegen, rather than the
+/// allocator's memset.
 #[test]
 fn a_big_reduction_over_a_range_is_exact_at_every_worker_count() {
     let binary = compile_fixture("bigreduction.fss", "bigreduction");
@@ -1698,7 +1703,7 @@ fn a_big_reduction_over_a_range_is_exact_at_every_worker_count() {
             .expect("could not run the produced binary");
         assert_eq!(
             String::from_utf8_lossy(&out.stdout),
-            "55\n30\n55\n100\n120\n120\n10\n499999500000\n",
+            "55\n30\n55\n100\n120\n120\n10\n10\n1\n-1\n1\n499999500000\n",
             "at FORTRESS_WORKERS={workers}"
         );
         assert_eq!(out.status.code(), Some(0));
@@ -1706,14 +1711,14 @@ fn a_big_reduction_over_a_range_is_exact_at_every_worker_count() {
     let _ = std::fs::remove_file(&binary);
 }
 
-/// MAX and MIN are recognised so that they are refused BY NAME rather than read
-/// as a subscript. Their identity is the type's own extremum rather than a zero
-/// bit pattern, and the accumulator carries no operator that could fold them --
-/// guessing zero would make a MAX over negative numbers quietly wrong.
+/// A BIG reduction over a COLLECTION rather than a range. All four operators
+/// are lowered when the generator is a range; iterating a collection needs the
+/// generator PROTOCOL, which needs a name to cross a file boundary first.
+/// Refused by name rather than read as a subscript, which is what it was.
 #[test]
-fn a_big_max_is_refused_by_name_rather_than_read_as_a_subscript() {
+fn a_big_reduction_over_a_collection_is_refused_by_name() {
     let message = refusal("badbigmax.fss");
-    assert!(message.contains("identity element"), "{message}");
+    assert!(message.contains("over a collection"), "{message}");
 }
 
 // --------------------------------------------------------- `also do`
