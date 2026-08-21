@@ -276,16 +276,24 @@ With root, `dnf install llvm-devel gc-devel` does the same job.
 where the compiler is built: `runtime/shims.c` is compiled by the linking C
 compiler so that it matches the target's C library.
 
-Gates that cargo cannot run:
+Gates that cargo cannot run: fourteen shell scripts in `tools/`. **Read
+`docs/RUNNING-THE-GATES.md` before running any of them** — it carries the two
+rules that are not optional and the ten traps that are already paid for.
 
-```
-./tools/array-gate.sh     arrays, bounds, the loop, and what the collector sees
-./tools/memory-gate.sh    the collector, and the leak it replaced
-./tools/mpi-gate.sh       the MPI link and four real ranks (needs the image)
-```
+The two rules, because getting them wrong produces a wrong number silently:
 
-Both take `--selftest`, which proves their assertions can refuse without needing
-anything built.
+1. **`export FORTRESSC=<pinned copy>` before any sweep.** `cargo build` rewrites
+   `fortressc/target/debug/fortressc` in place, and a sweep that reads that path
+   while someone rebuilds mixes two compilers with no error and no warning. Only
+   `triage.sh`, `api-census.sh` and `oracle-gate.sh` honour it so far; for the
+   other ten, pinning means not rebuilding while they run.
+2. **Keep the pinned copy OUTSIDE `fortressc/build/`.** That directory is shared
+   scratch, thirteen of them write into it and seven `rm -rf` it. A pin was
+   lost that way on 2026-08-21.
+
+Every gate takes `--selftest`, which proves its assertions can refuse without
+needing anything built. Seven take `--mutate`; a green gate is evidence only
+when its mutation table has run and its numbers are stated.
 
 The legacy interpreter builds with Ant against Java 6 era code. It has not been
 verified to still work.
