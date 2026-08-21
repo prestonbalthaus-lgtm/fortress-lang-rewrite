@@ -235,7 +235,10 @@ ambiguity() {
     else
         bad 'a symmetrically ambiguous call is refused, naming the tuple' "$err"
     fi
-    if [[ $err =~ declarations\ at\ [0-9]+\.\.[0-9]+\ and\ [0-9]+\.\.[0-9]+ ]]; then
+    # The two declarations moved from byte offsets inside the message to `note:`
+# lines the driver renders with the source, so the assertion is that BOTH are
+# placed -- one note would be an ambiguity naming one declaration.
+if [[ $err == *'note: one declaration is here'* && $err == *'note: and the other is here'* ]]; then
         ok 'the diagnostic names both declarations'
     else
         bad 'the diagnostic names both declarations' "$err"

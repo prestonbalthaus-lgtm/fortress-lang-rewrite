@@ -1,0 +1,11 @@
+component badgenericheader
+
+export Executable
+
+(* A generic declaration nothing instantiates is deleted by expansion, so no
+   name in its header was ever resolved -- while the non-generic sibling
+   `trait R extends Nowhere end` was refused. *)
+trait R[\T\] extends Nowhere[\T\] end
+
+run():()=println(1)
+end

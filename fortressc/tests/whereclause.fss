@@ -1,0 +1,15 @@
+component whereclause
+
+export Executable
+
+trait Top end
+object Fancy(n: ZZ32) extends {Top} end
+
+grab[\A\](h: A): ZZ32 where { A extends Top } = 1
+identity[\A\](x: A): A where { } = x
+
+run():()=do
+   println(grab[\Fancy\](Fancy(1)))
+   println(identity[\ZZ32\](7))
+end
+end

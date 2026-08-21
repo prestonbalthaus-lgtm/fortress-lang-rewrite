@@ -296,6 +296,23 @@ impl<'t, 'a> Parser<'t, 'a> {
         } else {
             self.expect(&Kind::KwEnd, "`end`")?.span
         };
+        // Everything after the closing `end` used to be SILENTLY DISCARDED,
+        // including a whole second component: two complete components in one
+        // file compiled at exit 0 and the second one was gone. Only UNLEXABLE
+        // trailing text was caught, and the lexer caught that, not this.
+        // `Compilation.rats` has one compilation unit per file.
+        self.skip_newlines();
+        if !self.at_eof() {
+            // Two different mistakes reach here and the diagnostic names which:
+            // a spare `end` is an unmatched delimiter, which is exactly what the
+            // legacy implementation called it in XXX0e/XXX0u/XXX1c.test; anything
+            // else is a second compilation unit in a file that has room for one.
+            return Err(self.error(if self.at(&Kind::KwEnd) {
+                "end of file; this `end` closes nothing"
+            } else {
+                "end of file after the component's `end`"
+            }));
+        }
         Ok(Component {
             name,
             exports,
@@ -443,9 +460,9 @@ impl<'t, 'a> Parser<'t, 'a> {
     fn trait_decl(&mut self, modifiers: Modifiers) -> Parsed<TraitDecl> {
         let start = self.expect(&Kind::KwTrait, "`trait`")?.span;
         let (name, _) = self.identifier("a trait name")?;
-        let static_params = self.static_params()?;
+        let mut static_params = self.static_params()?;
         let (extends, comprises, excludes) = self.topology_clauses()?;
-        self.skip_where()?;
+        self.where_clause(&mut static_params)?;
         let members = self.members()?;
         let end = self.expect(&Kind::KwEnd, "`end`")?.span;
         Ok(TraitDecl {
@@ -465,7 +482,7 @@ impl<'t, 'a> Parser<'t, 'a> {
     fn object_decl(&mut self, modifiers: Modifiers) -> Parsed<ObjectDecl> {
         let start = self.expect(&Kind::KwObject, "`object`")?.span;
         let (name, _) = self.identifier("an object name")?;
-        let static_params = self.static_params()?;
+        let mut static_params = self.static_params()?;
         let params = if self.at(&Kind::LParen) {
             self.pos += 1;
             let params = self.params()?;
@@ -475,7 +492,7 @@ impl<'t, 'a> Parser<'t, 'a> {
             None
         };
         let (extends, comprises, excludes) = self.topology_clauses()?;
-        self.skip_where()?;
+        self.where_clause(&mut static_params)?;
         let members = self.members()?;
         let end = self.expect(&Kind::KwEnd, "`end`")?.span;
         Ok(ObjectDecl {
@@ -605,23 +622,86 @@ impl<'t, 'a> Parser<'t, 'a> {
 
     /// `where {T extends U}`. Consumed and discarded: there are no static
     /// parameters to constrain until generics land.
-    fn skip_where(&mut self) -> Parsed<()> {
+    /// A `where` clause, PARSED. It used to be a token skip: brace-matched and
+    /// thrown away, so `where { this is total garbage }` compiled and ran, and a
+    /// bound written here was a silent no-op while the identical bound written
+    /// in the bracket list was enforced.
+    ///
+    /// v1 accepts ONE of the spec's thirteen forms -- `Id extends Type`,
+    /// `concrete-syntax.tex:513` -- and it needs no machinery of its own: the
+    /// constraint is appended to the named static parameter's bounds, so
+    /// `record_bounds` and `discharge_bounds` enforce it exactly as they
+    /// enforce a bracket-list bound. Every other form is refused BY NAME.
+    ///
+    /// Zero corpus risk, and that is measured rather than hoped: 17 of the 1956
+    /// files carry a real `where` token, all 17 exit 1 on the compiler as it
+    /// stands, and 10 of them die earlier on `nat`/`int`/`opr` static
+    /// parameters that M3d locks out. The payoff here is the silent acceptance,
+    /// not a file count.
+    fn where_clause(&mut self, static_params: &mut [StaticParam]) -> Parsed<()> {
         if !self.at(&Kind::KwWhere) {
             return Ok(());
         }
         self.pos += 1;
         self.skip_newlines();
+        if self.at(&Kind::LGeneric) {
+            return Err(ParseError::WhereClauseFormUnsupported {
+                span: self.span_here(),
+                form: "`where [\\ ... \\]` introduces fresh static variables, which are bound \
+                       semantically rather than written"
+                    .to_owned(),
+            });
+        }
         self.expect(&Kind::LBrace, "`{`")?;
-        let mut depth = 1usize;
-        while depth > 0 {
-            match self.peek_kind() {
-                Some(Kind::LBrace) => depth += 1,
-                Some(Kind::RBrace) => depth -= 1,
-                None | Some(Kind::Eof) => return Err(self.error("`}`")),
-                _ => {}
+        self.skip_newlines();
+        if self.at(&Kind::RBrace) {
+            self.pos += 1;
+            return Ok(());
+        }
+        loop {
+            self.where_constraint(static_params)?;
+            self.skip_newlines();
+            if !self.at(&Kind::Comma) {
+                break;
             }
             self.pos += 1;
+            self.skip_newlines();
         }
+        self.expect(&Kind::RBrace, "`}`")?;
+        Ok(())
+    }
+
+    /// One constraint. `X extends T` lands on `X`'s bounds; anything else is
+    /// named and refused, because the alternative -- consuming it silently --
+    /// is the defect this function exists to close.
+    fn where_constraint(&mut self, static_params: &mut [StaticParam]) -> Parsed<()> {
+        if let Some(Kind::Reserved(word)) = self.peek_kind() {
+            return Err(ParseError::WhereClauseFormUnsupported {
+                span: self.span_here(),
+                form: format!("`{word}` is a form v1 does not implement"),
+            });
+        }
+        let (name, span) = self.identifier("a static parameter name")?;
+        if !self.at(&Kind::KwExtends) {
+            return Err(ParseError::WhereClauseFormUnsupported {
+                span: self.span_here(),
+                form: format!(
+                    "`{name}` is not followed by `extends`, and `extends` is the \
+                               only constraint v1 implements"
+                ),
+            });
+        }
+        let bounds = self.extends_clause()?;
+        let Some(param) = static_params.iter_mut().find(|p| p.name == name) else {
+            return Err(ParseError::WhereClauseFormUnsupported {
+                span,
+                form: format!(
+                    "`{name}` is not one of them. A member's where clause cannot yet \
+                     constrain its owner's static parameters"
+                ),
+            });
+        };
+        param.bounds.extend(bounds);
         Ok(())
     }
 
@@ -667,7 +747,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         }
         let (name, name_span) = self.identifier("a field or method name")?;
 
-        let static_params = self.static_params()?;
+        let mut static_params = self.static_params()?;
         if self.at(&Kind::LParen) {
             if mutable {
                 return Err(self.error("a field name after `var`"));
@@ -681,7 +761,7 @@ impl<'t, 'a> Parser<'t, 'a> {
             } else {
                 None
             };
-            self.skip_where()?;
+            self.where_clause(&mut static_params)?;
             let body = self.optional_definition()?;
             let end = body.as_ref().map_or(rparen, Expr::span);
             return Ok(Member::Method(MethodDecl {
@@ -769,7 +849,7 @@ impl<'t, 'a> Parser<'t, 'a> {
 
     fn fn_decl(&mut self, modifiers: Modifiers, signature_only: bool) -> Parsed<FnDecl> {
         let (name, name_span) = self.identifier("a function name")?;
-        let static_params = self.static_params()?;
+        let mut static_params = self.static_params()?;
         self.expect(&Kind::LParen, "`(`")?;
         let params = self.params()?;
         let rparen = self.expect(&Kind::RParen, "`)`")?.span;
@@ -780,7 +860,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         } else {
             None
         };
-        self.skip_where()?;
+        self.where_clause(&mut static_params)?;
 
         // `w equals w` at top level: a newline is permitted on both sides.
         // Inside an `api` there is no `=` at all and the declaration ends here.
@@ -941,7 +1021,7 @@ impl<'t, 'a> Parser<'t, 'a> {
     /// The part an operator declaration shares with a function's:
     /// `[\statics\] (params): T where {...} throws E`.
     fn opr_tail(&mut self, name: String, mut params: Vec<Param>) -> Parsed<OprSignature> {
-        let static_params = self.static_params()?;
+        let mut static_params = self.static_params()?;
         self.expect(&Kind::LParen, "`(`")?;
         params.extend(self.params()?);
         let mut end = self.expect(&Kind::RParen, "`)`")?.span;
@@ -953,7 +1033,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         } else {
             None
         };
-        self.skip_where()?;
+        self.where_clause(&mut static_params)?;
         self.skip_throws()?;
         Ok(OprSignature {
             name,
@@ -1747,7 +1827,23 @@ impl<'t, 'a> Parser<'t, 'a> {
         self.skip_newlines();
         if !self.at(&Kind::RBracket) {
             loop {
-                items.push(self.expr()?);
+                // `aggregate.tex:120-121` separates elements by whitespace:
+                // `RectSeparator ::= ';'+ | Whitespace`. `self.expr()` swallows
+                // a whitespace-separated run as one juxtaposition, so `[1 2 3]`
+                // used to be ONE element holding 6. 128 corpus sites over 65
+                // files write the juxtaposed spelling.
+                //
+                // Split after the fact rather than by suppressing juxtaposition
+                // inside the brackets: the flag version needs five save/restore
+                // sites and buys nothing. It does NOT see a run buried under an
+                // infix operator -- `[a b + c d]` is one Infix over two Juxts --
+                // and a newline inside the brackets is still eaten rather than
+                // read as a row separator. Both are open, and both are
+                // multi-dimensional-array questions rather than this one.
+                match self.expr()? {
+                    Expr::Juxt { items: run, .. } => items.extend(run),
+                    single => items.push(single),
+                }
                 self.skip_newlines();
                 if !self.at(&Kind::Comma) {
                     break;

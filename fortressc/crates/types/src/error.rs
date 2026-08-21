@@ -91,6 +91,22 @@ pub enum TypeError {
         span: Span,
         ty: Type,
     },
+    /// A juxtaposition with a String whose other operand has no `to_string`
+    /// shim. Its own variant rather than `NotPrintable`, because a
+    /// concatenation need not be inside a `println` -- and a diagnostic that
+    /// names the wrong mechanism is the class this project has already lost an
+    /// hour to twice.
+    NotConcatenable {
+        span: Span,
+        found: Type,
+    },
+    /// An integer division whose divisor is the literal `0`. There is no
+    /// quotient, and without this the program builds: LLVM's own constant
+    /// folder turns the division into `poison` and the callee prints whatever
+    /// that lowers to. RR64 does not reach here -- `1.0/0.0` is `inf`.
+    DivisionByZero {
+        span: Span,
+    },
     /// An integer literal in a slot that wants something other than ZZ32/ZZ64.
     LiteralNotApplicable {
         span: Span,
@@ -136,6 +152,41 @@ pub enum TypeError {
     },
     InvalidAssignTarget {
         span: Span,
+    },
+    /// `o.f = v` in statement position. `=` is an equality operator in
+    /// expression position, so without this the program COMPILES: the compare
+    /// is emitted, its result is discarded, and the field is printed unchanged.
+    /// `Specification/basic/expressions/blocks.tex:49-63` makes the program
+    /// invalid twice over -- a non-final item must have type `()`, and an
+    /// equality test in a block must be parenthesised -- so this is a refusal
+    /// and not a missing feature. Field mutation is not implemented either, so
+    /// the message must not send the reader to `:=`, which dead-ends on
+    /// `InvalidAssignTarget` and then on `MutableFieldUnsupported`.
+    FieldAssignmentUnsupported {
+        span: Span,
+        name: String,
+    },
+    /// `f(x = 2)` where `x` is a bound local. 1.0 reads that as a KEYWORD
+    /// ARGUMENT and reserves extra parentheses for the equality test; the
+    /// parser erases parentheses without a trace, so the two spellings are the
+    /// same tree and the compiler cannot tell them apart. Until this refusal it
+    /// silently chose the test and passed a Boolean -- a wrong argument, not a
+    /// failed compile. Keyword arguments are not implemented, so the honest
+    /// answer is to refuse the shape rather than to guess which one was meant.
+    ///
+    /// Only callees that COULD take a keyword argument are guarded: a user
+    /// function, a method and a constructor. `assert(count = 1000)` and
+    /// `println(x = 2)` are unambiguous equality tests -- no builtin has a
+    /// named parameter -- and they are legal, working Fortress today.
+    KeywordArgumentUnsupported {
+        span: Span,
+        name: String,
+    },
+    /// `widen` reaches ZZ32 -> ZZ64, ZZ32 -> RR64 and ZZ64 -> RR64, the three
+    /// `Type::is_widening_of` recognises. Anything else has no widening.
+    NotWidenable {
+        span: Span,
+        found: Type,
     },
 
     // ------------------------------------------------------------------ M3c
@@ -352,6 +403,8 @@ impl TypeError {
             | Self::EntryPointTakesArguments { span, .. }
             | Self::ArityMismatch { span, .. }
             | Self::LiteralOutOfRange { span, .. }
+            | Self::NotConcatenable { span, .. }
+            | Self::DivisionByZero { span }
             | Self::LiteralNotApplicable { span, .. }
             | Self::ConditionNotBoolean { span, .. }
             | Self::BranchTypeMismatch { span, .. }
@@ -363,6 +416,9 @@ impl TypeError {
             | Self::AssignToImmutable { span, .. }
             | Self::AssignToUndeclared { span, .. }
             | Self::InvalidAssignTarget { span }
+            | Self::FieldAssignmentUnsupported { span, .. }
+            | Self::KeywordArgumentUnsupported { span, .. }
+            | Self::NotWidenable { span, .. }
             | Self::ApiNotExecutable { span }
             | Self::MissingBody { span, .. }
             | Self::TraitCycle { span, .. }
@@ -398,10 +454,28 @@ impl TypeError {
     }
 }
 
+impl TypeError {
+    /// Secondary spans, for a renderer that has the source. Two variants point
+    /// at a SECOND declaration, and their byte offsets used to be written into
+    /// the message itself -- which is the one thing a `Display` with no source
+    /// and no path cannot turn into a position.
+    #[must_use]
+    pub fn notes(&self) -> Vec<(Span, &'static str)> {
+        match self {
+            Self::AmbiguousDispatch { first, second, .. } => vec![
+                (*first, "one declaration is here"),
+                (*second, "and the other is here"),
+            ],
+            Self::OverloadSetStaticParamsDiffer { first, .. } => {
+                vec![(*first, "the other declaration is here")]
+            }
+            _ => Vec::new(),
+        }
+    }
+}
+
 impl core::fmt::Display for TypeError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let span = self.span();
-        write!(f, "{}..{}: ", span.start, span.end)?;
         match self {
             Self::ImplicitWideningRejected { from, to, .. } => write!(
                 f,
@@ -464,6 +538,15 @@ impl core::fmt::Display for TypeError {
             Self::LiteralOutOfRange { ty, .. } => {
                 write!(f, "integer literal does not fit in {}", ty.name())
             }
+            Self::NotConcatenable { found, .. } => write!(
+                f,
+                "a juxtaposition with a String converts its other operands to String, \
+                 and {} has no conversion",
+                found.name()
+            ),
+            Self::DivisionByZero { .. } => {
+                write!(f, "this division has a literal zero divisor")
+            }
             Self::LiteralNotApplicable { required, .. } => {
                 write!(
                     f,
@@ -510,6 +593,23 @@ impl core::fmt::Display for TypeError {
             Self::InvalidAssignTarget { .. } => {
                 write!(f, "only a variable or an array element can be assigned to")
             }
+            Self::FieldAssignmentUnsupported { name, .. } => write!(
+                f,
+                "`.{name} = ...` here is an equality test whose result is discarded, \
+                 not an assignment; field mutation is not implemented. Write \
+                 `ignore(...)` or `_ = ...` if the comparison is what you meant"
+            ),
+            Self::KeywordArgumentUnsupported { name, .. } => write!(
+                f,
+                "`{name} = ...` as an argument is a keyword argument, which is not \
+                 implemented; it was being passed as the Boolean result of an equality \
+                 test. Bind the value first, or compare inside `ignore(...)`"
+            ),
+            Self::NotWidenable { found, .. } => write!(
+                f,
+                "`widen` widens ZZ32 to ZZ64 or RR64 and ZZ64 to RR64; {} is not widened",
+                found.name()
+            ),
             Self::ApiNotExecutable { .. } => write!(
                 f,
                 "an `api` is a set of signatures with no bodies; there is nothing to compile"
@@ -568,16 +668,11 @@ impl core::fmt::Display for TypeError {
                 name, arguments, ..
             } => write!(f, "no declaration of `{name}` applies to ({arguments})"),
             Self::AmbiguousDispatch {
-                name,
-                arguments,
-                first,
-                second,
-                ..
+                name, arguments, ..
             } => write!(
                 f,
-                "`{name}` is ambiguous for ({arguments}): the declarations at {}..{} and {}..{} \
-                 are both most specific, and neither is more specific than the other",
-                first.start, first.end, second.start, second.end
+                "`{name}` is ambiguous for ({arguments}): the declarations below are both \
+                 most specific, and neither is more specific than the other"
             ),
             Self::ReturnTypeNotCovariant {
                 name,
@@ -655,11 +750,10 @@ impl core::fmt::Display for TypeError {
                 "instantiating `{name}` would pass {limit} instantiations in one component; \
                  this is what a generic that instantiates itself at a larger type looks like"
             ),
-            Self::OverloadSetStaticParamsDiffer { name, first, .. } => write!(
+            Self::OverloadSetStaticParamsDiffer { name, .. } => write!(
                 f,
-                "declarations of `{name}` differ in their static parameters (the other is at \
-                 {}..{}); an overload set is uniformly generic or uniformly ground",
-                first.start, first.end
+                "declarations of `{name}` differ in their static parameters; an overload set \
+                 is uniformly generic or uniformly ground"
             ),
             Self::BoundNotSatisfied {
                 parameter,

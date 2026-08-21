@@ -97,6 +97,7 @@ struct Instance {
 }
 
 pub fn expand(component: &Component) -> Result<Component, TypeError> {
+    check_template_headers(component)?;
     Expander::new(component)?.run(component)
 }
 
@@ -1035,4 +1036,117 @@ fn decl_name(decl: &Decl) -> &str {
         Decl::Trait(t) => &t.name,
         Decl::Object(o) => &o.name,
     }
+}
+
+/// The names a declaration header may write: everything the component
+/// declares, plus the builtins.
+///
+/// `Object` and `Any` are TOLERATED and neither is a type this compiler has.
+/// They are 1.0's root traits, the seeding of them is a queued item that
+/// belongs to somebody else, and refusing them here would take that decision
+/// out of their hands. The cost of the tolerance is measured, not assumed:
+/// refusing the two names costs FOUR more corpus files -- Compiled12.a0,
+/// Compiled12.b0, Go0b and Library/TypeProxy.fss, the last of which is one of
+/// the four Library files that compile end to end at all.
+fn declared_type_names(component: &Component) -> BTreeSet<String> {
+    let mut names: BTreeSet<String> = [
+        "ZZ32", "ZZ64", "RR64", "Boolean", "String", "Array", "Any", "Object",
+    ]
+    .iter()
+    .map(|s| (*s).to_owned())
+    .collect();
+    for decl in &component.decls {
+        names.insert(decl_name(decl).to_owned());
+    }
+    names
+}
+
+fn check_header_type(
+    t: &TypeRef,
+    known: &BTreeSet<String>,
+    params: &BTreeSet<String>,
+) -> Result<(), TypeError> {
+    match t {
+        TypeRef::Named { name, args, span } => {
+            if !known.contains(name) && !params.contains(name) {
+                return Err(TypeError::UnknownType {
+                    span: *span,
+                    name: name.clone(),
+                });
+            }
+            for a in args {
+                check_header_type(a, known, params)?;
+            }
+            Ok(())
+        }
+        TypeRef::Unit { .. } => Ok(()),
+        TypeRef::Tuple { elems, .. } => {
+            for e in elems {
+                check_header_type(e, known, params)?;
+            }
+            Ok(())
+        }
+        TypeRef::Arrow { from, to, .. } => {
+            check_header_type(from, known, params)?;
+            check_header_type(to, known, params)
+        }
+    }
+}
+
+/// Resolves the type NAMES a generic declaration's header writes.
+///
+/// A generic declaration nothing instantiates is DELETED by `emit`, so no name
+/// in its header is ever resolved by anything: `trait R[\T\] extends
+/// Nowhere[\T\] end` was exit 0 while the non-generic sibling was exit 1,
+/// `unknown type Nowhere`. Both resolution moments the compiler has -- `ty` for
+/// an applied name, `build_hierarchy` for a bare one -- are gated on
+/// instantiation.
+///
+/// NAMES ONLY, and that is the whole scope. No body is checked, no parameter is
+/// made opaque, no bound is discharged, so this cannot refuse a program for a
+/// reason that depends on a type it does not have. Members are not walked
+/// either: a method's header inside a generic object may legitimately name its
+/// OWNER's static parameters, which are not in scope here.
+fn check_template_headers(component: &Component) -> Result<(), TypeError> {
+    let known = declared_type_names(component);
+    for decl in &component.decls {
+        let statics = static_params(decl);
+        if statics.is_empty() {
+            continue;
+        }
+        let params: BTreeSet<String> = statics.iter().map(|p| p.name.clone()).collect();
+        for p in statics {
+            for b in &p.bounds {
+                check_header_type(b, &known, &params)?;
+            }
+        }
+        match decl {
+            Decl::Trait(t) => {
+                for list in [&t.extends, &t.comprises, &t.excludes] {
+                    for r in list {
+                        check_header_type(r, &known, &params)?;
+                    }
+                }
+            }
+            Decl::Object(o) => {
+                for list in [&o.extends, &o.comprises, &o.excludes] {
+                    for r in list {
+                        check_header_type(r, &known, &params)?;
+                    }
+                }
+                for p in o.params.iter().flatten() {
+                    check_header_type(&p.ty, &known, &params)?;
+                }
+            }
+            Decl::Function(f) => {
+                for p in &f.params {
+                    check_header_type(&p.ty, &known, &params)?;
+                }
+                if let Some(r) = &f.return_type {
+                    check_header_type(r, &known, &params)?;
+                }
+            }
+        }
+    }
+    Ok(())
 }

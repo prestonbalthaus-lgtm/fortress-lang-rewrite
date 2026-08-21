@@ -1,0 +1,11 @@
+component badkeywordargument
+
+export Executable
+
+flag(b: Boolean): ZZ32 = if b then 1 else 0 end
+
+run():()=do
+   x: ZZ32 = 7
+   println(flag(x = 2))
+end
+end

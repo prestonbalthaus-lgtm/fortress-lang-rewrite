@@ -1,0 +1,13 @@
+component divzero
+
+export Executable
+
+quotient(a: ZZ32, b: ZZ32): ZZ32 = a/b
+
+run():()=do
+   println("stdout survived the halt")
+   println(quotient(7, 1))
+   println(quotient(7, 0))
+   println("unreachable")
+end
+end

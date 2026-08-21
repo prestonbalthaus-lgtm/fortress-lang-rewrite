@@ -79,17 +79,18 @@ impl LexError {
     pub const fn new(kind: LexErrorKind, span: Span) -> Self {
         Self { kind, span }
     }
+
+    /// The same shape `ParseError::span` has, so the driver's renderer takes
+    /// all three error types through one call.
+    #[must_use]
+    pub const fn span(&self) -> Option<Span> {
+        Some(self.span)
+    }
 }
 
 impl core::fmt::Display for LexError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(
-            f,
-            "{}..{}: {}",
-            self.span.start,
-            self.span.end,
-            self.kind.message()
-        )
+        f.write_str(self.kind.message())
     }
 }
 

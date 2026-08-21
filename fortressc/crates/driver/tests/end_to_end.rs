@@ -618,8 +618,12 @@ fn an_ambiguous_call_is_refused_at_compile_time_and_names_both_declarations() {
         "an ambiguity is a user diagnostic, not a compiler bug:\n{message}"
     );
     assert!(message.contains("is ambiguous for (OL, OR)"), "{message}");
+    // The two declarations are secondary spans now, placed by the driver's
+    // renderer as `note:` lines, because a `Display` with no source and no path
+    // cannot turn a byte offset into a position.
     assert!(
-        message.contains("the declarations at"),
+        message.contains("note: one declaration is here")
+            && message.contains("note: and the other is here"),
         "the diagnostic must name both declarations:\n{message}"
     );
 }
@@ -1289,5 +1293,274 @@ fn a_dispatch_table_built_while_signatures_were_settling_is_discarded() {
     let out = run(&binary);
     assert_eq!(String::from_utf8_lossy(&out.stdout), "1\n2\n1\n");
     assert_eq!(out.status.code(), Some(0));
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// An `sdiv` traps on x86-64 for a zero divisor, and SIGFPE is a core dump with
+/// no diagnostic. 1.0 throws `DivideByZero`; this subset has no exceptions, so
+/// division halts the way a bad subscript does.
+#[test]
+fn integer_division_by_zero_halts_with_a_diagnostic_rather_than_faulting() {
+    let binary = compile_fixture("divzero.fss", "divzero");
+    let out = run(&binary);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "a trapping division must be a clean halt, not a signal:\n{stderr}"
+    );
+    assert!(stderr.contains("integer division by zero"), "{stderr}");
+    // The halt path flushes. Without it the program loses the line it had
+    // already printed, and a lost buffer looks exactly like never getting there.
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains('7'),
+        "output produced before the halt must survive it"
+    );
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// The other trapping operand pair. Its quotient is not representable, and
+/// delegating the 32 bit width to the 64 bit one would return a truncated
+/// `INT_MIN` instead of halting -- which is the silently wrong answer.
+#[test]
+fn the_minimum_over_minus_one_halts_at_both_widths() {
+    for (name, tag) in [
+        ("divoverflow32.fss", "divoverflow32"),
+        ("divoverflow64.fss", "divoverflow64"),
+    ] {
+        let binary = compile_fixture(name, tag);
+        let out = run(&binary);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{name}:\n{stderr}");
+        assert!(
+            stderr.contains("integer division overflows"),
+            "{name}: {stderr}"
+        );
+        let _ = std::fs::remove_file(&binary);
+    }
+}
+
+/// The one divisor the run-time guard can never see: LLVM's constant folder
+/// turns the division into `poison` while the module is being built, so the
+/// program prints a value nothing computed.
+#[test]
+fn a_literal_zero_divisor_is_refused_before_llvm_can_fold_it() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture("baddivzeroliteral.fss"))
+        .arg("--emit-ir")
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{message}");
+    assert!(message.contains("literal zero divisor"), "{message}");
+}
+
+/// RR64 is not routed through the guard: `1.0/0.0` is `inf` and that is right.
+#[test]
+fn floating_division_by_zero_is_still_infinity() {
+    let binary = compile_fixture("divquotients.fss", "divquotients");
+    let out = run(&binary);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "3\n-3\n3000000000\n0.25\ninf\n"
+    );
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// `b.x = 7` in statement position is an equality test whose value is thrown
+/// away, so the field is printed unchanged. `blocks.tex:49-63` invalidates the
+/// program twice over; the parser cannot see it, because statement position
+/// exists only in the checker.
+#[test]
+fn a_field_assignment_in_statement_position_is_refused_rather_than_discarded() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture("badfieldassign.fss"))
+        .arg("--emit-ir")
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{message}");
+    assert!(
+        message.contains("equality test whose result is discarded"),
+        "{message}"
+    );
+    // The advice must not send the reader to `:=`, which dead-ends on
+    // InvalidAssignTarget and then on MutableFieldUnsupported.
+    assert!(!message.contains(":="), "{message}");
+}
+
+/// 1.0 reads `f(x = 2)` as a keyword argument and reserves the parenthesised
+/// form for the test; the parser erases parentheses, so the compiler cannot
+/// tell them apart and used to pass a Boolean silently.
+#[test]
+fn a_bare_name_equals_argument_is_refused_instead_of_passing_a_boolean() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture("badkeywordargument.fss"))
+        .arg("--emit-ir")
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{message}");
+    assert!(message.contains("keyword argument"), "{message}");
+}
+
+/// No builtin has a named parameter, so `assert(count = 1000)` is unambiguous
+/// -- and it is legal, working Fortress that a blanket guard would regress.
+#[test]
+fn an_equality_test_as_a_builtin_argument_is_still_legal() {
+    let binary = compile_fixture("kwbuiltin.fss", "kwbuiltin");
+    let out = run(&binary);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "true\ntrue\n");
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// `widen` used to hardcode ZZ32 -> ZZ64 at both ends while the advice that
+/// recommends it recognised three widenings, so `x: RR64 = widen(n)` repeated
+/// the same message one type up and no expression reached an RR64 from an
+/// integer at all.
+#[test]
+fn widen_reaches_every_widening_the_advice_recommends() {
+    let binary = compile_fixture("widenrr64.fss", "widenrr64");
+    let out = run(&binary);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "3\n3\n3\n");
+    let _ = std::fs::remove_file(&binary);
+
+    let ir = emit_ir_with("widenrr64.fss", &[]);
+    let ir = String::from_utf8_lossy(&ir.stdout);
+    assert!(
+        ir.contains("sitofp"),
+        "an integer to RR64 widening is an sitofp:\n{ir}"
+    );
+    assert!(
+        ir.contains("sext"),
+        "an integer widening is still a sext:\n{ir}"
+    );
+}
+
+/// A file with two complete components compiled at exit 0 and the second one
+/// was gone. Only UNLEXABLE trailing text was caught, and the lexer caught that.
+#[test]
+fn nothing_may_follow_the_components_closing_end() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture("badtrailingcomponent.fss"))
+        .arg("--emit-ir")
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{message}");
+    assert!(
+        message.contains("end of file after the component"),
+        "{message}"
+    );
+}
+
+/// `aggregate.tex:120-121`: `RectSeparator ::= ';'+ | Whitespace`. A
+/// whitespace-separated run was swallowed as one juxtaposition, so `[1 2 3]`
+/// was ONE element holding 6. 128 corpus sites write the juxtaposed spelling.
+#[test]
+fn a_juxtaposed_array_literal_has_one_element_per_operand() {
+    let binary = compile_fixture("arrayjuxtaposed.fss", "arrayjuxtaposed");
+    let out = run(&binary);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "3\n1\n3\n3\n4\n8\n");
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// `"a " x` with a trait- or object-typed `x` reached codegen as
+/// `to_string_Shape` and came out as `fortressc: internal error`, exit 70 --
+/// a compiler bug raised by ordinary source. `println` had the guard all along
+/// and said why; `concatenation` did not.
+#[test]
+fn a_concatenation_with_no_conversion_is_a_diagnostic_and_not_an_internal_error() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture("badconcat.fss"))
+        .arg("--emit-ir")
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "70 is a compiler bug, not a diagnostic:\n{message}"
+    );
+    assert!(message.contains("has no conversion"), "{message}");
+    // It must NOT name `println`: the fixture has none on that line.
+    assert!(!message.contains("println` does not accept"), "{message}");
+}
+
+/// Diagnostics carry `line:col` and a source excerpt, not byte offsets.
+#[test]
+fn a_diagnostic_names_a_line_and_column_and_shows_the_source() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture("badconcat.fss"))
+        .arg("--emit-ir")
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert!(message.contains("badconcat.fss:11:40:"), "{message}");
+    assert!(message.contains("11 | describe(s: Shape)"), "{message}");
+    assert!(message.contains('^'), "{message}");
+}
+
+/// `where { ... }` was brace-matched and thrown away, so nothing inside it was
+/// parsed at all and a bound written there was a silent no-op -- while the
+/// identical bound in the bracket list was enforced.
+#[test]
+fn a_where_clause_is_parsed_rather_than_skipped() {
+    for (name, phrase) in [
+        ("badwhereclause.fss", "only constrain a static parameter"),
+        ("badwherevariable.fss", "introduces fresh static variables"),
+        ("badwherebound.fss", "does not satisfy `A extends Top`"),
+    ] {
+        let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+            .arg(fixture(name))
+            .arg("--emit-ir")
+            .output()
+            .expect("could not run fortressc");
+        let message = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{name}:\n{message}");
+        assert!(message.contains(phrase), "{name}: {message}");
+    }
+}
+
+/// The one form v1 implements needs no machinery of its own: the constraint is
+/// appended to the named static parameter's bounds, so `record_bounds` and
+/// `discharge_bounds` enforce it exactly as they do a bracket-list bound.
+#[test]
+fn a_satisfied_where_bound_compiles_and_an_empty_clause_is_legal() {
+    let binary = compile_fixture("whereclause.fss", "whereclause");
+    let out = run(&binary);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "1\n7\n");
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// A generic declaration nothing instantiates is DELETED by expansion, so no
+/// name in its header is ever resolved by anything. The non-generic sibling
+/// `trait R extends Nowhere end` was refused all along.
+#[test]
+fn a_generic_declaration_header_resolves_its_type_names() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture("badgenericheader.fss"))
+        .arg("--emit-ir")
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{message}");
+    assert!(message.contains("unknown type `Nowhere`"), "{message}");
+}
+
+/// Names only. A generic header whose names all resolve still compiles, and its
+/// BODY is still unchecked at an opaque parameter -- deliberately, because the
+/// encoding that would check it cannot represent `T extends ZZ32`.
+#[test]
+fn a_generic_header_whose_names_resolve_still_compiles() {
+    let binary = compile_fixture("genericheader.fss", "genericheader");
+    let out = run(&binary);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "1\n");
     let _ = std::fs::remove_file(&binary);
 }

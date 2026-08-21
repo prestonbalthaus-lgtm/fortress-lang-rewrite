@@ -1,0 +1,12 @@
+component badwherevariable
+
+export Executable
+
+(* `where [\ ... \]` introduces fresh static variables. They are bound
+   SEMANTICALLY, which collides head on with M3d's locked rule that static
+   arguments are written and never inferred -- and with expansion running to a
+   fixpoint before `Checker::new`. Refused by name rather than skipped. *)
+trait Holder[\S\] where [\bool b, nat n\] { S extends Object } end
+
+run():()=println(1)
+end
