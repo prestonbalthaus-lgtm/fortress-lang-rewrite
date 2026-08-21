@@ -15,7 +15,7 @@ set -uo pipefail
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 sif=${FORTRESS_MPI_SIF:-$repo/apptainer/fortress-mpi.sif}
 build=$repo/fortressc/build
-fortressc=$repo/fortressc/target/debug/fortressc
+fortressc=${FORTRESSC:-$repo/fortressc/target/debug/fortressc}
 export LLVM_SYS_221_PREFIX=${LLVM_SYS_221_PREFIX:-$HOME/.local/opt/llvm22-root/usr/lib64/llvm22}
 # runtime/shims.c includes <gc.h> and every link pulls in -lgc, so the host
 # link needs the collector's headers the same way it needs LLVM's.
