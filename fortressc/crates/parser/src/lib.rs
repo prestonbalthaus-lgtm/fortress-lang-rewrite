@@ -2295,8 +2295,116 @@ impl<'t, 'a> Parser<'t, 'a> {
                 span,
                 word: (*word).to_owned(),
             }),
+            Kind::Bar | Kind::BarBar | Kind::BarRun(_) | Kind::LeftBar | Kind::LBrace => {
+                self.enclosing_application()
+            }
             _ => Err(self.error("an expression")),
         }
+    }
+
+    /// `|x|`, `<|a, b|>`, `{a, b}`, `|\x/|`. An enclosing operator writes its
+    /// operands INSIDE the brackets, and `enclosing-ops.tex` gives the pair one
+    /// name; this parser already spells that name `|_|`, `<|_|>`, `{_}` on the
+    /// DECLARATION side, where `_` marks the operand position and is what keeps
+    /// `|self|` from being given the name `||`. The application is the same
+    /// name applied, so it is an ordinary `Call` like every other operator.
+    ///
+    /// `aggregate.tex:44-47` says the set, map and list literals ARE
+    /// applications of a bracketing operator with a varargs parameter, so this
+    /// is also what makes `<|1, 2, 3|>` a parse. It is NOT yet what makes it
+    /// compile: the library declares `opr <|[\E\] xs: E... |>` with ONE
+    /// varargs parameter, the callee side of varargs is still accept-and-ignore,
+    /// so a three-element literal is refused on arity. That is the recorded
+    /// consequence of not having decided what `T...` lowers to, not a defect
+    /// here.
+    ///
+    /// `[` IS DELIBERATELY ABSENT. `[1, 2, 3]` is already an array literal with
+    /// its own node and its own codegen; reading it as an application of `[_]`
+    /// would change what every array-literal program means.
+    ///
+    /// A bare `|` is deliberately absent from the INFIX set for the same reason
+    /// this production can exist at all: with `|` infix, `|x| + |y|` has two
+    /// readings and adjacency cannot separate them.
+    fn enclosing_application(&mut self) -> Parsed<Expr> {
+        let start = self.span_here();
+        let mut open = self.operator_run(usize::MAX);
+        if open.is_empty() {
+            return Err(self.error("an expression"));
+        }
+        // AN EMPTY ENCLOSER IS ONE RUN. `<||>` and `{}` have no operand to stop
+        // the opening run, so it swallows the closing half as well: `<|` is
+        // glued to `|>`. When the run is of even length and nothing that could
+        // begin an expression follows it, the two halves ARE the pair.
+        let mut args = Vec::new();
+        if open.len().is_multiple_of(2) && !self.starts_an_operand() {
+            let half = open.len().div_euclid(2);
+            let close = open.split_off(half);
+            return Ok(self.enclosed(start, &open, &close, args));
+        }
+        self.skip_newlines();
+        let empty = self.closes_here(open.len());
+        if !empty {
+            loop {
+                args.push(self.expr()?);
+                self.skip_newlines();
+                if !self.at(&Kind::Comma) {
+                    break;
+                }
+                self.pos += 1;
+                self.skip_newlines();
+            }
+        }
+        // The closer is read with the OPENER'S LENGTH as its limit, which is
+        // what stops `|a| + |b|` running the closing run on into the `+`. The
+        // declaration side cannot use that rule -- `opr {|->[\K,V\] xs: ... }`
+        // opens with four characters and closes with one -- but in expression
+        // position the pair is symmetric and the limit is what disambiguates.
+        let close = self.operator_run(open.len());
+        if close.len() != open.len() {
+            return Err(self.error("the closing half of an enclosing operator"));
+        }
+        Ok(self.enclosed(start, &open, &close, args))
+    }
+
+    /// The name is the pair with `_` where the operands go, which is exactly
+    /// what `opr_signature` builds on the declaration side.
+    fn enclosed(&self, start: Span, open: &[&str], close: &[&str], args: Vec<Expr>) -> Expr {
+        let mut name = join(open);
+        name.push('_');
+        name.push_str(&join(close));
+        let span = Span::new(start.start, self.previous_span().end);
+        Expr::Call {
+            callee: Box::new(Expr::Var { name, span: start }),
+            args,
+            span,
+        }
+    }
+
+    /// Whether anything that could begin an operand follows. Used only to tell
+    /// an empty encloser from one whose opening run happens to be long.
+    fn starts_an_operand(&self) -> bool {
+        !matches!(
+            self.peek_kind(),
+            None | Some(
+                Kind::RParen
+                    | Kind::RBracket
+                    | Kind::RGeneric
+                    | Kind::Comma
+                    | Kind::Semi
+                    | Kind::Newline
+                    | Kind::Eof
+            )
+        )
+    }
+
+    /// True when the operator run beginning here is exactly `len` tokens long,
+    /// which is how an EMPTY encloser (`<||>`, `{}`) is told from one with an
+    /// operand. Restores the position either way.
+    fn closes_here(&mut self, len: usize) -> bool {
+        let mark = self.pos;
+        let run = self.operator_run(len);
+        self.pos = mark;
+        run.len() == len
     }
 
     fn array_literal(&mut self) -> Parsed<Expr> {

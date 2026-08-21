@@ -1517,15 +1517,20 @@ fn a_lopsided_infix_operator_is_refused() {
 }
 
 /// The reason the twelve-row table exists rather than `fixity_at`. After a left
-/// encloser the table reads `|` as PREFIX, so the operator level leaves it for
-/// the enclosing-application production -- which is a later milestone, so the
-/// diagnostic must still be about the expression and not about a missing right
-/// operand for an infix `|`.
+/// encloser the table reads `|` as PREFIX, so the operator level leaves it --
+/// and the enclosing-application production is what then picks it up. With the
+/// table saying `infix` there instead, `f(|x|)` would be an infix `|` looking
+/// for a right operand and finding `)`.
 #[test]
-fn a_bar_after_a_left_encloser_is_not_taken_as_infix() {
-    match expr_error("f(|x|)") {
-        ParseError::UnexpectedToken { expected, .. } => assert_eq!(expected, "an expression"),
-        other => panic!("expected an expression diagnostic, got {other:?}"),
+fn a_bar_after_a_left_encloser_opens_an_encloser_rather_than_an_infix() {
+    match expr("f(|x|)") {
+        Expr::Call { args, .. } => match args.first() {
+            Some(Expr::Call { callee, .. }) => {
+                assert!(matches!(**callee, Expr::Var { ref name, .. } if name == "|_|"));
+            }
+            other => panic!("expected an enclosed argument, got {other:?}"),
+        },
+        other => panic!("expected a call, got {other:?}"),
     }
 }
 
@@ -1554,4 +1559,67 @@ fn a_sequential_generator_is_still_recognised() {
         Expr::For { sequential, .. } => assert!(sequential),
         other => panic!("expected a sequential for, got {other:?}"),
     }
+}
+
+// ------------------------------------------------ enclosing operator application
+
+/// The declaration side already spells the pair `|_|`, `<|_|>`, `{_}` with `_`
+/// where the operand goes. The application is the same name applied, so it is
+/// an ordinary `Call` and nothing downstream learns a node.
+#[test]
+fn an_enclosing_operator_applies_the_function_of_its_paired_name() {
+    for (src, name, arity) in [
+        ("|3|", "|_|", 1),
+        ("<|1|>", "<|_|>", 1),
+        ("<|1, 2, 3|>", "<|_|>", 3),
+        ("{1, 2}", "{_}", 2),
+        ("||3||", "||_||", 1),
+    ] {
+        match expr(src) {
+            Expr::Call { callee, args, .. } => {
+                assert!(
+                    matches!(*callee, Expr::Var { name: ref n, .. } if n == name),
+                    "{src} should apply `{name}`"
+                );
+                assert_eq!(args.len(), arity, "{src}");
+            }
+            other => panic!("{src}: expected a call, got {other:?}"),
+        }
+    }
+}
+
+/// An empty encloser has no operand to stop the opening run, so the run
+/// swallows the closing half -- `<|` is glued to `|>`. When the run is of even
+/// length and nothing that could begin an expression follows it, the halves ARE
+/// the pair.
+#[test]
+fn an_empty_encloser_is_one_run_split_in_half() {
+    for (src, name) in [("<||>", "<|_|>"), ("{}", "{_}")] {
+        match expr(src) {
+            Expr::Call { callee, args, .. } => {
+                assert!(matches!(*callee, Expr::Var { name: ref n, .. } if n == name));
+                assert!(args.is_empty(), "{src} encloses nothing");
+            }
+            other => panic!("{src}: expected a call, got {other:?}"),
+        }
+    }
+}
+
+/// The closer is read with the OPENER'S length as its limit. Without that the
+/// closing run walks on into the `+`, and `|a| + |b|` becomes one encloser
+/// whose name ends `|+|`.
+#[test]
+fn a_closing_run_stops_at_the_openers_length() {
+    match expr("|1| + |2|") {
+        Expr::Infix { op: BinOp::Add, .. } => {}
+        other => panic!("expected an addition of two enclosers, got {other:?}"),
+    }
+}
+
+/// `[` is DELIBERATELY not an enclosing operator here. `[1, 2, 3]` already has
+/// its own node and its own codegen, and reading it as an application of `[_]`
+/// would change what every array-literal program means.
+#[test]
+fn a_bracket_literal_is_still_an_array_literal() {
+    assert!(matches!(expr("[1, 2, 3]"), Expr::ArrayLit { .. }));
 }

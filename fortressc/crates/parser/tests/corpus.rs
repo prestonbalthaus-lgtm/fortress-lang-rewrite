@@ -166,8 +166,11 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
     // rule plus the operator expression level -- named infix, infix `||` and
     // the vertical-line run, each lowered to a call to a function of the
     // operator's own name -- took it 769 -> 798.
+    // Enclosing-operator APPLICATION -- `|x|`, `<|a, b|>`, `{a, b}` -- took it
+    // 798 -> 811. The declaration side has parsed since the `opr` spike; this
+    // closed an exact declaration/expression asymmetry.
     assert!(
-        parsed >= 798,
-        "parser corpus regressed: {parsed} files parse, floor is 798"
+        parsed >= 811,
+        "parser corpus regressed: {parsed} files parse, floor is 811"
     );
 }
