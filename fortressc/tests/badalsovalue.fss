@@ -1,0 +1,10 @@
+component badalsovalue
+
+export Executable
+
+(* `also.tex:24-27`: every block of a group, and the group, must have type ().
+   This is ProjectFortress/compiler_tests/Compiled10.a.fss, whose legacy oracle
+   XXX10a.test expects "do-also expression has type IntLiteral, but it must have
+   () type" -- the same verdict, named at the block. *)
+run(): () = do 3 also do 5 end
+end

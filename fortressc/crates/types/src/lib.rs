@@ -1832,6 +1832,7 @@ impl Checker {
                 span,
             } => self.typecase_expr(subject, arms, else_arm, *span, expected),
             Expr::Label { name, body, span } => self.label_expr(name, body, *span, expected),
+            Expr::AlsoDo { blocks, span } => self.also_do(blocks, *span, expected),
             Expr::BigReduction {
                 op,
                 binder,
@@ -2421,6 +2422,7 @@ impl Checker {
             }
             Expr::Label { body, .. } => self.reads_shared(body, floor),
             Expr::Lambda { body, .. } => self.reads_shared(body, floor),
+            Expr::AlsoDo { blocks, .. } => blocks.iter().any(|b| self.reads_shared(b, floor)),
             Expr::BigReduction { lo, hi, body, .. } => {
                 self.reads_shared(lo, floor)
                     || self.reads_shared(hi, floor)
@@ -4375,6 +4377,55 @@ impl Checker {
                 .collect(),
             _ => Vec::new(),
         }
+    }
+
+    /// `do A also do B end`, SERIALISED, and that is a deviation with a licence
+    /// rather than a shortcut.
+    ///
+    /// `also.tex:17-21` makes each block an implicit thread of one group.
+    /// `parallelism.tex:88-90` permits an implementation to serialise any group
+    /// of implicit threads -- and `also.tex:24-27` requires every block, and the
+    /// group, to have type `()`, so there is no value to combine and nothing
+    /// else the group could have meant. Running them in order is a legal
+    /// schedule.
+    ///
+    /// WHY NOT THE PARALLEL LOWERING, measured rather than assumed. Desugaring
+    /// to a two-iteration `for` buys nothing and costs the corpus: the runtime
+    /// runs any range below `FORTRESS_PARALLEL_MIN` (4096) inline, so a
+    /// two-block group never distributes; and the loop rules would then refuse
+    /// nearly every real site, because an `also` block assigns enclosing locals
+    /// non-atomically as a matter of routine -- `AlsoDo.fss:22`, `atomic5.fss:28`,
+    /// `Expr.Do.treeSum.fss:27`. Real parallelism needs a task with a handle,
+    /// which the one-broadcast-one-join pool does not have.
+    fn also_do(
+        &mut self,
+        blocks: &[Expr],
+        span: Span,
+        expected: Option<Type>,
+    ) -> Checked<TypedExpr> {
+        self.require(Type::Void, expected, span)?;
+        let mut items = Vec::with_capacity(blocks.len());
+        for block in blocks {
+            // Checked with NO expectation, then required to be Void here: with
+            // `Some(Void)` pushed down, `do 3 also do 5 end` fails on the
+            // literal and reports a generic mismatch, where the rule is about
+            // the BLOCK. The legacy implementation names the block too --
+            // XXX10a.test expects "do-also expression has type IntLiteral, but
+            // it must have () type".
+            let typed = self.expr(block, None)?;
+            if typed.ty != Type::Void {
+                return Err(TypeError::AlsoBlockNotVoid {
+                    span: typed.span,
+                    found: typed.ty,
+                });
+            }
+            items.push(TypedBlockItem::Expr(typed));
+        }
+        Ok(TypedExpr {
+            kind: TypedExprKind::Block { items, tail: None },
+            ty: Type::Void,
+            span,
+        })
     }
 
     /// `SUM[i <- lo:hi] e`, lowered onto the M5 accumulator and nothing else.

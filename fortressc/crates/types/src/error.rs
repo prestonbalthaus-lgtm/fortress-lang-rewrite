@@ -317,6 +317,15 @@ pub enum TypeError {
         found: usize,
     },
 
+    /// `do 3 also do 5 end`. `also.tex:24-27` requires every block of a group
+    /// and the group itself to have type `()`. The legacy implementation says
+    /// the same thing -- `XXX10a.test` expects
+    /// "do-also expression has type IntLiteral, but it must have () type".
+    AlsoBlockNotVoid {
+        span: Span,
+        found: Type,
+    },
+
     // ------------------------------------------------ control flow extras
     /// `case x of end`. Nothing to compare against and nothing to produce.
     CaseHasNoArms {
@@ -504,6 +513,7 @@ impl TypeError {
             | Self::LambdaUnsupported { span, .. }
             | Self::LambdaCaptureUntyped { span, .. }
             | Self::FunctionValueUnresolved { span, .. }
+            | Self::AlsoBlockNotVoid { span, .. }
             | Self::CaseHasNoArms { span }
             | Self::CaseNeedsElse { span }
             | Self::TypeCaseSubjectNotReference { span, .. }
@@ -802,6 +812,12 @@ impl core::fmt::Display for TypeError {
                 "`{name}` is used as a value of type `{arrow}`, and {} \
                  declaration of `{name}` has that signature",
                 if *found == 0 { "no" } else { "more than one" }
+            ),
+            Self::AlsoBlockNotVoid { found, .. } => write!(
+                f,
+                "a block of an `also` group has type {}, and every block of one \
+                 must have type () -- the group produces no value to combine",
+                found.name()
             ),
             Self::CaseHasNoArms { .. } => write!(
                 f,

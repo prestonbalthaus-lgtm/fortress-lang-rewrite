@@ -59,6 +59,14 @@ pub enum ParseError {
         span: Span,
         name: String,
     },
+    /// An `also` block form outside the subset. `at` is the only one: regions
+    /// are shelved with the cluster work, and a lowering that silently dropped
+    /// the prefix would be the open-set mistake `comprises { ... }` already
+    /// records.
+    AlsoFormUnsupported {
+        span: Span,
+        form: &'static str,
+    },
 }
 
 impl ParseError {
@@ -73,7 +81,8 @@ impl ParseError {
             | Self::ChainedOperatorsDiffer { span, .. }
             | Self::CaseFormUnsupported { span, .. }
             | Self::LambdaFormUnsupported { span, .. }
-            | Self::BigReductionUnsupported { span, .. } => Some(*span),
+            | Self::BigReductionUnsupported { span, .. }
+            | Self::AlsoFormUnsupported { span, .. } => Some(*span),
             Self::UnexpectedEndOfInput { .. } => None,
         }
     }
@@ -142,6 +151,13 @@ impl core::fmt::Display for ParseError {
                  is the type's own extremum rather than zero, and a merge \
                  operator the accumulator does not carry; only `SUM` and \
                  `PROD` are lowered",
+                span.start, span.end
+            ),
+            Self::AlsoFormUnsupported { span, form } => write!(
+                f,
+                "{}..{}: {form} is not implemented; regions are shelved, and \
+                 dropping the prefix would change where the block runs without \
+                 saying so",
                 span.start, span.end
             ),
             Self::CaseFormUnsupported { span, form } => write!(

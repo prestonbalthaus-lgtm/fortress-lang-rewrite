@@ -1715,3 +1715,46 @@ fn a_big_max_is_refused_by_name_rather_than_read_as_a_subscript() {
     let message = refusal("badbigmax.fss");
     assert!(message.contains("identity element"), "{message}");
 }
+
+// --------------------------------------------------------- `also do`
+
+/// `do A also do B end`, serialised -- a deviation with a licence rather than a
+/// shortcut. `also.tex:17-21` makes each block an implicit thread of one group,
+/// `parallelism.tex:88-90` permits an implementation to serialise any group of
+/// implicit threads, and `also.tex:24-27` requires every block and the group to
+/// have type `()`. With no value to combine, running them in order is a legal
+/// schedule.
+///
+/// The parallel lowering was measured and rejected: a two-iteration `for` never
+/// distributes (the runtime runs any range below 4096 inline), and the loop
+/// rules would then refuse nearly every real site, because an `also` block
+/// assigns enclosing locals non-atomically as a matter of routine.
+///
+/// The third and fourth groups are the `atomic` rule: it binds to a DoFront and
+/// NOT to the group, because the grammar puts it inside
+/// `DoFront ::= [at Expr] [atomic] do [BlockElems]`.
+#[test]
+fn an_also_group_runs_every_block_and_atomic_binds_one_front() {
+    let binary = compile_fixture("alsodo.fss", "alsodo");
+    let out = run(&binary);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "1\n2\n3210\n2\n2\n2\n"
+    );
+    assert_eq!(out.status.code(), Some(0));
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// The block-type rule, and the legacy implementation agrees on the verdict:
+/// `ProjectFortress/compiler_tests/Compiled10.a.fss` is this file, and
+/// `XXX10a.test` expects "do-also expression has type IntLiteral, but it must
+/// have () type". Ours names the block rather than the literal, which is what
+/// the rule is about.
+#[test]
+fn a_block_of_an_also_group_must_have_type_void() {
+    let message = refusal("badalsovalue.fss");
+    assert!(
+        message.contains("every block of one must have type ()"),
+        "{message}"
+    );
+}

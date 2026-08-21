@@ -1848,6 +1848,8 @@ impl<'t, 'a> Parser<'t, 'a> {
             // identifier namespace, so it is intercepted here rather than
             // given a keyword token -- again, no lexer change.
             Kind::Reserved("atomic") => self.atomic_expr(),
+            // `atomic do ... also do ... end`: the modifier covers the FIRST
+            // block only, so the group is parsed here rather than wrapped.
             // The same trade `for` and `atomic` take: intercepted here rather
             // than given a keyword token, so no file in the corpus lexes
             // differently. `of`, `with`, `most`, `largest` and `smallest` stay
@@ -1963,18 +1965,86 @@ impl<'t, 'a> Parser<'t, 'a> {
     }
 
     fn block(&mut self) -> Parsed<Expr> {
+        self.do_group(false)
+    }
+
+    /// `Do ::= (DoFront also)* DoFront end`, with
+    /// `DoFront ::= [at Expr] [atomic] do [BlockElems]` --
+    /// `concrete-syntax.tex:1025-1028`.
+    ///
+    /// `first_atomic` is how `atomic do A also do B end` gets the rule right:
+    /// the grammar puts `[atomic]` INSIDE a DoFront, so it covers only the
+    /// first block and not the group. The atomic intercepts hand it in rather
+    /// than wrapping the whole thing, which is what they would do if this were
+    /// an ordinary block.
+    fn do_group(&mut self, first_atomic: bool) -> Parsed<Expr> {
         let start = self.expect(&Kind::KwDo, "`do`")?.span;
-        let body = self.block_body(&[Kind::KwEnd])?;
+        let terminators = [Kind::KwEnd, Kind::Reserved("also")];
+        let first_start = self.span_here();
+        let first_body = self.block_body(&terminators)?;
+        let mut blocks = vec![Self::as_block(first_start, first_body)];
+        if first_atomic {
+            if let Some(first) = blocks.first_mut() {
+                let span = first.span();
+                *first = Expr::Atomic {
+                    body: Box::new(first.clone()),
+                    span,
+                };
+            }
+        }
+        while self.at(&Kind::Reserved("also")) {
+            self.pos += 1;
+            self.skip_newlines();
+            if self.at(&Kind::Reserved("at")) {
+                return Err(ParseError::AlsoFormUnsupported {
+                    span: self.span_here(),
+                    form: "an `at` region on an `also` block",
+                });
+            }
+            let atomic = self.at(&Kind::Reserved("atomic"));
+            if atomic {
+                self.pos += 1;
+                self.skip_newlines();
+            }
+            let front = self.span_here();
+            self.expect(&Kind::KwDo, "`do` after `also`")?;
+            let body = self.block_body(&terminators)?;
+            let body = Self::as_block(front, body);
+            blocks.push(if atomic {
+                let span = body.span();
+                Expr::Atomic {
+                    body: Box::new(body),
+                    span,
+                }
+            } else {
+                body
+            });
+        }
         let end = self.expect(&Kind::KwEnd, "`end`")?.span;
+        let span = Span::new(start.start, end.end);
+        if blocks.len() == 1 {
+            let Some(only) = blocks.pop() else {
+                return Err(self.error("a block"));
+            };
+            return Ok(match only {
+                Expr::Block { items, .. } => Expr::Block { items, span },
+                other => other,
+            });
+        }
+        Ok(Expr::AlsoDo { blocks, span })
+    }
+
+    /// A block body as a block, whatever `block_body` collapsed it to.
+    fn as_block(start: Span, body: Expr) -> Expr {
         match body {
-            Expr::Block { items, .. } => Ok(Expr::Block {
-                items,
-                span: Span::new(start.start, end.end),
-            }),
-            other => Ok(Expr::Block {
-                items: vec![BlockItem::Expr(other)],
-                span: Span::new(start.start, end.end),
-            }),
+            block @ Expr::Block { .. } => block,
+            other => {
+                let span = Span::new(start.start, other.span().end);
+                Expr::Block {
+                    items: vec![BlockItem::Expr(other)],
+                    span,
+                }
+            }
         }
     }
 

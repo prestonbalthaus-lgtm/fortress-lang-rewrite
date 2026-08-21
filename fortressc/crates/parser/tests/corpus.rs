@@ -112,6 +112,9 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
                     fortress_parser::ParseError::BigReductionUnsupported { name, .. } => {
                         format!("BIG reduction `{name}`")
                     }
+                    fortress_parser::ParseError::AlsoFormUnsupported { form, .. } => {
+                        format!("also form: {form}")
+                    }
                 };
                 *blockers.entry(label).or_default() += 1;
             }

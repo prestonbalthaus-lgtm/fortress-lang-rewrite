@@ -1,0 +1,66 @@
+component alsodo
+
+export Executable
+
+(* `do A also do B end`. `also.tex:17-21` makes each block an implicit thread of
+   one group; `parallelism.tex:88-90` permits an implementation to SERIALISE any
+   group of implicit threads; and `also.tex:24-27` requires every block, and the
+   group, to have type `()`. With no value to combine, running them in order is
+   a legal schedule and not an approximation of one.
+
+   The alternative was measured and rejected: a two-iteration `for` never
+   distributes -- the runtime runs any range below FORTRESS_PARALLEL_MIN (4096)
+   inline -- and the parallel loop rules would then refuse nearly every real
+   site, because an `also` block assigns enclosing locals non-atomically as a
+   matter of routine. Real parallelism needs a task with a handle, which the
+   one-broadcast-one-join pool does not have. *)
+
+run(): () = do
+    x: ZZ32 := 0
+    z: ZZ32 := 0
+    do
+        x := 1
+    also do
+        z := 2
+    end
+    println(x)
+    println(z)
+
+    (* SpecData/examples/basic/Expr.Do.treeSum.fss's shape: one accumulator
+       across three blocks. It stays a single cell -- reduction recognition
+       needs a parallel loop and there is none. *)
+    accum: ZZ32 := 0
+    do
+        accum += 10
+    also do
+        accum += 200
+    also do
+        accum += 3000
+    end
+    println(accum)
+
+    (* `atomic` binds to a DoFront, NOT to the group: the grammar puts it
+       inside `DoFront ::= [at Expr] [atomic] do [BlockElems]`, so it covers the
+       first block only. ProjectFortress/tests/AlsoDo.fss:31-48 is this shape,
+       and its `deny(z, 1, ...)` passes under any serial order. *)
+    a: ZZ32 := 0
+    b: ZZ32 := 0
+    atomic do
+        a += 1
+        a += 1
+    also do
+        b := a
+    end
+    println(a)
+    println(b)
+
+    (* And on the other side of the separator. *)
+    c: ZZ32 := 0
+    do
+        c := 1
+    also atomic do
+        c += 1
+    end
+    println(c)
+end
+end

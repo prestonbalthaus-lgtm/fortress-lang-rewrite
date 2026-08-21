@@ -444,6 +444,19 @@ pub enum Expr {
         body: Box<Expr>,
         span: Span,
     },
+    /// `do A also do B also do C end`. `also.tex:17-21` makes each block an
+    /// implicit thread of one group, and the group completes when all of them
+    /// do.
+    ///
+    /// EVERY BLOCK MUST HAVE TYPE `()` and so does the group -- `also.tex:24-27`
+    /// -- which is what makes serialising it legal rather than merely
+    /// convenient: `parallelism.tex:88-90` permits an implementation to
+    /// serialise any group of implicit threads, and with no value to combine
+    /// there is nothing else the group could have meant.
+    AlsoDo {
+        blocks: Vec<Expr>,
+        span: Span,
+    },
     /// `SUM[i <- lo:hi] e`, and the same for `PROD`. A BIG reduction over a
     /// RANGE, which `reductions.tex:60-77` desugars to
     /// `do var r = identity; for i <- lo:hi do r OP= e end; r end` -- a shape
@@ -573,6 +586,7 @@ impl Expr {
             | Self::Label { span, .. }
             | Self::Lambda { span, .. }
             | Self::BigReduction { span, .. }
+            | Self::AlsoDo { span, .. }
             | Self::Exit { span, .. }
             | Self::Instantiate { span, .. } => *span,
         }

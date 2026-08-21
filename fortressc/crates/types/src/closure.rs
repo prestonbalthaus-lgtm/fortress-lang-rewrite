@@ -121,8 +121,6 @@ struct ArrowTrait {
     to: TypeRef,
 }
 
-/// The `apply` parameter list for an arrow with this domain: none at all when
-/// the domain is `()`, and one otherwise.
 /// Whether a parameter type is the parser's placeholder for one that was not
 /// written. Spelled here rather than imported: `types` does not depend on
 /// `parser` and must not start.
@@ -130,6 +128,8 @@ fn is_infer(t: &TypeRef) -> bool {
     matches!(t, TypeRef::Named { name, .. } if name == "$infer")
 }
 
+/// The `apply` parameter list for an arrow with this domain: none at all when
+/// the domain is `()`, and one otherwise.
 fn apply_params(from: &TypeRef, name: &str, span: Span) -> Vec<Param> {
     if matches!(from, TypeRef::Unit { .. }) {
         return Vec::new();
@@ -835,6 +835,7 @@ impl Pass {
                 self.rewrite_expr(else_arm, scope)
             }
             Expr::Label { body, .. } => self.rewrite_expr(body, scope),
+            Expr::AlsoDo { blocks, .. } => self.rewrite_exprs(blocks, scope),
             // A lambda in a position that does not say what arrow it is. The
             // written return type is the only other source, and `lambda` is
             // where that is decided.
@@ -1121,6 +1122,11 @@ fn free_names(e: &Expr, bound: &mut Vec<BTreeSet<String>>, out: &mut BTreeSet<St
             free_names(else_arm, bound, out);
         }
         Expr::Label { body, .. } => free_names(body, bound, out),
+        Expr::AlsoDo { blocks, .. } => {
+            for b in blocks {
+                free_names(b, bound, out);
+            }
+        }
         Expr::BigReduction {
             binder,
             lo,

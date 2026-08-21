@@ -901,6 +901,10 @@ impl<'a> Expander<'a> {
                 body: Box::new(self.expr(body, subst)?),
                 span: *span,
             },
+            Expr::AlsoDo { blocks, span } => Expr::AlsoDo {
+                blocks: self.exprs(blocks, subst)?,
+                span: *span,
+            },
             Expr::BigReduction {
                 op,
                 binder,
