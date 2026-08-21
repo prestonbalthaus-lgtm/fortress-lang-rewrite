@@ -23,12 +23,13 @@ pub enum LexErrorKind {
     DoubleStar,
     /// Any operator immediately followed by `+`.
     OperatorFollowedByPlus,
-    /// `=` immediately followed by an operator character that formed no known token.
-    MalformedEquals,
     NonAsciiCharacter,
     CharacterLiteralUnsupported,
     RadixNumeralUnsupported,
-    CurlyQuoteStringUnsupported,
+    /// A string opened with one mark and closed with the other.
+    /// `Literal.rats:158-167` has an explicit error production for each
+    /// mixed pair, and the corpus has a must-fail test for it.
+    MismatchedStringMarks,
 }
 
 impl LexErrorKind {
@@ -55,14 +56,13 @@ impl LexErrorKind {
             Self::MultipleDecimalPoints => "a numeral contains more than one `.` character",
             Self::DoubleStar => "`**` is not a valid operator in Fortress",
             Self::OperatorFollowedByPlus => "an operator may not be immediately followed by `+`",
-            Self::MalformedEquals => "`=` is followed by an operator character",
             Self::NonAsciiCharacter => {
                 "non-ASCII characters are not in the M1 subset outside comments and strings"
             }
             Self::CharacterLiteralUnsupported => "character literals are not in the M1 subset",
             Self::RadixNumeralUnsupported => "radix numerals are not in the M1 subset",
-            Self::CurlyQuoteStringUnsupported => {
-                "curly-quote string delimiters are not in the M1 subset; use `\"`"
+            Self::MismatchedStringMarks => {
+                "the opening and closing marks of a string literal must match"
             }
         }
     }

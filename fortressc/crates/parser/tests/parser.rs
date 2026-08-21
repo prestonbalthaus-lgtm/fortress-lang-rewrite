@@ -2,7 +2,9 @@
 // integration test is its own crate, so the workspace denies apply here.
 #![allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 
-use fortress_ast::{BinOp, BlockItem, Component, Decl, Expr, Fixity, TypeRef, UnOp};
+use fortress_ast::{
+    BinOp, BlockItem, Component, Decl, Expr, Fixity, ImportItems, ImportedName, TypeRef, UnOp,
+};
 use fortress_parser::{parse, ParseError};
 
 fn component(src: &str) -> Component {
@@ -1100,4 +1102,683 @@ fn an_object_carries_the_clause_lists_a_trait_does() {
     assert_eq!(o.extends.len(), 1);
     assert_eq!(o.excludes.len(), 1);
     assert!(o.comprises.is_empty());
+}
+
+// ------------------------------------------------------------------ varargs
+
+/// `Parameter.rats:88` is `BindId w colon w Type w ellipses`. There is no `...`
+/// token -- it is three `Dot`s -- so what makes them one is that they are glued
+/// to EACH OTHER, the same adjacency reading `->`, `<-` and `+=` already take.
+#[test]
+fn three_glued_dots_after_a_parameter_type_are_varargs() {
+    let c = component("api t\nassert(x: ZZ32, failMsg: String...): ()\nend\n");
+    let Some(Decl::Function(f)) = c.decls.into_iter().next() else {
+        panic!("expected a function");
+    };
+    assert_eq!(
+        f.params.iter().map(|p| p.varargs).collect::<Vec<_>>(),
+        [false, true]
+    );
+}
+
+/// The grammar's `w` before `ellipses` permits whitespace, so the run is not
+/// required to be glued to the type it follows.
+#[test]
+fn a_spaced_ellipsis_is_the_same_declaration_as_a_glued_one() {
+    let c = component("api t\nf(x: ZZ32 ...): ()\nend\n");
+    let Some(Decl::Function(f)) = c.decls.into_iter().next() else {
+        panic!("expected a function");
+    };
+    assert!(f.params.first().expect("a parameter").varargs);
+}
+
+/// Three dots that are not glued to each other are three `Dot`s, and a `Dot`
+/// after a parameter type is what it always was: not a parameter list.
+#[test]
+fn unglued_dots_are_not_an_ellipsis() {
+    let src = "api t\nf(x: ZZ32 . . .): ()\nend\n";
+    let tokens = fortress_lexer::lex(src).unwrap_or_else(|e| panic!("lex failed: {e}"));
+    assert!(parse(&tokens).is_err(), "`. . .` must not read as varargs");
+}
+
+/// `objects.tex:100` spells an object's varargs parameter `transient Varargs`,
+/// so the bare form is a static error. Two corpus files write it and both are
+/// must-FAIL tests -- accepting them would have grown the must-fail set by two
+/// while the corpus count went up by two, which is the exact trade this project
+/// refuses.
+#[test]
+fn an_object_value_parameter_may_not_be_varargs() {
+    let src = "component t\nobject O(x: ZZ32...) end\nrun() = ()\nend\n";
+    let tokens = fortress_lexer::lex(src).unwrap_or_else(|e| panic!("lex failed: {e}"));
+    match parse(&tokens) {
+        Err(ParseError::ObjectVarargsParameter { name, .. }) => assert_eq!(name, "x"),
+        other => panic!("expected an object-varargs refusal, got {other:?}"),
+    }
+}
+
+/// `Library/List.fsi:108`. An enclosing operator carries its static parameters
+/// BETWEEN the opener and the operand, which is nowhere `opr_tail` looks.
+#[test]
+fn an_enclosing_operator_carries_static_parameters_before_its_operand() {
+    let c = component("api t\nopr <|[\\E\\] xs: E... |>: List[\\E\\]\nend\n");
+    let Some(Decl::Function(f)) = c.decls.into_iter().next() else {
+        panic!("expected a function");
+    };
+    assert_eq!(f.name, "<|_|>");
+    assert_eq!(f.static_params.len(), 1);
+    assert!(f.params.first().expect("a parameter").varargs);
+}
+
+/// `Library/Set.fsi:56`. The comprehension bracket has static parameters and NO
+/// operand, so what identifies the form is the opener closing again.
+#[test]
+fn an_enclosing_operator_may_have_no_operand_at_all() {
+    let names = opr_names("api t\nopr BIG {[\\T\\]} : ZZ32\nend\n");
+    assert_eq!(names, ["BIG {_}"]);
+}
+
+/// `Library/Map.fsi:100`: four characters open it and one closes it. Reading the
+/// closer with the opener's length as a limit cannot parse that, and reading it
+/// unbounded would eat the `:` of the return type.
+#[test]
+fn the_closing_half_of_an_encloser_need_not_match_the_opening_half() {
+    let c = component("api t\nopr {|->[\\K,V\\] xs: K... }: Map[\\K,V\\]\nend\n");
+    let Some(Decl::Function(f)) = c.decls.into_iter().next() else {
+        panic!("expected a function");
+    };
+    assert_eq!(f.name, "{|->_}");
+    assert!(f.return_type.is_some(), "the return type must survive");
+}
+
+/// The three tokens the closing run stops at are the ones that END a
+/// declaration. `=` is the one that matters in a component: without it the
+/// closer swallows the `=` and the body becomes the operator's name.
+#[test]
+fn a_closing_run_does_not_swallow_the_body_marker() {
+    let c = component("component t\nobject O\nopr |self| = 0\nend\nend\n");
+    let Some(Decl::Object(o)) = c.decls.into_iter().next() else {
+        panic!("expected an object");
+    };
+    assert_eq!(method_names(&o.members), ["|_|"]);
+}
+
+// -------------------------------------------------------------- named `end`
+
+/// `TraitObject.rats:13` writes the tail as `((s "trait")? s Id)?`. All four
+/// spellings close the same declaration.
+#[test]
+fn a_declaration_may_be_closed_by_its_own_name() {
+    for src in [
+        "component t\ntrait A end\nend\n",
+        "component t\ntrait A end A\nend\n",
+        "component t\ntrait A end trait A\nend\n",
+        "component t\nobject O end O\nend\n",
+        "component t\nobject O end object O\nend\n",
+        "component t\ntrait A end\nend t\n",
+        "component t\ntrait A end\nend component t\n",
+        "api t.u\ntrait A end\nend t.u\n",
+    ] {
+        let tokens = fortress_lexer::lex(src).unwrap_or_else(|e| panic!("lex failed: {e}"));
+        assert!(parse(&tokens).is_ok(), "should parse:\n{src}");
+    }
+}
+
+/// `s`, not `w`. `end` then a NEWLINE then a name is the end of one declaration
+/// followed by the next, and reading the name would silently merge them.
+#[test]
+fn a_name_on_the_next_line_does_not_close_the_declaration() {
+    let c = component("component t\ntrait A end\nB() = 0\nend\n");
+    assert_eq!(c.decls.len(), 2, "`B` is a declaration, not a closing name");
+}
+
+/// `ProjectFortress/parser_tests/XXXending.Name.fss` writes
+/// `end XxXending.Name` for a component called `XXXending.Name` and is a
+/// must-FAIL test. Accepting the tail without comparing it would have turned
+/// that file green.
+#[test]
+fn a_closing_name_that_differs_is_refused() {
+    let src = "component t\ntrait A end B\nend\n";
+    let tokens = fortress_lexer::lex(src).unwrap_or_else(|e| panic!("lex failed: {e}"));
+    match parse(&tokens) {
+        Err(ParseError::ClosingNameDiffers {
+            found, expected, ..
+        }) => {
+            assert_eq!(found, "B");
+            assert_eq!(expected, "A");
+        }
+        other => panic!("expected a closing-name refusal, got {other:?}"),
+    }
+}
+
+/// A block's `end` is a different production. `end out` and `end loop` in the
+/// corpus close a LABELLED BLOCK, so reading a name there would consume a
+/// juxtaposed operand.
+#[test]
+fn a_block_end_takes_no_name() {
+    let c = component("component t\nf() = do 1 end\ng() = 2\nend\n");
+    assert_eq!(c.decls.len(), 2);
+}
+
+// -------------------------------------------- continuation-line declarations
+
+/// `NamedFnHeaderFront = Id (w StaticParams)? w ValParam` and
+/// `FnHeaderClause = (w NoNewlineIsType)? FnClauses`. Every `w` there is
+/// may-newline, and the library writes long headers across lines --
+/// `Library/FortressLibrary.fsi:305` breaks before the parameter list,
+/// `Library/RangeInternals.fsi:576` before the static parameters,
+/// `Library/Set.fsi:63` before the return type.
+#[test]
+fn a_declaration_header_may_break_across_lines() {
+    for src in [
+        "api t\nf\n(x: ZZ32): ZZ32\nend\n",
+        "api t\nf[\\T\\]\n(x: T): T\nend\n",
+        "api t\nf\n[\\T\\](x: T): T\nend\n",
+        "api t\nf(x: ZZ32):\n    ZZ32\nend\n",
+        "api t\nf(x: ZZ32)\n    : ZZ32\nend\n",
+        "api t\nopr juxtaposition\n    (self, b: ZZ32): ZZ32\nend\n",
+        "api t\ntrait A\n[\\T\\] end\nend\n",
+        "api t\ntrait A\n    f(x: ZZ32):\n        ZZ32\nend\nend\n",
+    ] {
+        let tokens = fortress_lexer::lex(src).unwrap_or_else(|e| panic!("lex failed: {e}"));
+        assert!(parse(&tokens).is_ok(), "should parse:\n{src}");
+    }
+}
+
+/// The newlines may only be eaten when the optional clause is really there.
+/// Without that test the separator disappears and two declarations become one.
+#[test]
+fn a_missing_optional_clause_leaves_the_separator_alone() {
+    let c = component("api t\nf(x: ZZ32)\ng(y: ZZ32)\nend\n");
+    assert_eq!(c.decls.len(), 2);
+}
+
+/// `FnClause = w Where / w Throws`. The diagnostic before this was
+/// `expected a field or method name, found KwWhere`, which names a mechanism a
+/// `where` clause is not: it is not a member at all.
+#[test]
+fn where_and_throws_may_sit_on_the_line_below_the_header() {
+    for src in [
+        "api t\ntrait A end\nf[\\T\\](x: T): T\n    where { T extends A }\nend\n",
+        "api t\nf(x: ZZ32): ZZ32\n    throws NotFound\nend\n",
+        "api t\ntrait C\n    getter get(): ZZ32 throws NotFound\nend\nend\n",
+    ] {
+        let tokens = fortress_lexer::lex(src).unwrap_or_else(|e| panic!("lex failed: {e}"));
+        assert!(parse(&tokens).is_ok(), "should parse:\n{src}");
+    }
+}
+
+/// `NoNewlineHeader.rats:48-52` gives `where` two shapes, and D6 section 1 cuts
+/// one of them: a v1 where clause CONSTRAINS declared static parameters, so the
+/// binder form -- which introduces fresh ones -- is refused BY NAME. It used to
+/// be skipped, which is how `Library/PrefixMap.fsi` reached the terminus with a
+/// clause nothing had read.
+#[test]
+fn a_where_clause_binder_form_is_refused_by_name() {
+    for src in [
+        "api t\ntrait A end\nf[\\T\\](x: T): T where [\\ T \\]\nend\n",
+        "api t\ntrait A end\nf[\\T\\](x: T): T where [\\ T \\] { T extends A }\nend\n",
+    ] {
+        let tokens = fortress_lexer::lex(src).unwrap_or_else(|e| panic!("lex failed: {e}"));
+        match parse(&tokens) {
+            Err(ParseError::WhereClauseFormUnsupported { form, .. }) => {
+                assert!(form.contains("fresh static variables"), "{form}");
+            }
+            other => panic!("expected a where-form refusal, got {other:?}\n{src}"),
+        }
+    }
+}
+
+/// One rule, one answer. `[\nat n\]` is refused by M3d at the parser and
+/// `where [\nat n\]` must not be the hole it slips through -- which it was
+/// while the clause was a token skip. The binder form is refused whole now, so
+/// the acceptance is closed from the outside; the KIND refusal is still what
+/// answers the bracket list, and both are asserted here because it is the pair
+/// that matters, not either one alone.
+#[test]
+fn a_where_binding_refuses_the_kinds_a_static_parameter_list_refuses() {
+    let src = "api t\ntrait T where [\\ nat n \\]\nend\nend\n";
+    let tokens = fortress_lexer::lex(src).unwrap_or_else(|e| panic!("lex failed: {e}"));
+    match parse(&tokens) {
+        Err(ParseError::WhereClauseFormUnsupported { .. }) => {}
+        other => panic!("`where [\\nat n\\]` must be refused, got {other:?}"),
+    }
+
+    let src = "api t\ntrait T[\\ nat n \\]\nend\nend\n";
+    let tokens = fortress_lexer::lex(src).unwrap_or_else(|e| panic!("lex failed: {e}"));
+    match parse(&tokens) {
+        Err(ParseError::StaticParameterKindUnsupported { kind, .. }) => assert_eq!(kind, "nat"),
+        other => panic!("expected a `nat` refusal, got {other:?}"),
+    }
+}
+
+// ------------------------------------------------------------ the `=` guard
+
+/// `Symbol.rats:201` is `equals = "=" (!op)` and the reference grammar reaches
+/// it only from a binding or a keyword argument. `Library/RangeInternals.fss:453`
+/// writes `ex=-1` INSIDE the body of `opr =`, where it is an equality and not a
+/// definition -- which is the whole reason the guard exists and the whole reason
+/// it cannot live in the lexer.
+#[test]
+fn an_equals_glued_to_an_operator_is_not_a_definition() {
+    match expr("ex=-1") {
+        Expr::Infix { op: BinOp::Eq, .. } => {}
+        other => panic!("expected an equality, got {other:?}"),
+    }
+}
+
+/// The spaced form still binds, and so does a glued one whose right-hand side
+/// starts with a bracket: `Symbol.rats:175-177` keeps enclosers out of `op`.
+#[test]
+fn a_definition_equals_still_binds() {
+    let c = component("component t\nf() = do\n  x = -1\n  y =[1, 2]\n  x\nend\nend\n");
+    let Some(Decl::Function(f)) = c.decls.into_iter().next() else {
+        panic!("expected a function");
+    };
+    let Some(Expr::Block { items, .. }) = f.body else {
+        panic!("expected a block");
+    };
+    let bindings = items
+        .iter()
+        .filter(|i| matches!(i, BlockItem::Binding(_)))
+        .count();
+    assert_eq!(bindings, 2, "both are definitions");
+}
+
+/// `Library/QuickCheck.fsi:409`. The longest match splits `==>` into `=` then
+/// `=>`; the operator run re-glues them by span adjacency, which is the same
+/// mechanism `|||` and `<->` already rest on.
+#[test]
+fn a_declared_operator_may_be_named_out_of_equals_signs() {
+    let names = opr_names("api t\nopr ==>(p: Boolean, q: Boolean): Boolean\nend\n");
+    assert_eq!(names, ["==>"]);
+}
+
+/// `SpecData/examples/advanced/OprDecl.Nofix.fss:23` and
+/// `ProjectFortress/BirdyLib/Bazaar.fsi:22`. Each of these was a LEXER death
+/// before the six characters had tokens.
+#[test]
+fn an_operator_may_be_named_out_of_the_six_new_characters() {
+    let names = opr_names(
+        "api t\n\
+         opr !(a: ZZ32): ZZ32\n\
+         opr @(a: ZZ32): ZZ32\n\
+         opr ~(a: ZZ32): ZZ32\n\
+         opr $(a: ZZ32): ZZ32\n\
+         opr %(a: ZZ32): ZZ32\n\
+         opr ?(a: ZZ32): ZZ32\n\
+         end\n",
+    );
+    assert_eq!(names, ["!", "@", "~", "$", "%", "?"]);
+}
+
+/// `Library/FortressLibrary.fsi:1991`. The name came out right BEFORE the run
+/// was one token, because the operator run re-glues `BarBar` and `Bar` by span
+/// adjacency -- so this test pins that one token produces the same name, which
+/// is what makes the lexer change safe in declaration position.
+#[test]
+fn a_three_bar_operator_is_named_the_same_as_one_token_as_it_was_as_two() {
+    assert_eq!(
+        opr_names("api t\nopr |||(a: ZZ32, b: ZZ32): ZZ32\nend\n"),
+        ["|||"]
+    );
+    assert_eq!(
+        opr_names("api t\nopr ||(a: ZZ32, b: ZZ32): ZZ32\nend\n"),
+        ["||"]
+    );
+}
+
+// -------------------------------------------- the operator expression level
+
+/// `operator-app.tex:28-33` makes an all-capitals word an operator, and
+/// `opr-fixity.tex:28-32` makes the consequence binding: "the Fortress language
+/// dictates only the rules of syntax; whether an operator has a meaning when
+/// used in a particular way depends only on whether there is a definition".
+///
+/// So this must PARSE as an application and only then fail to resolve. Before
+/// the rule it was a three-element juxtaposition that folded with
+/// multiplication: `SUBSET: ZZ64 = 2` then `println(3 SUBSET 4)` printed 24.
+#[test]
+fn a_named_infix_operator_applies_the_function_of_that_name() {
+    match expr("a SUBSET b") {
+        Expr::Call { callee, args, .. } => {
+            assert!(matches!(*callee, Expr::Var { ref name, .. } if name == "SUBSET"));
+            assert_eq!(args.len(), 2);
+        }
+        other => panic!("expected a call to `SUBSET`, got {other:?}"),
+    }
+}
+
+/// Infix `||` was the largest single first-blocker FEATURE in the corpus, filed
+/// under aggregate literals because the marker regex could not see a bare `||`.
+/// A run of three or more is one operator (`lexical-structure.tex:1174-1177`).
+#[test]
+fn the_vertical_line_operators_apply_infix() {
+    match expr("a || b") {
+        Expr::Call { callee, .. } => {
+            assert!(matches!(*callee, Expr::Var { ref name, .. } if name == "||"));
+        }
+        other => panic!("expected a call to `||`, got {other:?}"),
+    }
+    match expr("a ||| b") {
+        Expr::Call { callee, .. } => {
+            assert!(matches!(*callee, Expr::Var { ref name, .. } if name == "|||"));
+        }
+        other => panic!("expected a call to `|||`, got {other:?}"),
+    }
+}
+
+/// `precedence.tex:20-31`: "if there is no specific precedence relationship
+/// between two operators, then parentheses must be used". A total ladder can
+/// only ACCEPT, so the alternative to this refusal is a silent grouping.
+#[test]
+fn operators_from_unrelated_groups_must_be_parenthesised() {
+    for src in [
+        "a + b SUBSET c",
+        "a SUBSET b + c",
+        "a * b SUBSET c",
+        "a SUBSET b UNION c",
+        "a AND b SUBSET c",
+        "a < b SUBSET c",
+    ] {
+        match expr_error(src) {
+            ParseError::OperatorsUnrelated { .. } => {}
+            other => panic!("{src} should need parentheses, got {other:?}"),
+        }
+    }
+}
+
+/// And the parenthesis is what makes it legal, which is the whole point of the
+/// rule. The mark cannot be read off the tree -- `primary` returns a
+/// parenthesised expression unchanged, so `(a SUBSET b) + c` and
+/// `a SUBSET b + c` are the same node.
+#[test]
+fn parentheses_relate_what_precedence_does_not() {
+    for src in [
+        "(a SUBSET b) + c",
+        "a + (b SUBSET c)",
+        "(a SUBSET b) UNION c",
+        "f(a SUBSET b) + c",
+        "a[b SUBSET c] + d",
+    ] {
+        let wrapped = format!("component t\ng() = {src}\nend\n");
+        let tokens = fortress_lexer::lex(&wrapped).unwrap_or_else(|e| panic!("lex failed: {e}"));
+        assert!(parse(&tokens).is_ok(), "should parse: {src}");
+    }
+}
+
+/// The same operator twice is a chain of itself and needs no parentheses.
+#[test]
+fn one_operator_repeated_is_left_associative() {
+    match expr("a SUBSET b SUBSET c") {
+        Expr::Call { callee, args, .. } => {
+            assert!(matches!(*callee, Expr::Var { ref name, .. } if name == "SUBSET"));
+            assert!(
+                matches!(args.first(), Some(Expr::Call { .. })),
+                "left associative"
+            );
+        }
+        other => panic!("expected a call, got {other:?}"),
+    }
+}
+
+/// `opr-fixity.tex:100-102`: an infix operator may be loose or tight but not
+/// LOPSIDED. The table calls that row a static error outright.
+#[test]
+fn a_lopsided_infix_operator_is_refused() {
+    match expr_error("a SUBSET-b") {
+        ParseError::LopsidedOperator { name, .. } => assert_eq!(name, "SUBSET"),
+        other => panic!("expected a lopsided refusal, got {other:?}"),
+    }
+    // Tight on both sides is legal.
+    let wrapped = "component t\ng() = a SUBSET b\nend\n";
+    let tokens = fortress_lexer::lex(wrapped).unwrap_or_else(|e| panic!("lex failed: {e}"));
+    assert!(parse(&tokens).is_ok());
+}
+
+/// The reason the twelve-row table exists rather than `fixity_at`. After a left
+/// encloser the table reads `|` as PREFIX, so the operator level leaves it --
+/// and the enclosing-application production is what then picks it up. With the
+/// table saying `infix` there instead, `f(|x|)` would be an infix `|` looking
+/// for a right operand and finding `)`.
+#[test]
+fn a_bar_after_a_left_encloser_opens_an_encloser_rather_than_an_infix() {
+    match expr("f(|x|)") {
+        Expr::Call { args, .. } => match args.first() {
+            Some(Expr::Call { callee, .. }) => {
+                assert!(matches!(**callee, Expr::Var { ref name, .. } if name == "|_|"));
+            }
+            other => panic!("expected an enclosed argument, got {other:?}"),
+        },
+        other => panic!("expected a call, got {other:?}"),
+    }
+}
+
+/// `AND`, `OR` and `NOT` are operator words under the same lexical rule and
+/// keep their own paths: they have real codegen through `BinOp` and `UnOp`, and
+/// routing them through a call to an undeclared function would break every
+/// program that uses them. The acceptance test is the IR of the corpus, and
+/// this is the shape assertion under it.
+#[test]
+fn the_three_logical_operator_words_keep_their_own_nodes() {
+    assert!(matches!(
+        expr("a AND b"),
+        Expr::Infix { op: BinOp::And, .. }
+    ));
+    assert!(matches!(expr("a OR b"), Expr::Infix { op: BinOp::Or, .. }));
+    assert!(matches!(expr("NOT a"), Expr::Prefix { op: UnOp::Not, .. }));
+}
+
+/// `seq` is LOWERCASE and so an ordinary identifier, not an operator word. It
+/// shared a helper with `AND` and `OR` and stopped being recognised the moment
+/// that helper moved to the operator-word token -- eleven fixtures and nine
+/// corpus files, every one of them a `for` loop.
+#[test]
+fn a_sequential_generator_is_still_recognised() {
+    match expr("for i <- seq(0#5) do i end") {
+        Expr::For { sequential, .. } => assert!(sequential),
+        other => panic!("expected a sequential for, got {other:?}"),
+    }
+}
+
+// ------------------------------------------------ enclosing operator application
+
+/// The declaration side already spells the pair `|_|`, `<|_|>`, `{_}` with `_`
+/// where the operand goes. The application is the same name applied, so it is
+/// an ordinary `Call` and nothing downstream learns a node.
+#[test]
+fn an_enclosing_operator_applies_the_function_of_its_paired_name() {
+    for (src, name, arity) in [
+        ("|3|", "|_|", 1),
+        ("<|1|>", "<|_|>", 1),
+        ("<|1, 2, 3|>", "<|_|>", 3),
+        ("{1, 2}", "{_}", 2),
+        ("||3||", "||_||", 1),
+    ] {
+        match expr(src) {
+            Expr::Call { callee, args, .. } => {
+                assert!(
+                    matches!(*callee, Expr::Var { name: ref n, .. } if n == name),
+                    "{src} should apply `{name}`"
+                );
+                assert_eq!(args.len(), arity, "{src}");
+            }
+            other => panic!("{src}: expected a call, got {other:?}"),
+        }
+    }
+}
+
+/// An empty encloser has no operand to stop the opening run, so the run
+/// swallows the closing half -- `<|` is glued to `|>`. When the run is of even
+/// length and nothing that could begin an expression follows it, the halves ARE
+/// the pair.
+#[test]
+fn an_empty_encloser_is_one_run_split_in_half() {
+    for (src, name) in [("<||>", "<|_|>"), ("{}", "{_}")] {
+        match expr(src) {
+            Expr::Call { callee, args, .. } => {
+                assert!(matches!(*callee, Expr::Var { name: ref n, .. } if n == name));
+                assert!(args.is_empty(), "{src} encloses nothing");
+            }
+            other => panic!("{src}: expected a call, got {other:?}"),
+        }
+    }
+}
+
+/// The closer is read with the OPENER'S length as its limit. Without that the
+/// closing run walks on into the `+`, and `|a| + |b|` becomes one encloser
+/// whose name ends `|+|`.
+#[test]
+fn a_closing_run_stops_at_the_openers_length() {
+    match expr("|1| + |2|") {
+        Expr::Infix { op: BinOp::Add, .. } => {}
+        other => panic!("expected an addition of two enclosers, got {other:?}"),
+    }
+}
+
+/// `[` is DELIBERATELY not an enclosing operator here. `[1, 2, 3]` already has
+/// its own node and its own codegen, and reading it as an application of `[_]`
+/// would change what every array-literal program means.
+#[test]
+fn a_bracket_literal_is_still_an_array_literal() {
+    assert!(matches!(expr("[1, 2, 3]"), Expr::ArrayLit { .. }));
+}
+
+// ------------------------------------------------------ imports and exports
+
+/// `Compilation.rats` gives the export the same APIName the component header
+/// takes. The header read a dotted name and the export, fourteen lines later,
+/// read an identifier -- so `component Compiled5.a` parsed and
+/// `export Compiled5.a` did not.
+#[test]
+fn an_export_takes_a_dotted_or_braced_name() {
+    let c = component("component t\nexport Compiled5.a\nexport {A, B}\nf() = 0\nend\n");
+    assert_eq!(c.exports, ["Compiled5.a", "A", "B"]);
+}
+
+/// The brace group used to be consumed as a balanced token run and thrown
+/// away. A resolver cannot answer `source-code.tex:280-287`'s question --
+/// which of two apis a name came from -- without knowing which names were
+/// asked for.
+#[test]
+fn an_import_records_what_it_names() {
+    let c = component(
+        "component t\n\
+         import List.{...}\n\
+         import Map.{a, b as c}\n\
+         import FlatString.FlatString\n\
+         import api Foo\n\
+         import Set.{...} except { emptyList, opr BIG UNION }\n\
+         f() = 0\n\
+         end\n",
+    );
+    let names: Vec<&str> = c.imports.iter().map(|i| i.api_name.as_str()).collect();
+    assert_eq!(names, ["List", "Map", "FlatString", "Foo", "Set"]);
+    let at = |n: usize| c.imports.get(n).expect("an import");
+    assert_eq!(at(0).items, ImportItems::OnDemand);
+    assert_eq!(
+        at(1).items,
+        ImportItems::Named(vec![
+            ImportedName {
+                name: "a".to_owned(),
+                alias: None
+            },
+            ImportedName {
+                name: "b".to_owned(),
+                alias: Some("c".to_owned())
+            },
+        ])
+    );
+    // `import FlatString.FlatString` is the api `FlatString` and one name in
+    // it; only the file system can say where the api name ends, so both
+    // readings are carried.
+    assert_eq!(
+        at(2).items,
+        ImportItems::Named(vec![ImportedName {
+            name: "FlatString".to_owned(),
+            alias: None
+        }])
+    );
+    assert!(at(3).is_api);
+    assert_eq!(at(4).except, ["emptyList", "BIG UNION"]);
+}
+
+/// `simpleNameTest.fsi:15` imports an ENCLOSING operator, whose two halves are
+/// written with a space between. What says a second half follows is the
+/// opener's own MIRROR and nothing weaker: `opr BIG SYMDIFF }` ends an except
+/// set, and `opr <| => ||}` glues the alias to the list's closing brace.
+#[test]
+fn an_imported_operator_may_be_an_enclosing_pair() {
+    let c = component("component t\nimport Set.{ opr { } }\nf() = 0\nend\n");
+    assert_eq!(
+        c.imports.first().expect("an import").items,
+        ImportItems::Named(vec![ImportedName {
+            name: "{_}".to_owned(),
+            alias: None
+        }])
+    );
+    let c = component("component t\nimport List.{Cons => CC, opr <| => ||}\nf() = 0\nend\n");
+    assert_eq!(
+        c.imports.first().expect("an import").items,
+        ImportItems::Named(vec![
+            ImportedName {
+                name: "Cons".to_owned(),
+                alias: Some("CC".to_owned())
+            },
+            ImportedName {
+                name: "<|".to_owned(),
+                alias: Some("||".to_owned())
+            },
+        ])
+    );
+}
+
+/// `source-code.tex:280-287` disambiguates "the type `List` declared in the API
+/// `List` or the type `List` declared in the API `PureList`" with a qualified
+/// name, and with ten api names duplicated across the source path the collision
+/// is not hypothetical. It parses; it resolves nowhere, which is honest.
+#[test]
+fn a_type_name_may_be_qualified() {
+    let c = component("api t\nf(x: List.List): ZZ32\nend\n");
+    let Some(Decl::Function(f)) = c.decls.into_iter().next() else {
+        panic!("expected a function");
+    };
+    match f.params.first().map(|p| &p.ty) {
+        Some(TypeRef::Named { name, .. }) => assert_eq!(name, "List.List"),
+        other => panic!("expected a qualified name, got {other:?}"),
+    }
+}
+
+/// 39 corpus files reach a JVM implementation this way, and three of them are
+/// bootstrap files whose bodies have no other implementation in the tree --
+/// which is C-shim work, not import work. What phase 3 owes the construct is a
+/// diagnostic that names it, in place of
+/// `expected a newline or `;`, found Ident("com")`.
+#[test]
+fn a_foreign_import_is_refused_by_name() {
+    let src = "component t\nimport java com.sun.x.{y}\nf() = 0\nend\n";
+    let tokens = fortress_lexer::lex(src).unwrap_or_else(|e| panic!("lex failed: {e}"));
+    match parse(&tokens) {
+        Err(ParseError::ForeignImportUnsupported { .. }) => {}
+        other => panic!("expected a foreign-import refusal, got {other:?}"),
+    }
+}
+
+/// `lexical-structure.tex:1216-1222`: an operator immediately followed by `=`
+/// is ONE token, a compound assignment operator. Reading only the operator half
+/// reports `x ||= e` as a LOPSIDED infix -- a real rule, and not the one the
+/// program broke. `||=` alone is 37 corpus uses.
+#[test]
+fn a_compound_assignment_operator_is_refused_by_its_own_name() {
+    for (src, op) in [("x ||= 1", "||"), ("x MAX= 1", "MAX"), ("x @= 1", "@")] {
+        let wrapped = format!("component t\nf() = do\n  x = 1\n  {src}\n  x\nend\nend\n");
+        let tokens = fortress_lexer::lex(&wrapped).unwrap_or_else(|e| panic!("lex failed: {e}"));
+        match parse(&tokens) {
+            Err(ParseError::CompoundAssignmentUnsupported { op: found, .. }) => {
+                assert_eq!(found, op, "{src}");
+            }
+            other => panic!("{src}: expected a compound-assignment refusal, got {other:?}"),
+        }
+    }
+    // And the operator alone still applies.
+    assert!(matches!(expr("a || b"), Expr::Call { .. }));
 }

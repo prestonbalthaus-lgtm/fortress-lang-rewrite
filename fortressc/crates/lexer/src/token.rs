@@ -48,6 +48,21 @@ pub enum Kind<'a> {
     /// "not in the M1 subset".
     Reserved(&'a str),
     Ident(&'a str),
+    /// An OPERATOR WORD. `lexical-structure.tex:1167-1172`: a word that is not
+    /// reserved, consists only of uppercase letters and underscores, does not
+    /// begin or end with an underscore, and has at least two DIFFERENT letters.
+    ///
+    /// Those three clauses are each load bearing. No digits keeps `ZZ32` and
+    /// `RR64` identifiers; two different letters keeps `ZZ`, `QQ` and `RR`; the
+    /// underscore rule keeps `CT_`. `BIG` and `FORALL` are already reserved and
+    /// the reserved test runs first, as the specification's "is not reserved"
+    /// requires.
+    ///
+    /// M1's lexer plan deferred this deliberately. It stopped being deferrable
+    /// when `a SUBSET b` was found to parse as a three-element juxtaposition
+    /// and fold with multiplication: `SUBSET: ZZ64 = 2` then
+    /// `println(3 SUBSET 4)` printed 24.
+    OpWord(&'a str),
 
     True,
     False,
@@ -110,6 +125,27 @@ pub enum Kind<'a> {
     /// `^`, exponentiation, and `#`, which the library uses as an operator.
     Caret,
     Hash,
+    /// The six ordinary operator characters that had no token at all:
+    /// `! ? ~ $ % @`. Tokenising them is not implementing them.
+    Bang,
+    Question,
+    Tilde,
+    Dollar,
+    Percent,
+    At,
+    /// A contiguous run of THREE OR MORE vertical lines, which
+    /// `lexical-structure.tex:1174-1177` makes one base operator. Two is
+    /// `BarBar`; the slice is carried because the run has no fixed length.
+    BarRun(&'a str),
+    /// `<-` written as U+2190, and `->` as U+2192. Both ASCII spellings are two
+    /// tokens joined by span adjacency, so the Unicode ones cannot reuse them.
+    LeftArrow,
+    RightArrow,
+    /// An allowlisted Unicode operator character, carrying its own text. There
+    /// is ONE token for all ten because 02-stack's decision 3 says mathematical
+    /// symbols resolve through library aliasing rather than through a lexer
+    /// token each: an `opr` declaration is what gives one meaning.
+    UniOp(&'a str),
     /// `===`. There is no `==` in Fortress.
     EqEqEq,
     /// `=/=`.
@@ -231,6 +267,23 @@ pub(crate) fn classify_word(word: &str) -> Kind<'_> {
         "true" => Kind::True,
         "false" => Kind::False,
         _ if RESERVED.binary_search(&word).is_ok() => Kind::Reserved(word),
+        _ if is_operator_word(word) => Kind::OpWord(word),
         _ => Kind::Ident(word),
     }
+}
+
+/// `lexical-structure.tex:1167-1172`. The caller has already ruled out the
+/// reserved words, which is the specification's own first clause.
+fn is_operator_word(word: &str) -> bool {
+    if !word.bytes().all(|b| b.is_ascii_uppercase() || b == b'_') {
+        return false;
+    }
+    if word.starts_with('_') || word.ends_with('_') {
+        return false;
+    }
+    let mut letters = word.bytes().filter(|b| *b != b'_');
+    let Some(first) = letters.next() else {
+        return false;
+    };
+    letters.any(|b| b != first)
 }

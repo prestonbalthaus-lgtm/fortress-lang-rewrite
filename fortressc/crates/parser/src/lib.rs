@@ -16,8 +16,8 @@ pub use error::ParseError;
 
 use fortress_ast::{
     Assign, BinOp, Binding, BlockItem, CaseArm, Component, Decl, Expr, FieldDecl, Fixity, FnDecl,
-    ImportDecl, Member, MethodDecl, Modifiers, ObjectDecl, Param, Span, StaticParam, TraitDecl,
-    TypeCaseArm, TypeRef, UnOp,
+    ImportDecl, ImportItems, ImportedName, Member, MethodDecl, Modifiers, ObjectDecl, Param, Span,
+    StaticParam, TraitDecl, TypeCaseArm, TypeRef, UnOp,
 };
 use fortress_lexer::{Kind, Token};
 
@@ -36,6 +36,11 @@ struct Generator {
     inclusive: bool,
     sequential: bool,
 }
+
+/// Which of the operators this milestone adds built the node a precedence level
+/// is returning, if any. `None` means the node came out of the arithmetic and
+/// relational ladder, or out of a parenthesis, and may be combined freely.
+type Mark<'a> = Option<(&'a str, Span)>;
 
 /// A parenthesised type is the type itself, but its span covers the
 /// parentheses, so a diagnostic points at what was written.
@@ -62,8 +67,26 @@ struct OprSignature {
 /// `[\` and `\]` are deliberately absent: they open a static-parameter list,
 /// which is part of the declaration and not part of the operator's name. `(`
 /// is absent for the same reason.
-fn operator_text(kind: &Kind<'_>) -> Option<&'static str> {
+fn operator_text<'a>(kind: &Kind<'a>) -> Option<&'a str> {
     Some(match kind {
+        // A run of three or more vertical lines is ONE base operator
+        // (`lexical-structure.tex:1174-1177`) and has no fixed length, so its
+        // text is the source slice rather than a literal.
+        Kind::BarRun(text) => text,
+        // An operator WORD is a base operator like any other
+        // (`lexical-structure.tex:1173-1176`), so `opr CMP` reaches the same
+        // run the symbolic names do and needs no branch of its own.
+        Kind::OpWord(text) => text,
+        // An allowlisted Unicode operator character carries its own text, so
+        // the name of `opr \u{2229}` is that character and nothing has to know
+        // which one it is.
+        Kind::UniOp(text) => text,
+        Kind::Bang => "!",
+        Kind::Question => "?",
+        Kind::Tilde => "~",
+        Kind::Dollar => "$",
+        Kind::Percent => "%",
+        Kind::At => "@",
         Kind::Plus => "+",
         Kind::Minus => "-",
         Kind::Star => "*",
@@ -95,7 +118,21 @@ fn operator_text(kind: &Kind<'_>) -> Option<&'static str> {
     })
 }
 
-fn join(run: &[&'static str]) -> String {
+/// The closing half of a one-character enclosing operator, for the positions
+/// that must recognise a bracket PAIR written with a space in it -- an import
+/// list is the only one. `|` and `||` mirror themselves.
+const fn mirrored(open: &str) -> Option<&'static str> {
+    Some(match open.as_bytes() {
+        b"{" => "}",
+        b"[" => "]",
+        b"<|" => "|>",
+        b"|" => "|",
+        b"||" => "||",
+        _ => return None,
+    })
+}
+
+fn join(run: &[&str]) -> String {
     run.concat()
 }
 
@@ -178,6 +215,31 @@ impl<'t, 'a> Parser<'t, 'a> {
     }
 
     /// A `w`/`wr` context: newlines carry no meaning here.
+    /// True when `kind` is the next token that is not a newline.
+    ///
+    /// This is what the grammar's `w` means in front of an OPTIONAL clause --
+    /// `FnHeaderClause = (w NoNewlineIsType)? FnClauses`, `FnClause = w Where`,
+    /// `Id (w StaticParams)? w ValParam`. The newlines may only be consumed if
+    /// the clause is really there: if it is not, they are the statement
+    /// separator and eating them merges two declarations into one.
+    fn at_across_newlines(&self, kind: &Kind<'_>) -> bool {
+        let mut index = self.pos;
+        while matches!(self.tokens.get(index).map(|t| &t.kind), Some(Kind::Newline)) {
+            index += 1;
+        }
+        self.tokens.get(index).map(|t| &t.kind) == Some(kind)
+    }
+
+    /// `w` in front of an optional clause: skip the newlines only when the
+    /// clause follows them.
+    fn skip_newlines_before(&mut self, kind: &Kind<'_>) -> bool {
+        if !self.at_across_newlines(kind) {
+            return false;
+        }
+        self.skip_newlines();
+        true
+    }
+
     fn skip_newlines(&mut self) {
         while self.at(&Kind::Newline) {
             self.pos += 1;
@@ -242,6 +304,195 @@ impl<'t, 'a> Parser<'t, 'a> {
         self.glued_right(index).then_some(op)
     }
 
+    /// `equals = "=" (!op)` (`Symbol.rats:201`): the `=` that INTRODUCES A
+    /// DEFINITION is one not glued to an operator character. `Symbol.rats` has
+    /// a second production for the same character -- `equalsOp`, the equality
+    /// operator -- which carries no such restriction, and the reference grammar
+    /// reaches `equals` only from `Function.rats:33`, `Method.rats:44`,
+    /// `Variable.rats:40`, `LocalDecl.rats:159` and `Parameter.rats:93`: every
+    /// one a binding or a keyword argument.
+    ///
+    /// It used to live in the LEXER, where it applied to every `=` in the file.
+    /// `Library/QuickCheck.fsi`'s `opr ==>` and `Library/RangeInternals.fss:453`'s
+    /// `ex=-1` -- an EQUALITY, inside the body of `opr =` -- were hard lex
+    /// errors for it.
+    ///
+    /// BRACKETS ARE NOT OPERATORS HERE. `Symbol.rats:175-177` excludes
+    /// `encloser`, `leftEncloser` and `rightEncloser` from `singleOp`, so
+    /// `x =[1,2]` stays a definition; the set below is the one the lexer guard
+    /// already used, moved rather than widened.
+    fn definition_equals_at(&self, index: usize) -> bool {
+        if !matches!(self.tokens.get(index).map(|t| &t.kind), Some(Kind::Eq)) {
+            return false;
+        }
+        if !self.glued_right(index) {
+            return true;
+        }
+        !matches!(
+            self.tokens.get(index + 1).map(|t| &t.kind),
+            Some(
+                Kind::Plus
+                    | Kind::Minus
+                    | Kind::Star
+                    | Kind::Slash
+                    | Kind::SlashSlash
+                    | Kind::SlashSlashSlash
+                    | Kind::Lt
+                    | Kind::Gt
+                    | Kind::Le
+                    | Kind::Ge
+                    | Kind::Eq
+                    | Kind::EqEqEq
+                    | Kind::NotEq
+                    | Kind::FatArrow
+                    | Kind::Colon
+                    | Kind::ColonEq
+                    | Kind::Bang
+                    | Kind::Question
+                    | Kind::Tilde
+                    | Kind::Dollar
+                    | Kind::Percent
+                    | Kind::At
+            )
+        )
+    }
+
+    /// `...` after a parameter's type. `Symbol.rats:212` makes `ellipses` one
+    /// lexical token; this parser has three `Dot`s, so the three must be glued
+    /// to EACH OTHER -- the same trade `->`, `<-` and `+=` take, and no file in
+    /// the corpus lexes differently for it.
+    ///
+    /// `Parameter.rats:88` is `BindId w colon w Type w ellipses`, so the run is
+    /// NOT required to be glued to the type: `Any...` and `Any ...` are the
+    /// same declaration.
+    fn at_ellipsis(&self) -> bool {
+        let three = (0..3).all(|n| matches!(self.peek_ahead(n), Some(Kind::Dot)));
+        three && self.glued_right(self.pos) && self.glued_right(self.pos + 1)
+    }
+
+    /// `opr-fixity.tex:34-55`, all twelve rows.
+    ///
+    /// THIS IS NOT `fixity_at`. That one is `match (glued_left, glued_right)`
+    /// and its own doc comment says "from adjacency alone", which cannot decide
+    /// `|` in `a |b| c` -- the same `|`, the same spacing, and an encloser
+    /// rather than an infix operator. The specification decides fixity from
+    /// LEFT CONTEXT and RIGHT CONTEXT, with whitespace as a secondary
+    /// discriminator on only some rows.
+    ///
+    /// Only the operators this milestone ADDS are routed through it. Moving
+    /// `+ - * / < > =` off `fixity_at` would change how programs that compile
+    /// today are grouped, and that is a measurement and a commit of its own.
+    fn table_fixity_at(&self, index: usize) -> TableFixity {
+        let left = self.left_context(index);
+        let right = self.right_context(index);
+        let space_left = !self.glued_left(index);
+        let space_right = !self.glued_right(index);
+        match (left, right) {
+            (LeftContext::PrimaryTail, RightContext::PrimaryFront | RightContext::Operator) => {
+                match (space_left, space_right) {
+                    (true, true) | (false, false) => TableFixity::Infix,
+                    // Lopsided: whitespace on one side and not the other.
+                    (true, false) => TableFixity::Lopsided,
+                    (false, true) => TableFixity::Postfix,
+                }
+            }
+            (LeftContext::PrimaryTail, RightContext::Delimiter) => {
+                if space_left {
+                    TableFixity::Lopsided
+                } else {
+                    TableFixity::Postfix
+                }
+            }
+            (LeftContext::PrimaryTail, RightContext::LineBreak) => {
+                if space_left {
+                    TableFixity::Infix
+                } else {
+                    TableFixity::Postfix
+                }
+            }
+            (
+                LeftContext::Operator | LeftContext::Delimiter,
+                RightContext::PrimaryFront | RightContext::Operator,
+            ) => TableFixity::Prefix,
+            (LeftContext::Delimiter, RightContext::Delimiter) => TableFixity::Nofix,
+            (LeftContext::Operator, _) | (LeftContext::Delimiter, RightContext::LineBreak) => {
+                TableFixity::Nofix
+            }
+        }
+    }
+
+    /// A PRIMARY TAIL is "an identifier, a literal, a right encloser, or a
+    /// superscripted postfix operator". Nothing else on the left is a primary,
+    /// and a newline or the start of the file is neither -- both behave as a
+    /// left encloser, which is what makes a leading `-` prefix.
+    fn left_context(&self, index: usize) -> LeftContext {
+        let Some(prev) = index.checked_sub(1).and_then(|i| self.tokens.get(i)) else {
+            return LeftContext::Delimiter;
+        };
+        match &prev.kind {
+            Kind::Ident(_)
+            | Kind::KwSelf
+            | Kind::IntLit { .. }
+            | Kind::FloatLit { .. }
+            | Kind::StrLit(_)
+            | Kind::True
+            | Kind::False
+            | Kind::RParen
+            | Kind::RBracket
+            | Kind::RBrace
+            | Kind::RGeneric
+            | Kind::RightBar
+            | Kind::KwEnd => LeftContext::PrimaryTail,
+            Kind::Newline
+            | Kind::Eof
+            | Kind::Comma
+            | Kind::Semi
+            | Kind::LParen
+            | Kind::LBracket
+            | Kind::LBrace
+            | Kind::LGeneric
+            | Kind::LeftBar => LeftContext::Delimiter,
+            _ => LeftContext::Operator,
+        }
+    }
+
+    /// A PRIMARY FRONT is "an identifier, a literal, or a left encloser". The
+    /// keywords that open a delimited expression -- `if`, `do`, `while`, `for`,
+    /// `atomic` -- are primaries too, and leaving them out would read a prefix
+    /// operator before one as nofix.
+    fn right_context(&self, index: usize) -> RightContext {
+        let Some(next) = self.tokens.get(index + 1) else {
+            return RightContext::LineBreak;
+        };
+        match &next.kind {
+            Kind::Ident(_)
+            | Kind::KwSelf
+            | Kind::IntLit { .. }
+            | Kind::FloatLit { .. }
+            | Kind::StrLit(_)
+            | Kind::True
+            | Kind::False
+            | Kind::LParen
+            | Kind::LBracket
+            | Kind::LBrace
+            | Kind::LGeneric
+            | Kind::LeftBar
+            | Kind::KwIf
+            | Kind::KwDo
+            | Kind::KwWhile
+            | Kind::Reserved("for" | "atomic") => RightContext::PrimaryFront,
+            Kind::Newline | Kind::Eof => RightContext::LineBreak,
+            Kind::Comma
+            | Kind::Semi
+            | Kind::RParen
+            | Kind::RBracket
+            | Kind::RBrace
+            | Kind::RGeneric
+            | Kind::RightBar => RightContext::Delimiter,
+            _ => RightContext::Operator,
+        }
+    }
+
     /// The four readings of an operator, from adjacency alone.
     fn fixity_at(&self, index: usize) -> OperatorShape {
         match (self.glued_left(index), self.glued_right(index)) {
@@ -287,7 +538,16 @@ impl<'t, 'a> Parser<'t, 'a> {
         loop {
             if self.at(&Kind::KwExport) {
                 self.pos += 1;
-                exports.push(self.identifier("an export name")?.0);
+                // `Compilation.rats` gives the export the same APIName the
+                // component header takes -- which is why `component Compiled5.a`
+                // parsed and `export Compiled5.a` did not: the header read a
+                // dotted name and the export, fourteen lines later, read an
+                // identifier. `export {A, B}` is the set form.
+                if self.at(&Kind::LBrace) {
+                    exports.extend(self.name_set()?);
+                } else {
+                    exports.push(self.dotted_name()?);
+                }
             } else if self.at(&Kind::KwImport) {
                 imports.push(self.import_decl()?);
             } else {
@@ -307,8 +567,10 @@ impl<'t, 'a> Parser<'t, 'a> {
 
         let end = if headerless {
             self.span_here()
+        } else if is_api {
+            self.named_end(&Kind::KwApi, &name)?
         } else {
-            self.expect(&Kind::KwEnd, "`end`")?.span
+            self.named_end(&Kind::KwComponent, &name)?
         };
         // Everything after the closing `end` used to be SILENTLY DISCARDED,
         // including a whole second component: two complete components in one
@@ -345,56 +607,218 @@ impl<'t, 'a> Parser<'t, 'a> {
     /// pretending.
     fn import_decl(&mut self) -> Parsed<ImportDecl> {
         let start = self.expect(&Kind::KwImport, "`import`")?.span;
+        // `import java com.sun.fortress.nativeHelpers.{...}` reaches a Fortress
+        // body through the JVM. 39 corpus files write it and three of them are
+        // bootstrap files whose bodies have NO other implementation in this
+        // tree -- those three are C-shim work, not import work. What phase 3
+        // owes it is a diagnostic that NAMES the construct instead of
+        // `expected a newline or `;`, found Ident("com")`.
+        if matches!(self.peek_kind(), Some(Kind::Ident("java"))) {
+            return Err(ParseError::ForeignImportUnsupported {
+                span: self.span_here(),
+            });
+        }
         let is_api = self.at(&Kind::KwApi);
         if is_api {
             self.pos += 1;
         }
         // `import api {A, B}` names a set with no leading dotted name.
-        let api_name = if self.at(&Kind::LBrace) {
-            String::new()
+        let (api_name, trailing) = if self.at(&Kind::LBrace) {
+            (String::new(), None)
         } else {
-            self.dotted_name()?
+            self.dotted_import_name()?
         };
         let mut end = self.span_here();
+        // `import Foo.{...}` and `import api Foo` are IMPORT-ON-DEMAND;
+        // `import Foo.{a, b as c}` and the single-member `import Foo.a` name
+        // what they take.
+        // `import api {File, FileSupport}` names APIS, not members of one, so
+        // `is_api` is what a resolver reads to know which the list holds.
+        let mut items = if is_api {
+            ImportItems::OnDemand
+        } else {
+            trailing.map_or(ImportItems::OnDemand, |name| {
+                ImportItems::Named(vec![ImportedName { name, alias: None }])
+            })
+        };
         if self.at(&Kind::LBrace) {
-            end = self.skip_braces()?;
+            let (names, close) = self.import_items()?;
+            items = names;
+            end = close;
         }
+        let mut except = Vec::new();
         if self.at(&Kind::KwExcept) {
             self.pos += 1;
             self.skip_newlines();
-            end = if self.at(&Kind::LBrace) {
-                self.skip_braces()?
+            if self.at(&Kind::LBrace) {
+                except = self.name_set()?;
+                end = self.previous_span();
             } else {
-                self.identifier("a name after `except`")?.1
-            };
+                let (name, span) = self.identifier("a name after `except`")?;
+                except.push(name);
+                end = span;
+            }
         }
         Ok(ImportDecl {
             api_name,
             is_api,
+            items,
+            except,
             span: Span::new(start.start, end.end),
         })
     }
 
-    /// Consumes a balanced `{ ... }` and answers with the closing brace's span.
-    fn skip_braces(&mut self) -> Parsed<Span> {
+    /// `Foo`, `Foo.Bar`, or `Foo.member`. The api name and a trailing single
+    /// member are the same dotted run, and only the file system can say where
+    /// one ends -- `import FlatString.FlatString` is the api `FlatString` and
+    /// the name `FlatString` in it, while `import Compiled5.a.{...}` is a
+    /// dotted api. So BOTH readings are carried: the whole run as the api name,
+    /// and the last segment as a candidate member, and the resolver picks.
+    fn dotted_import_name(&mut self) -> Parsed<(String, Option<String>)> {
+        let name = self.dotted_name()?;
+        if self.at(&Kind::LBrace) {
+            return Ok((name, None));
+        }
+        match name.rsplit_once('.') {
+            Some((head, last)) => Ok((head.to_owned(), Some(last.to_owned()))),
+            None => Ok((name, None)),
+        }
+    }
+
+    /// `{ ... }`, `{ a, b }`, `{ a as b }`. Three `Dot`s are the open-set marker
+    /// `intro.tex:38-63` calls an import-on-demand; there is no `...` token, so
+    /// it is the same glued run a varargs parameter uses.
+    fn import_items(&mut self) -> Parsed<(ImportItems, Span)> {
         self.expect(&Kind::LBrace, "`{`")?;
-        let mut depth = 1usize;
-        loop {
-            let span = self.span_here();
-            match self.peek_kind() {
-                Some(Kind::LBrace) => depth += 1,
-                Some(Kind::RBrace) => {
-                    depth -= 1;
-                    if depth == 0 {
-                        self.pos += 1;
-                        return Ok(span);
-                    }
+        self.skip_newlines();
+        if self.at_ellipsis() {
+            self.pos += 3;
+            self.skip_newlines();
+            let close = self.expect(&Kind::RBrace, "`}`")?.span;
+            return Ok((ImportItems::OnDemand, close));
+        }
+        let mut names = Vec::new();
+        if !self.at(&Kind::RBrace) {
+            loop {
+                let name = self.import_name()?;
+                names.push(name);
+                self.skip_newlines();
+                if !self.at(&Kind::Comma) {
+                    break;
                 }
-                None | Some(Kind::Eof) => return Err(self.error("`}`")),
-                _ => {}
+                self.pos += 1;
+                self.skip_newlines();
             }
+        }
+        let close = self.expect(&Kind::RBrace, "`}`")?.span;
+        Ok((ImportItems::Named(names), close))
+    }
+
+    /// One imported name. An OPERATOR may be imported and aliased
+    /// (`opr OPLUS => MYPLUS`), so the name is read as an operator run when it
+    /// is not an identifier.
+    fn import_name(&mut self) -> Parsed<ImportedName> {
+        let name = self.imported_identifier()?;
+        let alias = if self.at(&Kind::FatArrow) || self.at_word("as") {
+            self.pos += 1;
+            self.skip_newlines();
+            Some(self.imported_identifier()?)
+        } else {
+            None
+        };
+        Ok(ImportedName { name, alias })
+    }
+
+    fn imported_identifier(&mut self) -> Parsed<String> {
+        let mut name = String::new();
+        if self.at(&Kind::Reserved("opr")) {
+            self.pos += 1;
+            self.skip_newlines();
+            // `import Map.{...} except { opr BIG UNION, ... }` --
+            // `Library/PrefixSet.fsi:35`. `BIG` is a modifier on the name and
+            // not the name, exactly as `opr_signature` reads it.
+            if self.at(&Kind::Reserved("BIG")) {
+                self.pos += 1;
+                name.push_str("BIG ");
+            }
+        }
+        if matches!(self.peek_kind(), Some(Kind::Ident(_))) {
+            name.push_str(&self.dotted_name()?);
+            return Ok(name);
+        }
+        // `import Set.{ opr { } }` -- `simpleNameTest.fsi:15`. An ENCLOSING
+        // operator is named by both halves, and in an import list they are
+        // written with a SPACE between, so the run stops at the first.
+        //
+        // What says a second half follows is that the next token is the OPENER'S
+        // OWN MIRROR, and nothing weaker will do. `opr BIG SYMDIFF }` ends an
+        // except set and `opr <| => ||}` ends an alias list, so "an operator
+        // character follows" reads the list's own `}` as half of a name.
+        let mirror = self.peek_kind().and_then(operator_text).and_then(mirrored);
+        let open = self.import_operator_run();
+        if open.is_empty() {
+            return Err(self.error("an imported name"));
+        }
+        name.push_str(&join(&open));
+        if mirror.is_some() && self.peek_kind().and_then(operator_text) == mirror {
+            let Some(close) = self.peek_kind().and_then(operator_text) else {
+                return Ok(name);
+            };
+            self.pos += 1;
+            name.push('_');
+            name.push_str(close);
+        }
+        Ok(name)
+    }
+
+    /// An operator name inside an import list. It is `operator_run` with three
+    /// tokens held back: `,` and `}` end the ITEM and the LIST, and `=>`
+    /// introduces the alias. `import List.{opr <| => ||}` glues `||` to the
+    /// closing brace, so a greedy run reads the list's own `}` into the name.
+    fn import_operator_run(&mut self) -> Vec<&'a str> {
+        let mut run = Vec::new();
+        loop {
+            if matches!(
+                self.peek_kind(),
+                Some(Kind::Comma | Kind::RBrace | Kind::FatArrow)
+            ) {
+                break;
+            }
+            let Some(text) = self.peek_kind().and_then(operator_text) else {
+                break;
+            };
+            if !run.is_empty() && !self.glued_right(self.pos - 1) {
+                break;
+            }
+            run.push(text);
             self.pos += 1;
         }
+        run
+    }
+
+    fn at_word(&self, word: &str) -> bool {
+        matches!(self.peek_kind(), Some(Kind::Ident(name)) if *name == word)
+    }
+
+    /// `{A, B}` where every element is a plain name -- an export set, or the
+    /// set after `except`.
+    fn name_set(&mut self) -> Parsed<Vec<String>> {
+        self.expect(&Kind::LBrace, "`{`")?;
+        self.skip_newlines();
+        let mut names = Vec::new();
+        if !self.at(&Kind::RBrace) {
+            loop {
+                names.push(self.imported_identifier()?);
+                self.skip_newlines();
+                if !self.at(&Kind::Comma) {
+                    break;
+                }
+                self.pos += 1;
+                self.skip_newlines();
+            }
+        }
+        self.expect(&Kind::RBrace, "`}`")?;
+        Ok(names)
     }
 
     fn decl(&mut self, signature_only: bool) -> Parsed<Decl> {
@@ -434,6 +858,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         let (name, name_span) = self.identifier("a value name")?;
         let ty = if self.at(&Kind::Colon) {
             self.pos += 1;
+            self.skip_newlines();
             Some(self.type_ref()?)
         } else {
             None
@@ -443,7 +868,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         // `x := 0` to be confused with.
         let save = self.pos;
         self.skip_newlines();
-        let body = if self.at(&Kind::Eq) || self.at(&Kind::ColonEq) {
+        let body = if self.definition_equals_at(self.pos) || self.at(&Kind::ColonEq) {
             self.pos += 1;
             self.skip_newlines();
             Some(self.expr()?)
@@ -474,11 +899,12 @@ impl<'t, 'a> Parser<'t, 'a> {
     fn trait_decl(&mut self, modifiers: Modifiers) -> Parsed<TraitDecl> {
         let start = self.expect(&Kind::KwTrait, "`trait`")?.span;
         let (name, _) = self.identifier("a trait name")?;
+        self.skip_newlines_before(&Kind::LGeneric);
         let mut static_params = self.static_params()?;
         let (extends, comprises, excludes) = self.topology_clauses()?;
         self.where_clause(&mut static_params)?;
         let members = self.members()?;
-        let end = self.expect(&Kind::KwEnd, "`end`")?.span;
+        let end = self.named_end(&Kind::KwTrait, &name)?;
         Ok(TraitDecl {
             modifiers,
             name,
@@ -496,11 +922,24 @@ impl<'t, 'a> Parser<'t, 'a> {
     fn object_decl(&mut self, modifiers: Modifiers) -> Parsed<ObjectDecl> {
         let start = self.expect(&Kind::KwObject, "`object`")?.span;
         let (name, _) = self.identifier("an object name")?;
+        self.skip_newlines_before(&Kind::LGeneric);
         let mut static_params = self.static_params()?;
         let params = if self.at(&Kind::LParen) {
             self.pos += 1;
             let params = self.params()?;
             self.expect(&Kind::RParen, "`)`")?;
+            // `objects.tex:100` spells an object's varargs parameter
+            // `transient Varargs`, so the bare form is a static error rather
+            // than a declaration this parser has not got to yet. `transient`
+            // is not even a reserved word here, so the modifier-carrying form
+            // cannot be written at all -- which makes refusing the whole
+            // shape the honest reading.
+            if let Some(p) = params.iter().find(|p| p.varargs) {
+                return Err(ParseError::ObjectVarargsParameter {
+                    span: p.span,
+                    name: p.name.clone(),
+                });
+            }
             Some(params)
         } else {
             None
@@ -508,7 +947,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         let (extends, comprises, excludes) = self.topology_clauses()?;
         self.where_clause(&mut static_params)?;
         let members = self.members()?;
-        let end = self.expect(&Kind::KwEnd, "`end`")?.span;
+        let end = self.named_end(&Kind::KwObject, &name)?;
         Ok(ObjectDecl {
             modifiers,
             name,
@@ -652,13 +1091,23 @@ impl<'t, 'a> Parser<'t, 'a> {
     /// stands, and 10 of them die earlier on `nat`/`int`/`opr` static
     /// parameters that M3d locks out. The payoff here is the silent acceptance,
     /// not a file count.
+    /// `FnClause = w Where`, so the clause may sit on the line BELOW its header,
+    /// which is how the corpus writes all eight of the files that put one on a
+    /// continuation line. The diagnostic before that was `expected a field or
+    /// method name, found KwWhere`, naming a mechanism a `where` clause is not.
     fn where_clause(&mut self, static_params: &mut [StaticParam]) -> Parsed<()> {
-        if !self.at(&Kind::KwWhere) {
+        if !self.at(&Kind::KwWhere) && !self.skip_newlines_before(&Kind::KwWhere) {
             return Ok(());
         }
         self.pos += 1;
         self.skip_newlines();
         if self.at(&Kind::LGeneric) {
+            // D6 section 1 cuts where-VARIABLES from v1, so the binder form is
+            // refused whole and BEFORE anything inside it is read. The frontend
+            // lane's rule that a locked static-parameter kind may not slip
+            // through a `where` is kept by this being a refusal rather than a
+            // skip -- `where [\nat n\]` is refused either way -- and naming
+            // the kind here would name the inner reason for an outer cut.
             return Err(ParseError::WhereClauseFormUnsupported {
                 span: self.span_here(),
                 form: "`where [\\ ... \\]` introduces fresh static variables, which are bound \
@@ -761,21 +1210,21 @@ impl<'t, 'a> Parser<'t, 'a> {
         }
         let (name, name_span) = self.identifier("a field or method name")?;
 
+        self.skip_newlines_before(&Kind::LGeneric);
         let mut static_params = self.static_params()?;
-        if self.at(&Kind::LParen) {
+        if self.at(&Kind::LParen) || self.skip_newlines_before(&Kind::LParen) {
             if mutable {
                 return Err(self.error("a field name after `var`"));
             }
             self.pos += 1;
             let params = self.params()?;
             let rparen = self.expect(&Kind::RParen, "`)`")?.span;
-            let return_type = if self.at(&Kind::Colon) {
-                self.pos += 1;
-                Some(self.type_ref()?)
-            } else {
-                None
-            };
+            let return_type = self.optional_return_type()?;
             self.where_clause(&mut static_params)?;
+            // `getter get(): E throws NotFound` -- `FortressLibrary.fsi:772`.
+            // A member takes the same `FnClause*` a top-level declaration does,
+            // and this one was reading only `where`.
+            self.skip_throws()?;
             let body = self.optional_definition()?;
             let end = body.as_ref().map_or(rparen, Expr::span);
             return Ok(Member::Method(MethodDecl {
@@ -791,6 +1240,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         }
 
         self.expect(&Kind::Colon, "`:` or `(`")?;
+        self.skip_newlines();
         let ty = self.type_ref()?;
         let init = self.optional_definition()?;
         let end = init.as_ref().map_or_else(|| ty.span(), Expr::span);
@@ -803,12 +1253,31 @@ impl<'t, 'a> Parser<'t, 'a> {
         }))
     }
 
+    /// `: T`. `FnHeaderClause = (w NoNewlineIsType)?` and
+    /// `NoNewlineIsType = colon w NoNewlineType`, so a newline is permitted on
+    /// BOTH sides of the colon -- `Library/Set.fsi:63` writes the return type
+    /// on the line below the parameter list. `NoNewlineType` bounds what is
+    /// inside the type, not what precedes it.
+    ///
+    /// A FIELD is a different production: `NoNewlineVarWType = BindId s
+    /// NoNewlineIsType` uses `s`, so a field's colon must stay on its name's
+    /// line. That asymmetry is why this is not the same helper `member` uses
+    /// for a field.
+    fn optional_return_type(&mut self) -> Parsed<Option<TypeRef>> {
+        if !self.at(&Kind::Colon) && !self.skip_newlines_before(&Kind::Colon) {
+            return Ok(None);
+        }
+        self.pos += 1;
+        self.skip_newlines();
+        Ok(Some(self.type_ref()?))
+    }
+
     /// `= e`, where the `=` may sit on the following line. Restores the
     /// position when there is none, so the separator the caller needs survives.
     fn optional_definition(&mut self) -> Parsed<Option<Expr>> {
         let save = self.pos;
         self.skip_newlines();
-        if !self.at(&Kind::Eq) {
+        if !self.definition_equals_at(self.pos) {
             self.pos = save;
             return Ok(None);
         }
@@ -833,6 +1302,40 @@ impl<'t, 'a> Parser<'t, 'a> {
             self.pos += 1;
         }
         Ok(name)
+    }
+
+    /// `end`, `end Stream`, `end trait Stream`. `TraitObject.rats:13` writes
+    /// the tail as `((s "trait")? s Id)?`, and `s` -- space WITHOUT a line
+    /// terminator -- is the whole disambiguation: `end` then a NEWLINE then a
+    /// name is the end of this declaration followed by the next one, and only a
+    /// name on the SAME LINE belongs to the `end`. The newline is a token here,
+    /// so "same line" is just "the next token is not `Newline`".
+    ///
+    /// Only the three declaration forms the grammar gives the tail to reach
+    /// this. `do ... end`, `if ... end` and `while ... end` deliberately do not:
+    /// `end out` and `end loop` in the corpus close a LABELLED BLOCK, which is
+    /// a different production and a feature this compiler does not have.
+    fn named_end(&mut self, keyword: &Kind<'_>, own: &str) -> Parsed<Span> {
+        let end = self.expect(&Kind::KwEnd, "`end`")?.span;
+        // Only step over the keyword when a name actually follows it, so a
+        // stray `end trait` cannot consume a token and then fail elsewhere.
+        if self.at(keyword) && matches!(self.peek_ahead(1), Some(Kind::Ident(_))) {
+            self.pos += 1;
+        }
+        if !matches!(self.peek_kind(), Some(Kind::Ident(_))) {
+            return Ok(end);
+        }
+        let start = self.span_here();
+        let name = self.dotted_name()?;
+        let span = Span::new(start.start, self.previous_span().end);
+        if name != own {
+            return Err(ParseError::ClosingNameDiffers {
+                span,
+                found: name,
+                expected: own.to_owned(),
+            });
+        }
+        Ok(Span::new(end.start, span.end))
     }
 
     fn peek_ahead(&self, n: usize) -> Option<&'t Kind<'a>> {
@@ -863,18 +1366,25 @@ impl<'t, 'a> Parser<'t, 'a> {
 
     fn fn_decl(&mut self, modifiers: Modifiers, signature_only: bool) -> Parsed<FnDecl> {
         let (name, name_span) = self.identifier("a function name")?;
+        // `NamedFnHeaderFront = Id (w StaticParams)? w ValParam`. Both `w`s are
+        // may-newline, and the whole corpus writes long headers across lines --
+        // `Library/RangeInternals.fsi:576` breaks before the static parameters,
+        // `Library/FortressLibrary.fsi:305` (`opr juxtaposition`) breaks before
+        // the parameter list.
+        self.skip_newlines_before(&Kind::LGeneric);
         let mut static_params = self.static_params()?;
+        self.skip_newlines();
         self.expect(&Kind::LParen, "`(`")?;
         let params = self.params()?;
         let rparen = self.expect(&Kind::RParen, "`)`")?.span;
 
-        let return_type = if self.at(&Kind::Colon) {
-            self.pos += 1;
-            Some(self.type_ref()?)
-        } else {
-            None
-        };
+        let return_type = self.optional_return_type()?;
         self.where_clause(&mut static_params)?;
+        // `FnHeaderClause = (w NoNewlineIsType)? FnClauses` and `FnClause`
+        // covers `throws` as well as `where`. This branch read only `where`, so
+        // a top-level `f(): T throws E` never parsed at all -- only the `opr`
+        // form did, which is where the clause was first met.
+        self.skip_throws()?;
 
         // `w equals w` at top level: a newline is permitted on both sides.
         // Inside an `api` there is no `=` at all and the declaration ends here.
@@ -986,7 +1496,8 @@ impl<'t, 'a> Parser<'t, 'a> {
         if let Some(Kind::Ident(word)) = self.peek_kind() {
             name.push_str(word);
             self.pos += 1;
-            return self.opr_tail(name, params);
+            let static_params = self.static_params()?;
+            return self.opr_tail(name, params, static_params);
         }
 
         let open = self.operator_run(usize::MAX);
@@ -994,14 +1505,35 @@ impl<'t, 'a> Parser<'t, 'a> {
             return Err(self.error("an operator name after `opr`"));
         }
 
+        // An enclosing operator carries its static parameters BETWEEN the
+        // opener and the operand -- `opr <|[\E\] xs: E... |>` -- which is
+        // where the six library declarations of the list, set and prefix-set
+        // brackets put them. Reading them here rather than in `opr_tail` is
+        // what lets the branch below see the operand.
+        //
+        // The infix and prefix forms write them in the same place relative to
+        // the name (`opr +[\T\](a: T, b: T)`), so hoisting the call out of
+        // `opr_tail` moves no declaration that already parsed.
+        let static_params = self.static_params()?;
+
         // An operand written inside the brackets makes this an enclosing
         // operator: `|self|`, `|\self/|`, `|/self\|`, `[i: ZZ32]`.
-        if self.at(&Kind::KwSelf) || matches!(self.peek_kind(), Some(Kind::Ident(_))) {
-            let inner = self.params()?;
-            let close = self.operator_run(open.len());
-            if close.len() != open.len() {
-                return Err(self.error("the closing half of an enclosing operator"));
-            }
+        //
+        // The operand is OPTIONAL. `opr BIG <|[\T\]|>` is the comprehension
+        // bracket and writes none, so what identifies the form is the opener
+        // closing again rather than the operand being there. `operator_run`
+        // stops at `(`, `[\` and an identifier, so an infix declaration can
+        // never produce a non-empty run in that position.
+        let has_operand =
+            self.at(&Kind::KwSelf) || matches!(self.peek_kind(), Some(Kind::Ident(_)));
+        let mark = self.pos;
+        let inner = if has_operand {
+            self.params()?
+        } else {
+            Vec::new()
+        };
+        let close = self.closing_operator_run();
+        if !close.is_empty() {
             params.extend(inner);
             // `_` marks where the operand goes, and it is what keeps the
             // enclosing `|self|` from being given the name `||`, which is a
@@ -1010,43 +1542,45 @@ impl<'t, 'a> Parser<'t, 'a> {
             name.push('_');
             name.push_str(&join(&close));
             let mut end = self.previous_span();
-            let return_type = if self.at(&Kind::Colon) {
-                self.pos += 1;
-                let ty = self.type_ref()?;
+            let return_type = self.optional_return_type()?;
+            if let Some(ty) = return_type.as_ref() {
                 end = ty.span();
-                Some(ty)
-            } else {
-                None
-            };
+            }
             self.skip_throws()?;
             return Ok(OprSignature {
                 name,
-                static_params: Vec::new(),
+                static_params,
                 params,
                 return_type,
                 end,
             });
         }
+        if has_operand {
+            return Err(self.error("the closing half of an enclosing operator"));
+        }
 
+        // The run was the operator's own name after all.
+        self.pos = mark;
         name.push_str(&join(&open));
-        self.opr_tail(name, params)
+        self.opr_tail(name, params, static_params)
     }
 
     /// The part an operator declaration shares with a function's:
     /// `[\statics\] (params): T where {...} throws E`.
-    fn opr_tail(&mut self, name: String, mut params: Vec<Param>) -> Parsed<OprSignature> {
-        let mut static_params = self.static_params()?;
+    fn opr_tail(
+        &mut self,
+        name: String,
+        mut params: Vec<Param>,
+        mut static_params: Vec<StaticParam>,
+    ) -> Parsed<OprSignature> {
+        self.skip_newlines();
         self.expect(&Kind::LParen, "`(`")?;
         params.extend(self.params()?);
         let mut end = self.expect(&Kind::RParen, "`)`")?.span;
-        let return_type = if self.at(&Kind::Colon) {
-            self.pos += 1;
-            let ty = self.type_ref()?;
+        let return_type = self.optional_return_type()?;
+        if let Some(ty) = return_type.as_ref() {
             end = ty.span();
-            Some(ty)
-        } else {
-            None
-        };
+        }
         self.where_clause(&mut static_params)?;
         self.skip_throws()?;
         Ok(OprSignature {
@@ -1058,6 +1592,36 @@ impl<'t, 'a> Parser<'t, 'a> {
         })
     }
 
+    /// The closing half of an enclosing operator, which is NOT the same run as
+    /// the opening half and cannot be read with the opener's length as a limit.
+    /// `Library/Map.fsi:100` writes `opr {|->[\Key,Val\] xs:(Key,Val)... }`:
+    /// four characters open it and one closes it.
+    ///
+    /// What bounds it instead is the three tokens that can only END a
+    /// declaration -- `:` before a return type, `=` before a body, `:=` -- none
+    /// of which is a bracket, and all three of which `operator_text` maps
+    /// because an INFIX operator may be named out of them.
+    fn closing_operator_run(&mut self) -> Vec<&'a str> {
+        let mut run = Vec::new();
+        loop {
+            if matches!(
+                self.peek_kind(),
+                Some(Kind::Colon | Kind::ColonEq | Kind::Eq)
+            ) {
+                break;
+            }
+            let Some(text) = self.peek_kind().and_then(operator_text) else {
+                break;
+            };
+            if !run.is_empty() && !self.glued_right(self.pos - 1) {
+                break;
+            }
+            run.push(text);
+            self.pos += 1;
+        }
+        run
+    }
+
     /// Up to `limit` operator characters, glued to each other. Adjacency is what
     /// makes `<->` one name and stops the run reaching into whatever follows --
     /// the same rule six milestones have used for `->`, `+=` and `**`, and it
@@ -1065,7 +1629,7 @@ impl<'t, 'a> Parser<'t, 'a> {
     ///
     /// It stops at `(`, `[\`, an identifier and `self` on purpose: each of those
     /// begins the operand, and which one it is decides the shape.
-    fn operator_run(&mut self, limit: usize) -> Vec<&'static str> {
+    fn operator_run(&mut self, limit: usize) -> Vec<&'a str> {
         let mut run = Vec::new();
         while run.len() < limit {
             let Some(text) = self.peek_kind().and_then(operator_text) else {
@@ -1083,7 +1647,10 @@ impl<'t, 'a> Parser<'t, 'a> {
     /// `throws NotFound`. Recorded nowhere: this is a parse spike, and an
     /// exception clause has no meaning until the language has exceptions.
     fn skip_throws(&mut self) -> Parsed<()> {
-        if !self.at(&Kind::Reserved("throws")) {
+        // `FnClause = w Throws`, the same continuation rule as `where`.
+        if !self.at(&Kind::Reserved("throws"))
+            && !self.skip_newlines_before(&Kind::Reserved("throws"))
+        {
             return Ok(());
         }
         self.pos += 1;
@@ -1116,6 +1683,7 @@ impl<'t, 'a> Parser<'t, 'a> {
                         args: Vec::new(),
                         span,
                     },
+                    varargs: false,
                     span,
                 });
                 self.skip_newlines();
@@ -1129,8 +1697,19 @@ impl<'t, 'a> Parser<'t, 'a> {
             let (name, name_span) = self.identifier("a parameter name")?;
             self.expect(&Kind::Colon, "`:`")?;
             let ty = self.type_ref()?;
-            let span = Span::new(name_span.start, ty.span().end);
-            params.push(Param { name, ty, span });
+            let mut end = ty.span().end;
+            let varargs = self.at_ellipsis();
+            if varargs {
+                self.pos += 3;
+                end = self.previous_span().end;
+            }
+            let span = Span::new(name_span.start, end);
+            params.push(Param {
+                name,
+                ty,
+                varargs,
+                span,
+            });
             self.skip_newlines();
             if !self.at(&Kind::Comma) {
                 break;
@@ -1147,14 +1726,19 @@ impl<'t, 'a> Parser<'t, 'a> {
     /// the corpus lexes.
     fn type_ref(&mut self) -> Parsed<TypeRef> {
         let from = self.type_atom()?;
-        if !(self.at(&Kind::Minus)
+        // `->`, two tokens joined by adjacency, or U+2192, one token.
+        let width = if self.at(&Kind::RightArrow) {
+            1
+        } else if self.at(&Kind::Minus)
             && self.glued_right(self.pos)
-            && matches!(self.peek_ahead(1), Some(Kind::Gt)))
+            && matches!(self.peek_ahead(1), Some(Kind::Gt))
         {
+            2
+        } else {
             return Ok(from);
-        }
+        };
         let start = from.span().start;
-        self.pos += 2;
+        self.pos += width;
         self.skip_newlines();
         let to = self.type_ref()?;
         let end = to.span().end;
@@ -1192,7 +1776,24 @@ impl<'t, 'a> Parser<'t, 'a> {
             }
             return Ok(TypeRef::Tuple { elems, span });
         }
-        let (name, span) = self.identifier("a type name")?;
+        let (mut name, span) = self.identifier("a type name")?;
+        // A QUALIFIED type name. `source-code.tex:280-287` disambiguates "the
+        // type `List` declared in the API `List` or the type `List` declared in
+        // the API `PureList`" with exactly this, and with ten api names
+        // duplicated across the source path the collision is not hypothetical.
+        // It PARSES here and does not RESOLVE anywhere: a qualified name means
+        // nothing until an import resolver exists, so it comes out as
+        // `unknown type `List.List``, which is a diagnostic and not the
+        // `expected `)`, found Dot` that named the wrong mechanism.
+        let mut end = span;
+        while self.at(&Kind::Dot) && matches!(self.peek_ahead(1), Some(Kind::Ident(_))) {
+            self.pos += 1;
+            let (part, part_span) = self.identifier("a type name")?;
+            name.push('.');
+            name.push_str(&part);
+            end = part_span;
+        }
+        let span = Span::new(span.start, end.end);
         if !self.at(&Kind::LGeneric) {
             return Ok(TypeRef::Named {
                 name,
@@ -1266,34 +1867,69 @@ impl<'t, 'a> Parser<'t, 'a> {
     // --------------------------------------------------------- expressions
 
     fn expr(&mut self) -> Parsed<Expr> {
-        self.disjunction()
+        Ok(self.disjunction()?.0)
+    }
+
+    /// `precedence.tex:20-31`: Fortress precedence is a PARTIAL relation --
+    /// "if there is no specific precedence relationship between two operators,
+    /// then parentheses must be used". A total ladder can only ever ACCEPT, so
+    /// adding a second operator family to one makes wrong grouping SILENT,
+    /// which is the worst class this project recognises.
+    ///
+    /// Every level therefore reports back which operator built the node it
+    /// returns, when that operator is one of the ones this milestone adds and
+    /// so has no relation to the arithmetic and relational ladder. A level that
+    /// is about to combine such a node with its own operator refuses instead.
+    ///
+    /// The mark is carried rather than read off the tree because the tree
+    /// cannot tell `(a SUBSET b) + c` from `a SUBSET b + c`: `primary` returns
+    /// a parenthesised expression unchanged, so both are the same node. What
+    /// clears the mark is the parenthesis, and the only place that knows about
+    /// it is the parse.
+    fn require_unmarked(&self, mark: Mark<'a>, other: &str, span: Span) -> Parsed<()> {
+        match mark {
+            Some((name, _)) => Err(ParseError::OperatorsUnrelated {
+                span,
+                first: name.to_owned(),
+                second: other.to_owned(),
+            }),
+            None => Ok(()),
+        }
     }
 
     /// `a OR b`, left associative, and below every conjunction --
     /// `appendices/operators.tex:840-851`.
-    fn disjunction(&mut self) -> Parsed<Expr> {
-        let mut lhs = self.conjunction()?;
+    fn disjunction(&mut self) -> Parsed<(Expr, Mark<'a>)> {
+        let (mut lhs, mut mark) = self.conjunction()?;
         while self.at_word_op("OR") {
+            let span = self.span_here();
+            self.require_unmarked(mark, "OR", span)?;
             self.pos += 1;
             self.skip_newlines();
-            let rhs = self.conjunction()?;
+            let (rhs, rhs_mark) = self.conjunction()?;
+            self.require_unmarked(rhs_mark, "OR", span)?;
             lhs = infix(BinOp::Or, Fixity::Loose, lhs, rhs);
+            mark = None;
         }
-        Ok(lhs)
+        Ok((lhs, mark))
     }
 
     /// `a AND b`, left associative, and below every relational operator --
     /// which is what puts `comparison` underneath it and makes
     /// `a = 3 AND b = 8` mean `(a = 3) AND (b = 8)`.
-    fn conjunction(&mut self) -> Parsed<Expr> {
-        let mut lhs = self.comparison()?;
+    fn conjunction(&mut self) -> Parsed<(Expr, Mark<'a>)> {
+        let (mut lhs, mut mark) = self.comparison()?;
         while self.at_word_op("AND") {
+            let span = self.span_here();
+            self.require_unmarked(mark, "AND", span)?;
             self.pos += 1;
             self.skip_newlines();
-            let rhs = self.comparison()?;
+            let (rhs, rhs_mark) = self.comparison()?;
+            self.require_unmarked(rhs_mark, "AND", span)?;
             lhs = infix(BinOp::And, Fixity::Loose, lhs, rhs);
+            mark = None;
         }
-        Ok(lhs)
+        Ok((lhs, mark))
     }
 
     /// A word operator is an all-capitals identifier the parser reads as an
@@ -1304,7 +1940,7 @@ impl<'t, 'a> Parser<'t, 'a> {
     /// identifier -- so `a AND (b)` reads as `Prefix` and the operator would be
     /// left unconsumed, turning a correct program into a parse error.
     fn at_word_op(&self, word: &str) -> bool {
-        matches!(self.peek_kind(), Some(Kind::Ident(name)) if *name == word)
+        matches!(self.peek_kind(), Some(Kind::OpWord(name)) if *name == word)
     }
 
     /// One of the 66 words the lexer keeps out of the identifier namespace,
@@ -1323,8 +1959,9 @@ impl<'t, 'a> Parser<'t, 'a> {
 
     /// Comparison operators chain. One operator is left exactly as it was: no
     /// block, no temporaries, and nothing about existing generated code moves.
-    fn comparison(&mut self) -> Parsed<Expr> {
-        let first = self.additive()?;
+    fn comparison(&mut self) -> Parsed<(Expr, Mark<'a>)> {
+        let (first, first_mark) = self.additive()?;
+        let mut mark = first_mark;
         let mut operands = vec![first];
         let mut ops: Vec<(BinOp, Fixity, Span)> = Vec::new();
         let mut sense: Option<(Sense, BinOp)> = None;
@@ -1348,23 +1985,27 @@ impl<'t, 'a> Parser<'t, 'a> {
                     None => sense = Some((this, op)),
                 }
             }
+            self.require_unmarked(mark, op_text(op), op_span)?;
             self.pos += 1;
             self.skip_newlines(); // a newline may follow an infix operator
-            operands.push(self.additive()?);
+            let (operand, operand_mark) = self.additive()?;
+            self.require_unmarked(operand_mark, op_text(op), op_span)?;
+            operands.push(operand);
             ops.push((op, fixity, op_span));
+            mark = None;
         }
 
         if ops.is_empty() {
-            return operands.pop().ok_or(missing_operand());
+            return Ok((operands.pop().ok_or(missing_operand())?, mark));
         }
         if ops.len() == 1 {
             let (op, fixity, _) = ops.first().copied().ok_or_else(missing_operand)?;
             let mut both = operands.into_iter();
             let lhs = both.next().ok_or_else(missing_operand)?;
             let rhs = both.next().ok_or_else(missing_operand)?;
-            return Ok(infix(op, fixity, lhs, rhs));
+            return Ok((infix(op, fixity, lhs, rhs), None));
         }
-        self.desugar_chain(&operands, &ops)
+        Ok((self.desugar_chain(&operands, &ops)?, None))
     }
 
     /// `a < b < c` becomes a block of one binding per operand and a nested
@@ -1428,8 +2069,8 @@ impl<'t, 'a> Parser<'t, 'a> {
         Ok(Expr::Block { items, span })
     }
 
-    fn additive(&mut self) -> Parsed<Expr> {
-        let mut lhs = self.multiplicative()?;
+    fn additive(&mut self) -> Parsed<(Expr, Mark<'a>)> {
+        let (mut lhs, mut mark) = self.multiplicative()?;
         loop {
             let op = match self.peek_kind() {
                 Some(Kind::Plus) => BinOp::Add,
@@ -1447,16 +2088,20 @@ impl<'t, 'a> Parser<'t, 'a> {
             let Some(fixity) = self.infix_fixity(index)? else {
                 break;
             };
+            let op_span = self.span_here();
+            self.require_unmarked(mark, op_text(op), op_span)?;
             self.pos += 1;
             self.skip_newlines();
-            let rhs = self.multiplicative()?;
+            let (rhs, rhs_mark) = self.multiplicative()?;
+            self.require_unmarked(rhs_mark, op_text(op), op_span)?;
             lhs = infix(op, fixity, lhs, rhs);
+            mark = None;
         }
-        Ok(lhs)
+        Ok((lhs, mark))
     }
 
-    fn multiplicative(&mut self) -> Parsed<Expr> {
-        let mut lhs = self.juxtaposition()?;
+    fn multiplicative(&mut self) -> Parsed<(Expr, Mark<'a>)> {
+        let (mut lhs, mut mark) = self.operator_expr()?;
         loop {
             let op = match self.peek_kind() {
                 Some(Kind::Star) => BinOp::Mul,
@@ -1467,12 +2112,112 @@ impl<'t, 'a> Parser<'t, 'a> {
             let Some(fixity) = self.infix_fixity(index)? else {
                 break;
             };
+            let op_span = self.span_here();
+            self.require_unmarked(mark, op_text(op), op_span)?;
+            self.pos += 1;
+            self.skip_newlines();
+            let (rhs, rhs_mark) = self.operator_expr()?;
+            self.require_unmarked(rhs_mark, op_text(op), op_span)?;
+            lhs = infix(op, fixity, lhs, rhs);
+            mark = None;
+        }
+        Ok((lhs, mark))
+    }
+
+    /// The operators this milestone adds, applied infix.
+    ///
+    /// `opr-fixity.tex:28-32` is what decides the shape of this: "the Fortress
+    /// language dictates only the rules of syntax; whether an operator has a
+    /// meaning when used in a particular way depends only on whether there is a
+    /// definition in the program". So `a SUBSET b` must PARSE as an infix
+    /// application whether or not any `opr SUBSET` exists, and only then fail to
+    /// resolve. Driving the syntax off declarations inverts that.
+    ///
+    /// It lowers to an ordinary `Call` to a function whose NAME is the
+    /// operator's own text, which is exactly what an `opr` declaration already
+    /// lifts to -- so nothing downstream learns a new node, dispatch and
+    /// codegen are untouched, and an undeclared operator comes out as
+    /// `unknown name`, which is the specification's own second half.
+    ///
+    /// `AND`, `OR` and `NOT` are deliberately NOT here. They are operator words
+    /// under the same lexical rule, and they already have real codegen through
+    /// `BinOp::And`, `BinOp::Or` and `UnOp::Not`; routing them through a call to
+    /// a function nobody declared would break every program that uses them.
+    fn operator_expr(&mut self) -> Parsed<(Expr, Mark<'a>)> {
+        let mut lhs = self.juxtaposition()?;
+        let mut mark: Mark<'a> = None;
+        while let Some((text, span)) = self.infix_added_operator()? {
+            if let Some((first, _)) = mark {
+                if first != text {
+                    return Err(ParseError::OperatorsUnrelated {
+                        span,
+                        first: first.to_owned(),
+                        second: text.to_owned(),
+                    });
+                }
+            }
             self.pos += 1;
             self.skip_newlines();
             let rhs = self.juxtaposition()?;
-            lhs = infix(op, fixity, lhs, rhs);
+            let full = Span::new(lhs.span().start, rhs.span().end);
+            lhs = Expr::Call {
+                callee: Box::new(Expr::Var {
+                    name: text.to_owned(),
+                    span,
+                }),
+                args: vec![lhs, rhs],
+                span: full,
+            };
+            mark = Some((text, span));
         }
-        Ok(lhs)
+        Ok((lhs, mark))
+    }
+
+    /// The added operators, and only when the twelve-row table reads this
+    /// occurrence as infix. That test is what stops `|` being taken here in
+    /// `f(|x|)`: after a left encloser the table says PREFIX, and an enclosing
+    /// application is a different production.
+    fn infix_added_operator(&self) -> Parsed<Option<(&'a str, Span)>> {
+        let Some(kind) = self.peek_kind() else {
+            return Ok(None);
+        };
+        let text = match kind {
+            Kind::OpWord(word) if !matches!(*word, "AND" | "OR" | "NOT") => *word,
+            Kind::BarBar => "||",
+            Kind::BarRun(text) => *text,
+            Kind::Bang => "!",
+            Kind::Question => "?",
+            Kind::Tilde => "~",
+            Kind::Dollar => "$",
+            Kind::Percent => "%",
+            Kind::At => "@",
+            Kind::UniOp(text) => *text,
+            // `#` is DELIBERATELY absent. `for i <- 0#n` writes the extent
+            // form of a generator range with it (`for_expr` reads it at
+            // :2030), so taking it here as an infix operator makes the range
+            // unparseable -- measured: nine corpus files, every one of them a
+            // `for` loop, and the IR diff is what caught it.
+            _ => return Ok(None),
+        };
+        // `lexical-structure.tex:1216-1222`: an operator immediately followed
+        // by `=` is ONE token, a compound assignment operator. Reading only the
+        // operator half reports `x ||= e` as a LOPSIDED infix, which is a real
+        // rule and not the one the program broke.
+        if self.glued_right(self.pos) && matches!(self.peek_ahead(1), Some(Kind::Eq)) {
+            return Err(ParseError::CompoundAssignmentUnsupported {
+                span: self.span_here(),
+                op: text.to_owned(),
+            });
+        }
+        match self.table_fixity_at(self.pos) {
+            TableFixity::Infix => Ok(Some((text, self.span_here()))),
+            // `opr-fixity.tex:90-93` calls this row a static error outright.
+            TableFixity::Lopsided => Err(ParseError::LopsidedOperator {
+                span: self.span_here(),
+                name: text.to_owned(),
+            }),
+            _ => Ok(None),
+        }
     }
 
     /// `None` means "this operator is not infix here, stop climbing"; the
@@ -1553,13 +2298,35 @@ impl<'t, 'a> Parser<'t, 'a> {
     /// its own token, so `SUM[\Number\]` -- the static-argument form, 58 corpus
     /// sites -- cannot be mistaken for one of these.
     fn big_reduction_here(&self, offset: usize) -> bool {
+        // All four names are ALL-CAPS with two distinct letters, so the
+        // operator-word rule lexes them as `OpWord` and not as `Ident`. That is
+        // the right reading rather than an accident -- `SUM` is an operator in
+        // 1.0, which is why `SUM[i <- 1:10]` is a reduction and not a subscript
+        // -- but both kinds are matched because `BIG` may precede a name the
+        // rule does not reach.
         let named = matches!(
             self.peek_ahead(offset),
-            Some(Kind::Ident(name)) if BIG_OPERATORS.contains(name)
+            Some(Kind::Ident(name) | Kind::OpWord(name)) if BIG_OPERATORS.contains(name)
         );
         named
             && matches!(self.peek_ahead(offset + 1), Some(Kind::LBracket))
             && self.glued_left(self.pos + offset + 1)
+    }
+
+    /// A reduction's operator name. `SUM`, `PROD`, `MAX` and `MIN` all satisfy
+    /// the operator-word rule, so they arrive as `OpWord`; `identifier` refuses
+    /// that kind and would report `expected an expression` at the name itself.
+    fn reduction_operator_name(&mut self) -> Parsed<(String, Span)> {
+        match self.peek() {
+            Some(Token {
+                kind: Kind::Ident(name) | Kind::OpWord(name),
+                span,
+            }) => {
+                self.pos += 1;
+                Ok(((*name).to_owned(), *span))
+            }
+            _ => Err(self.error("a reduction operator")),
+        }
     }
 
     /// `SUM[i <- lo:hi] e`, and `PROD` likewise.
@@ -1574,7 +2341,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         if self.at(&Kind::Reserved("BIG")) {
             self.pos += 1;
         }
-        let (name, name_span) = self.identifier("a reduction operator")?;
+        let (name, name_span) = self.reduction_operator_name()?;
         let op = match name.as_str() {
             "SUM" => BinOp::Add,
             "PROD" => BinOp::Mul,
@@ -1617,16 +2384,20 @@ impl<'t, 'a> Parser<'t, 'a> {
     fn generator_clause(&mut self) -> Parsed<Generator> {
         let (binder, _) = self.identifier("a loop variable")?;
         self.skip_newlines();
-        if !self.at_left_arrow() {
+        let Some(width) = self.left_arrow_width() else {
             return Err(self.error("`<-` after the loop variable"));
-        }
-        self.pos += 2;
+        };
+        self.pos += width;
         self.skip_newlines();
 
         // `seq(...)` is recognised HERE rather than as a call, because it is
         // what decides whether the loop is parallel and the checker must not
         // have to guess that back from an application node.
-        let sequential = self.at_word_op("seq") && matches!(self.peek_ahead(1), Some(Kind::LParen));
+        // `seq` is LOWERCASE and so is an ordinary identifier, not an operator
+        // word: `lexical-structure.tex:1167-1172` admits only uppercase
+        // letters and underscores. It shares no test with `AND` and `OR`.
+        let sequential = matches!(self.peek_kind(), Some(Kind::Ident("seq")))
+            && matches!(self.peek_ahead(1), Some(Kind::LParen));
         if sequential {
             self.pos += 2;
             self.skip_newlines();
@@ -1690,10 +2461,17 @@ impl<'t, 'a> Parser<'t, 'a> {
     }
 
     /// `<-`, as two glued tokens.
-    fn at_left_arrow(&self) -> bool {
-        self.at(&Kind::Lt)
+    /// `Symbol.rats:197`: `leftarrow = "<-" / "\u2190"`. The ASCII spelling is
+    /// two tokens joined by adjacency and the Unicode one is a single token, so
+    /// this answers how many to step over rather than merely whether to.
+    fn left_arrow_width(&self) -> Option<usize> {
+        if self.at(&Kind::LeftArrow) {
+            return Some(1);
+        }
+        (self.at(&Kind::Lt)
             && self.glued_right(self.pos)
-            && matches!(self.peek_ahead(1), Some(Kind::Minus))
+            && matches!(self.peek_ahead(1), Some(Kind::Minus)))
+        .then_some(2)
     }
 
     fn unary(&mut self) -> Parsed<Expr> {
@@ -1867,7 +2645,7 @@ impl<'t, 'a> Parser<'t, 'a> {
             }
             // Before the plain name arm: `SUM[i <- 1:10] e` is a reduction and
             // `SUM[i]` is a subscript, and only the guard tells them apart.
-            Kind::Ident(_) if self.big_reduction_here(0) => self.big_reduction(),
+            Kind::Ident(_) | Kind::OpWord(_) if self.big_reduction_here(0) => self.big_reduction(),
             Kind::Ident(name) => {
                 let name = (*name).to_owned();
                 self.pos += 1;
@@ -1939,8 +2717,122 @@ impl<'t, 'a> Parser<'t, 'a> {
                 span,
                 word: (*word).to_owned(),
             }),
+            Kind::Bar
+            | Kind::BarBar
+            | Kind::BarRun(_)
+            | Kind::LeftBar
+            | Kind::LBrace
+            // U+27E8 and U+27E9 are angle brackets, and the allowlist gives
+            // them no ASCII spelling because the reference grammar gives them
+            // none either -- so the pair they name is `\u{27E8}_\u{27E9}`.
+            | Kind::UniOp(_) => self.enclosing_application(),
             _ => Err(self.error("an expression")),
         }
+    }
+
+    /// `|x|`, `<|a, b|>`, `{a, b}`, `|\x/|`. An enclosing operator writes its
+    /// operands INSIDE the brackets, and `enclosing-ops.tex` gives the pair one
+    /// name; this parser already spells that name `|_|`, `<|_|>`, `{_}` on the
+    /// DECLARATION side, where `_` marks the operand position and is what keeps
+    /// `|self|` from being given the name `||`. The application is the same
+    /// name applied, so it is an ordinary `Call` like every other operator.
+    ///
+    /// `aggregate.tex:44-47` says the set, map and list literals ARE
+    /// applications of a bracketing operator with a varargs parameter, so this
+    /// is also what makes `<|1, 2, 3|>` a parse. It is NOT yet what makes it
+    /// compile: the library declares `opr <|[\E\] xs: E... |>` with ONE
+    /// varargs parameter, the callee side of varargs is still accept-and-ignore,
+    /// so a three-element literal is refused on arity. That is the recorded
+    /// consequence of not having decided what `T...` lowers to, not a defect
+    /// here.
+    ///
+    /// `[` IS DELIBERATELY ABSENT. `[1, 2, 3]` is already an array literal with
+    /// its own node and its own codegen; reading it as an application of `[_]`
+    /// would change what every array-literal program means.
+    ///
+    /// A bare `|` is deliberately absent from the INFIX set for the same reason
+    /// this production can exist at all: with `|` infix, `|x| + |y|` has two
+    /// readings and adjacency cannot separate them.
+    fn enclosing_application(&mut self) -> Parsed<Expr> {
+        let start = self.span_here();
+        let mut open = self.operator_run(usize::MAX);
+        if open.is_empty() {
+            return Err(self.error("an expression"));
+        }
+        // AN EMPTY ENCLOSER IS ONE RUN. `<||>` and `{}` have no operand to stop
+        // the opening run, so it swallows the closing half as well: `<|` is
+        // glued to `|>`. When the run is of even length and nothing that could
+        // begin an expression follows it, the two halves ARE the pair.
+        let mut args = Vec::new();
+        if open.len().is_multiple_of(2) && !self.starts_an_operand() {
+            let half = open.len().div_euclid(2);
+            let close = open.split_off(half);
+            return Ok(self.enclosed(start, &open, &close, args));
+        }
+        self.skip_newlines();
+        let empty = self.closes_here(open.len());
+        if !empty {
+            loop {
+                args.push(self.expr()?);
+                self.skip_newlines();
+                if !self.at(&Kind::Comma) {
+                    break;
+                }
+                self.pos += 1;
+                self.skip_newlines();
+            }
+        }
+        // The closer is read with the OPENER'S LENGTH as its limit, which is
+        // what stops `|a| + |b|` running the closing run on into the `+`. The
+        // declaration side cannot use that rule -- `opr {|->[\K,V\] xs: ... }`
+        // opens with four characters and closes with one -- but in expression
+        // position the pair is symmetric and the limit is what disambiguates.
+        let close = self.operator_run(open.len());
+        if close.len() != open.len() {
+            return Err(self.error("the closing half of an enclosing operator"));
+        }
+        Ok(self.enclosed(start, &open, &close, args))
+    }
+
+    /// The name is the pair with `_` where the operands go, which is exactly
+    /// what `opr_signature` builds on the declaration side.
+    fn enclosed(&self, start: Span, open: &[&str], close: &[&str], args: Vec<Expr>) -> Expr {
+        let mut name = join(open);
+        name.push('_');
+        name.push_str(&join(close));
+        let span = Span::new(start.start, self.previous_span().end);
+        Expr::Call {
+            callee: Box::new(Expr::Var { name, span: start }),
+            args,
+            span,
+        }
+    }
+
+    /// Whether anything that could begin an operand follows. Used only to tell
+    /// an empty encloser from one whose opening run happens to be long.
+    fn starts_an_operand(&self) -> bool {
+        !matches!(
+            self.peek_kind(),
+            None | Some(
+                Kind::RParen
+                    | Kind::RBracket
+                    | Kind::RGeneric
+                    | Kind::Comma
+                    | Kind::Semi
+                    | Kind::Newline
+                    | Kind::Eof
+            )
+        )
+    }
+
+    /// True when the operator run beginning here is exactly `len` tokens long,
+    /// which is how an EMPTY encloser (`<||>`, `{}`) is told from one with an
+    /// operand. Restores the position either way.
+    fn closes_here(&mut self, len: usize) -> bool {
+        let mark = self.pos;
+        let run = self.operator_run(len);
+        self.pos = mark;
+        run.len() == len
     }
 
     fn array_literal(&mut self) -> Parsed<Expr> {
@@ -2143,7 +3035,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         {
             let probe = self.pos;
             if let Ok(Expr::Call { callee, span, .. }) = self.postfix() {
-                if matches!(*callee, Expr::Var { .. }) && self.at(&Kind::Eq) {
+                if matches!(*callee, Expr::Var { .. }) && self.definition_equals_at(self.pos) {
                     return Err(ParseError::LocalFunctionDeclarationUnsupported { span });
                 }
             }
@@ -2469,7 +3361,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         // without one `i := 0` would be a declaration in some scopes and an
         // assignment in others, which is how a typo silently shadows.
         let mutable = match self.peek_kind() {
-            Some(Kind::Eq) => modifier,
+            Some(Kind::Eq) if self.definition_equals_at(self.pos) => modifier,
             Some(Kind::ColonEq) if ty.is_some() => true,
             _ => {
                 self.pos = save;
@@ -2493,6 +3385,37 @@ impl<'t, 'a> Parser<'t, 'a> {
             span,
         }))
     }
+}
+
+/// The five outcomes of `opr-fixity.tex`'s table. `Lopsided` and `Nofix` are
+/// the rows the specification calls a STATIC ERROR: it names a recommended
+/// reading for each so a parse can continue looking for further errors, and
+/// this parser stops at the first error, so they are refusals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TableFixity {
+    Infix,
+    Prefix,
+    Postfix,
+    /// Whitespace on one side and not the other.
+    Lopsided,
+    Nofix,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LeftContext {
+    PrimaryTail,
+    Operator,
+    /// A comma, a semicolon, a left encloser, a line break, or the start.
+    Delimiter,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RightContext {
+    PrimaryFront,
+    Operator,
+    /// A comma, a semicolon, or a right encloser.
+    Delimiter,
+    LineBreak,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
