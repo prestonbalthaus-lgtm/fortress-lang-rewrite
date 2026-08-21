@@ -14,104 +14,72 @@ analysis §9 ordering.
 
 ## Defects
 
-### DEF-1 — String juxtaposition drops the space. `bcat` where the oracle records `b cat`
+### DEF-1 — RESOLVED THE OTHER WAY. String juxtaposition is plain concatenation; the expectation is the quirk
 
 | | |
 |---|---|
-| **Owner** | Group 3 (correctness debt), with a one-line runtime change that touches Group 4's lowering |
-| **Class** | **Silent wrong output at exit 0** — the worst class this project recognises |
-| **Found by** | `tools/oracle-gate.sh`, the first execution of any corpus program against its recorded output in this project's history |
-| **Status** | open, diagnosed to primary source, not fixed |
+| **Status** | **CLOSED as a defect. Reopened as DEV-11, a signed-off divergence** |
+| **Adjudicated by** | the semantics lane, 2026-08-21, overturning this entry's original recommendation |
 
-**Reproducer** (`ProjectFortress/other_compiler_tests/GenMet0.fss`, and it is
-four lines):
+**Kept in full, because how it was decided is worth more than the verdict.**
 
-```
-trait a   m[\T extends String\](x:T) = println("a" x)  end
-trait b extends a   m[\T extends String\](x:T) = println("b" x)  end
-object o extends b end
-run():() = o.m[\String\]("cat")
-```
-
-Observed `bcat`. Oracle records `b cat`. Exit 0 both ways.
-
-**Scope.** Four cases fail today — GenMet0, GenMet1, GenMet2, GenMet3, all under
-`ProjectFortress/other_compiler_tests/GenMet.test`. **Seven `.test` cases pin the
-behaviour** and they agree with each other: GenMet5, GenMet6 and GenMet8 expect
-`b cat\na 3\n`, so the space appears for `String ZZ32` juxtaposition as well, not
-only `String String`. The other three are currently *blocked* rather than
-failing, so fixing this without fixing them will move the count by four.
-
-**Diagnosis — settled from the legacy source, not inferred.**
-
-`ProjectFortress/LibraryBuiltin/CompilerBuiltin.fss:384` defines juxtaposition on
-the **compiler** path, which is the path `other_compiler_tests` exercises:
+The oracle gate found GenMet0-3 printing `bcat` where the `.test` records
+`b cat` — silent wrong output at exit 0, four cases, and seven `.test` cases pin
+the space (GenMet5/6/8 expect `b cat\na 3\n`, so it appears for `String ZZ32`
+too). Traced to primary source:
 
 ```
-opr juxtaposition(self, b:Object): String = self ||| b
-:410  opr |||(self, b:Object): JavaString = jSmartConcatenate(self, b.asString.asJavaString)
+ProjectFortress/LibraryBuiltin/CompilerBuiltin.fss:384
+    opr juxtaposition(self, b:Object): String = self ||| b
+:410  opr |||(self, b:Object) = jSmartConcatenate(...)
+nativeHelpers/simpleConcatenate.java:20
+    if s1 empty -> s2;  elif s2 empty -> s1;  else s1 + " " + s2
 ```
 
-and `jSmartConcatenate` is
-`ProjectFortress/src/com/sun/fortress/nativeHelpers/simpleConcatenate.java:20`:
+**This entry originally concluded: our shim is wrong, make it insert a space.
+That was wrong, and the reason it was wrong is a lesson about evidence class.**
 
-```java
-public static String nativeSmartConcatenate(String s1, String s2) {
-    if (s1.length() == 0) return s2;
-    else if (s2.length() == 0) return s1;
-    else return s1 + " " + s2;
-}
-```
+The two 1.0 libraries contradict each other — `CompilerBuiltin.fss:384` inserts
+a space, `Library/FortressLibrary.fss:4049` is plain `||` — and
+`juxtameaning.tex:103-110` does not decide between them: it only says a
+juxtaposition containing a `String` becomes an application of the
+`juxtaposition` operator, so the meaning is whatever the library declares.
 
-**So String juxtaposition is `|||`: space-inserting concatenation, with an
-exception for an empty operand on either side.** Our lowering
-(`crates/codegen/src/lib.rs:1586`) calls `concat_string_string`
-(`runtime/shims.c:558`), which is plain `s1 + s2` — that is `||`, not `|||`.
+**What decides it is how the corpus is WRITTEN, not what eight expectations
+record.** Counted independently here rather than taken on trust: same-line
+`println("LIT" ident)` sites, keywords excluded — **237 write a literal that
+ENDS WITH A SPACE against 93 that do not**, including tab-terminated ones like
+`println("Tolerance\t" errorTolerance)` and
+`println("Expect\t\t" expect)`. Those 237 are authored for **plain**
+concatenation; under the space-inserting rule every separator in them doubles.
+`println("FAIL: " d ": unexpected value " n " at " i)` reads correctly only
+under plain concatenation. The semantics lane counted 325 against 87 with a
+broader regex — different numbers, same ratio, same answer.
 
-**THE TRAP, AND IT IS WHY THIS ENTRY IS LONG.** The two 1.0 libraries
-**contradict each other** on this operator, and the one a reader will find first
-is the wrong one. `Library/FortressLibrary.fss:4047-4050` — the **interpreter**
-library — says:
+**237 sites of authored intent beat 8 recorded expectations from one test
+family.** The original recommendation weighed the oracle over the corpus because
+the oracle is what the gate reads, which is exactly the bias a gate author is
+prone to.
 
-```
-(** Right now for backward compatibility juxtaposition works like %||% **)
-opr juxtaposition(a:Any, self):String = (""||a) || self
-opr juxtaposition(self, b:String):String = self || b
-```
+**Consequence, and it is now enforced rather than noted.** The gate grew a third
+list, `tools/oracle-known-divergences.txt`, alongside the accepted-must-fail and
+known-signal lists. GenMet0-3 are `divergence`, not `fail`; `fail` is now exactly
+the 47 wrong acceptances; a line only goes in the list with a reason written
+here; and a listed case that stops disagreeing is reported so the line gets
+deleted. Numbers at `f81f41ace`: 285 pass, 47 fail, 4 divergence, 267 blocked,
+6 unmodelled.
 
-That is plain concatenation and it agrees with what we emit. **Do not "fix" the
-expectation to match it.** This is the same class as the `trait ZZ32`
-contradiction between `CompilerBuiltin.fsi:412` and `FortressLibrary.fsi:461`
-that gap analysis §2.7 records: two shipped libraries, two answers, and the
-compiler path is the one the `.test` oracle was produced from.
+**If it is ever revisited** the switch is one function — `fn concatenation` in
+`crates/types/src/lib.rs` — and it needs both empty-string carve-outs, which are
+load bearing: without them `"" x` gains a leading space.
 
-**Fix.**
-
-1. Add a space-inserting concatenation shim next to `concat_string_string` in
-   `runtime/shims.c`, mirroring `nativeSmartConcatenate` **including both
-   empty-operand guards** — those are not an optimisation, they are observable
-   (`"" juxt "x"` is `"x"`, not `" x"`).
-2. Point the juxtaposition lowering at it. Leave `concat_string_string` where it
-   is: it is `||`, which is a different operator and will need it when infix
-   `||` lands (see `SPIKE-OPEXPR`).
-3. Fixture with all four shapes: `String String`, `String ZZ32`, empty left,
-   empty right.
-
-**Acceptance.** `tools/oracle-gate.sh` moves pass 285 → 289 and fail 51 → 47,
-with the four GenMet cases leaving the fail bucket. **Raise `PASS_FLOOR` to 289
-in the same commit** or the ratchet stops guarding the win. Per the repo's own
-recorded lesson, verify with an **IR diff over the compiling set** as well as the
-exit-code count — a checker fix once moved 280 → 280 with zero list delta and
-only the IR diff showed the four real changes.
-
-**Do not generalise past the shim.** This is a builtin whose behaviour is
-currently hardcoded in the compiler. Once §2.7's builtin decision lands and
-`CompilerBuiltin.fss` supplies its own definition, this shim becomes the
-implementation *behind* that declaration. Making the shim match
-`nativeSmartConcatenate` byte for byte now is what makes that later handover a
-no-op.
-
----
+**And there is a real defect underneath it**, found by the semantics lane in the
+same file and not to be confused with this one: a **written-but-unsatisfiable
+bound on a method silently changes which implementation runs**. Method stamps
+record obligations with `speculative: Some(...)` (`mono.rs:263-268`) and a failed
+bound is answered by `prune_stamp`, never by an error — so in `GenMet0.fss`,
+pruning trait `b`'s override lets trait `a`'s win and the program exits 0 having
+called the wrong one. That one is open and it is theirs.
 
 ### DEF-2 — Three corpus binaries die on SIGSEGV
 
@@ -214,4 +182,5 @@ defects.
 | DEV-7 | **`NatReflect.reflect` is refused.** A `nat` static argument must be statically evaluable | **D7** | a corpus program needing a runtime-sized array type |
 | DEV-8 | **Distributions are cut** | **D8** | the cluster coming off the shelf |
 | DEV-9 | `io` inside `atomic` is a static error in 1.0 and compiles here | M5 | an `io` modifier landing |
+| DEV-11 | **String juxtaposition is plain concatenation.** The compiler path inserted a space; we follow the interpreter path, because 237 corpus sites write a space-terminated literal against 93 that do not | **DEF-1**, adjudicated by the semantics lane | a library-sourced `opr juxtaposition` once `CompilerBuiltin.fss` compiles — and then the two libraries' disagreement becomes a real decision, not a choice of default |
 | DEV-10 | `ProjectFortress/tests/XXXimmutable0.fss` is accepted — an immutable binding may shadow a mutable one | M5 exposed it | folded into the 47-file review above; decide with `XXXtypeParamShadowing`, they are separate edits |
