@@ -1997,6 +1997,8 @@ fn corpus(rel: &str) -> PathBuf {
         .join(rel)
 }
 
+/// Resolution is the default; the flag is passed anyway so these read as
+/// resolution tests rather than as ordinary compiles.
 fn resolve_output(rel: &str) -> Output {
     Command::new(env!("CARGO_BIN_EXE_fortressc"))
         .arg(corpus(rel))
@@ -2021,8 +2023,12 @@ fn a_type_declared_in_an_imported_api_is_in_scope() {
         "should compile with resolution:\n{}",
         String::from_utf8_lossy(&with.stderr)
     );
+    // Resolution is ON by default since phase 2, so the negative half of this
+    // test is what `--no-resolve-imports` is for: without it the assertion
+    // measures nothing.
     let without = Command::new(env!("CARGO_BIN_EXE_fortressc"))
         .arg(corpus(rel))
+        .arg("--no-resolve-imports")
         .arg("--emit-obj")
         .arg("-o")
         .arg("/dev/null")

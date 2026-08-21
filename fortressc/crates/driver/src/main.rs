@@ -32,7 +32,11 @@ fn parse_args(args: &[String]) -> Option<Options> {
     let mut source: Option<PathBuf> = None;
     let mut output: Option<PathBuf> = None;
     let mut emit_ir = false;
-    let mut resolve_imports = false;
+    // ON BY DEFAULT since phase 2. It costs seven api files that were reaching
+    // the terminus only because their imports were inert, and that is the
+    // decision: accuracy over inflation. `--no-resolve-imports` is what the
+    // census and the gates use to take the comparison.
+    let mut resolve_imports = true;
     let mut emit_obj = false;
     let mut cc = DEFAULT_CC.to_owned();
     let mut cpu = fortress_codegen::DEFAULT_CPU.to_owned();
@@ -43,6 +47,7 @@ fn parse_args(args: &[String]) -> Option<Options> {
             "-o" => output = Some(PathBuf::from(rest.next()?)),
             "--emit-ir" => emit_ir = true,
             "--resolve-imports" => resolve_imports = true,
+            "--no-resolve-imports" => resolve_imports = false,
             "--emit-obj" => emit_obj = true,
             "--cc" => cc = rest.next()?.clone(),
             "--target-cpu" => cpu = rest.next()?.clone(),
@@ -69,7 +74,7 @@ fn main() -> ExitCode {
     let Some(options) = parse_args(&args) else {
         eprintln!(
             "usage: fortressc <source.fss> [-o <output>] [--emit-ir] [--emit-obj] \
-             [--resolve-imports] \
+             [--no-resolve-imports] \
                   [--cc <driver>] [--target-cpu <{}>]",
             fortress_codegen::SUPPORTED_CPUS.join("|")
         );
