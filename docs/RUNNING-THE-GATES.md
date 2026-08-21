@@ -24,18 +24,17 @@ cp fortressc/target/debug/fortressc "$FORTRESSC"
 sha256sum "$FORTRESSC"          # record it; the reports print the first 12 chars
 ```
 
-**Only three scripts honour `FORTRESSC` today** — `api-census.sh`,
-`oracle-gate.sh` and `triage.sh`. The other ten hardcode
-`fortressc/target/debug/fortressc`:
+**Every script in `tools/` honours `FORTRESSC`** except `mpicc-in-image.sh`,
+which is a `cc` wrapper and never invokes the compiler. That rollout is done.
 
-```
-apply-gate  array-gate  atomic-gate  dispatch-gate  generics-gate
-memory-gate  mpi-gate  operator-gate  parallel-gate  unit-gate
-```
-
-So for those ten, pinning means **not rebuilding while they run**. Making them
-read `FORTRESSC` is one line each and it is queued; until then, a shared tree and
-a running gate do not mix.
+**But `FORTRESSC` and `--mutate` do not mix, and the gates now refuse the
+combination.** Every mutation rebuilds `fortressc/target/debug` with
+`cargo build --workspace`; if `FORTRESSC` points at a pinned binary, the
+mutation rebuilds one compiler and the gate reads a different one, so the
+mutation has no effect, the assertion holds, and the table reports a **clean
+escape**. The nine gates whose mutations rebuild carry
+`mutate_needs_the_built_compiler` and exit 2 with an explanation. Unset
+`FORTRESSC` before `--mutate`; pin it for everything else.
 
 ### RULE 2 — KEEP THE PIN OUTSIDE `fortressc/build/`.
 
@@ -111,12 +110,19 @@ done
 |---|---|---|
 | `triage.sh` | corpus sweep and the root-cause map. `--real` 1570, `--conformance` 1846, `--reuse` reads the cache | the compile count |
 | `api-census.sh` | where every census-set file stops, per file | none — it is the measuring stick |
-| `oracle-gate.sh` | the `.test` files as the oracle of record; links and runs every compiling corpus file | `PASS_FLOOR`, `oracle-accepted-must-fail.txt`, `oracle-known-signals.txt` |
+| `oracle-gate.sh` | the `.test` files as the oracle of record; links and runs every compiling corpus file | `PASS_FLOOR`, `oracle-accepted-must-fail.txt`, `oracle-known-signals.txt`, `oracle-known-divergences.txt` |
+| `api-conformance.sh` | the component-satisfies-api **ladder** (L0 unpaired → L4 conformant); it probes for an api check mode so it arms itself when one lands | none yet — it is the Group 2 baseline |
 
 **Then the feature gates**, which need a linking C compiler:
 
 ```
 apply-gate      juxtaposition as application, chained comparison, COMPILE_FLOOR
+arith-gate      integer division, and what it refuses
+control-flow-gate  case, typecase, label/exit, and the atomic-rollback obligation
+phase7-gate     the parallel reduction and ZZ64 past 2^31
+tuple-gate      the tuple REFUSAL. Tuples are NOT implemented; this gate pins
+                that they are refused cleanly at every position, and it is MEANT
+                to go red the day they land
 array-gate      arrays, bounds, the loop, and what the collector sees
 atomic-gate     atomic blocks and parallel reductions
 dispatch-gate   symmetric whole-program dispatch
@@ -136,8 +142,8 @@ mpi-gate        the MPI link and four real ranks -- needs the Apptainer image
 
 ## 3. Mutation tables
 
-Seven gates take `--mutate`: `apply`, `atomic`, `dispatch`, `generics`,
-`operator`, `parallel`, `oracle`. **A gate is not trusted until it has refused**,
+Ten gates take `--mutate`: `apply`, `arith`, `atomic`, `control-flow`,
+`dispatch`, `generics`, `operator`, `parallel`, `phase7`, `oracle`. **A gate is not trusted until it has refused**,
 so a green result is evidence only when the matching mutation table has run and
 its numbers are stated.
 
@@ -156,14 +162,14 @@ pattern must match exactly once, and formatting moves lines.
 1. **A mutation script restores from HEAD, not from the index.** Restoring from
    the index faithfully restores a defect if anything stages mid-run, and the
    worktree and the index then agree with each other while both are wrong.
-   Commit before mutating. **All seven tables enforce this**: each opens with a
+   Commit before mutating. **Every table enforces this**: each opens with a
    `git diff --quiet HEAD -- <paths>` guard and refuses on a dirty tree, and each
    restores with `git checkout HEAD -- <file>`.
 2. **A mutation whose pattern does not match is a mutation that never happened,
-   and it reports as a clean escape.** All seven tables guard against it, in two
-   different ways because they mutate in two different ways. The six literal
+   and it reports as a clean escape.** Every table guards against it, in two
+   different ways because they mutate in two different ways. The literal
    `from`/`to` tables count occurrences of `from` and refuse unless there is
-   **exactly one** (`apply-gate.sh:248`, and the same shape in the other five).
+   **exactly one** (`apply-gate.sh:248`, and the same shape elsewhere).
    `oracle-gate.sh` mutates with `sed` expressions, where there is no `from`
    string to count, so its `apply()` md5s the file before and after and treats a
    no-op as a hard error. Two of oracle-gate's six escaped on their first run
@@ -172,6 +178,14 @@ pattern must match exactly once, and formatting moves lines.
    a target that currently **passes**.
 4. **A mutation table split on `IFS='|'` cannot carry a `|`.** Anything about
    bars, enclosers or `||` has to use a different separator, or functions.
+   `control-flow-gate.sh` keeps the `IFS='|'` shape and every one of its five
+   mutations is pipe-free by construction; check that before adding a sixth.
+4b. **"Caught" means the assertion stops holding — NOT that the fixture now
+   compiles.** Two of `control-flow-gate`'s guards are load bearing for codegen
+   as well as for the diagnostic, so removing them yields **exit 70**, an
+   internal error, rather than exit 0. The gate's `refused_cleanly` accepts only
+   exit 1, so it goes red on 70 too. A mutate check written as `rc -eq 0`
+   reported both as escapes; write it `rc -ne 1`.
 5. **A gate that compiles `runtime/shims.c` has its own link line**, and every
    link takes `-lgc` **and** `-lm`.
 6. **`nm ... | grep -q` under `set -o pipefail` reports failure when it
