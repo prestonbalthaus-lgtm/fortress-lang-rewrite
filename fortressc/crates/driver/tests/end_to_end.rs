@@ -1435,3 +1435,32 @@ fn widen_reaches_every_widening_the_advice_recommends() {
         "an integer widening is still a sext:\n{ir}"
     );
 }
+
+/// A file with two complete components compiled at exit 0 and the second one
+/// was gone. Only UNLEXABLE trailing text was caught, and the lexer caught that.
+#[test]
+fn nothing_may_follow_the_components_closing_end() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture("badtrailingcomponent.fss"))
+        .arg("--emit-ir")
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{message}");
+    assert!(
+        message.contains("end of file after the component"),
+        "{message}"
+    );
+}
+
+/// `aggregate.tex:120-121`: `RectSeparator ::= ';'+ | Whitespace`. A
+/// whitespace-separated run was swallowed as one juxtaposition, so `[1 2 3]`
+/// was ONE element holding 6. 128 corpus sites write the juxtaposed spelling.
+#[test]
+fn a_juxtaposed_array_literal_has_one_element_per_operand() {
+    let binary = compile_fixture("arrayjuxtaposed.fss", "arrayjuxtaposed");
+    let out = run(&binary);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "3\n1\n3\n3\n4\n8\n");
+    let _ = std::fs::remove_file(&binary);
+}

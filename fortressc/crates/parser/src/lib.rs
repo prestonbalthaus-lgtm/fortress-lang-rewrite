@@ -296,6 +296,23 @@ impl<'t, 'a> Parser<'t, 'a> {
         } else {
             self.expect(&Kind::KwEnd, "`end`")?.span
         };
+        // Everything after the closing `end` used to be SILENTLY DISCARDED,
+        // including a whole second component: two complete components in one
+        // file compiled at exit 0 and the second one was gone. Only UNLEXABLE
+        // trailing text was caught, and the lexer caught that, not this.
+        // `Compilation.rats` has one compilation unit per file.
+        self.skip_newlines();
+        if !self.at_eof() {
+            // Two different mistakes reach here and the diagnostic names which:
+            // a spare `end` is an unmatched delimiter, which is exactly what the
+            // legacy implementation called it in XXX0e/XXX0u/XXX1c.test; anything
+            // else is a second compilation unit in a file that has room for one.
+            return Err(self.error(if self.at(&Kind::KwEnd) {
+                "end of file; this `end` closes nothing"
+            } else {
+                "end of file after the component's `end`"
+            }));
+        }
         Ok(Component {
             name,
             exports,
@@ -1747,7 +1764,23 @@ impl<'t, 'a> Parser<'t, 'a> {
         self.skip_newlines();
         if !self.at(&Kind::RBracket) {
             loop {
-                items.push(self.expr()?);
+                // `aggregate.tex:120-121` separates elements by whitespace:
+                // `RectSeparator ::= ';'+ | Whitespace`. `self.expr()` swallows
+                // a whitespace-separated run as one juxtaposition, so `[1 2 3]`
+                // used to be ONE element holding 6. 128 corpus sites over 65
+                // files write the juxtaposed spelling.
+                //
+                // Split after the fact rather than by suppressing juxtaposition
+                // inside the brackets: the flag version needs five save/restore
+                // sites and buys nothing. It does NOT see a run buried under an
+                // infix operator -- `[a b + c d]` is one Infix over two Juxts --
+                // and a newline inside the brackets is still eaten rather than
+                // read as a row separator. Both are open, and both are
+                // multi-dimensional-array questions rather than this one.
+                match self.expr()? {
+                    Expr::Juxt { items: run, .. } => items.extend(run),
+                    single => items.push(single),
+                }
                 self.skip_newlines();
                 if !self.at(&Kind::Comma) {
                     break;

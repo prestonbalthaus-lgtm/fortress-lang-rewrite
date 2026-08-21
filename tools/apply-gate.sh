@@ -48,7 +48,19 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # 291 at the M6 declaration parser: +6 for modifiers, continuation-line topology
 # clauses and `comprises { ... }`, zero lost, and every one of the 285 that
 # compiled at the opr spike emits byte-identical IR.
-COMPILE_FLOOR=290
+# 2026-08-21, the semantics pass: 291 -> 288 and the floor from 290 to 287,
+# and the count went DOWN because the metric got HONEST. Everything after the
+# component's closing `end` used to be silently discarded, so three files with a
+# spare trailing `end` compiled. All three are must-FAIL tests and the legacy
+# implementation's exact expected error is on disk for each of them:
+#   Compiled0.e.fss  XXX0e.test  `Unmatched delimiter "end".` at 18:1-3
+#   Compiled0.u.fss  XXX0u.test  same, at 15:1-3
+#   Compiled1.c.fss  XXX1c.test  same, at 19:1-3
+# The floor stays ONE below the count for the same reason it always has --
+# XXXimmutable0.fss is a must-FAIL negative test we still accept, and refusing
+# it properly must not break this floor. That single unit of slack is spoken
+# for; it was not spent here.
+COMPILE_FLOOR=287
 
 passed=0
 failed=0
