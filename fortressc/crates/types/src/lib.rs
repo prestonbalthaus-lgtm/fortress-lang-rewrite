@@ -3415,6 +3415,39 @@ impl Checker {
     /// String juxtaposition. Non-string operands get an explicit `to_string_*`
     /// target: that is what concatenation is defined to do, and it is not a
     /// widening, so it does not violate the no-implicit-conversion rule.
+    /// `a || b` with no declaration in scope. Exactly two operands, at least
+    /// one of them a String -- the library declares `||` on String and nowhere
+    /// else, so `3 || 4` is not concatenation and must not silently become
+    /// `"34"`.
+    fn builtin_concat(
+        &mut self,
+        args: &[Expr],
+        span: Span,
+        expected: Option<Type>,
+    ) -> Checked<TypedExpr> {
+        let [left, right] = args else {
+            return Err(TypeError::ArityMismatch {
+                span,
+                name: "||".to_owned(),
+                expected: 2,
+                found: args.len(),
+            });
+        };
+        let has_string = [left, right]
+            .iter()
+            .map(|e| self.expr(e, None))
+            .collect::<Checked<Vec<_>>>()?
+            .iter()
+            .any(|t| t.ty == Type::String);
+        if !has_string {
+            return Err(TypeError::UnknownName {
+                span,
+                name: "||".to_owned(),
+            });
+        }
+        self.concatenation(args, span, expected)
+    }
+
     fn concatenation(
         &mut self,
         items: &[Expr],
@@ -3513,6 +3546,29 @@ impl Checker {
 
         if let Some(op) = MpiOp::from_name(name) {
             return self.mpi(op, args, span, expected);
+        }
+        // `||` IS THE ONE BUILTIN A USER DECLARATION BEATS, and the inversion
+        // is deliberate rather than an oversight.
+        //
+        // Every other builtin below keeps precedence over user declarations --
+        // a function named `println` is unreachable. `||` cannot work that way:
+        // it is not a keyword, it is an ORDINARY OPERATOR DECLARED IN THE
+        // LIBRARY (`FortressLibrary.fss:4020`, `opr ||(self, b:String)`), and a
+        // program that declares its own `opr ||` compiles and runs today. A
+        // naive builtin arm would silently take that call away.
+        //
+        // So the builtin is the FALLBACK: String concatenation for the 20
+        // oracle cases whose `||` reaches no declaration because String is a
+        // builtin here and the library's `||` is a method on it. Functional
+        // methods lift into `self.functions`, so a locally declared
+        // `opr ||(self, b:String)` is covered by the same test as a top-level
+        // `opr ||(a, b)`.
+        //
+        // PLAIN concatenation, per the 2026-08-21 juxtaposition ruling -- the
+        // library's own `||` is `self || b` with no separator, and the
+        // space-inserting `|||` is a different operator.
+        if name == "||" && !self.functions.contains_key("||") {
+            return self.builtin_concat(args, span, expected);
         }
         // The builtins keep precedence over user declarations, exactly as
         // before M3c; a user function named `println` is unreachable.

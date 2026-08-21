@@ -1,0 +1,6 @@
+component badconcatbar
+export Executable
+(* Neither side is a String, and nothing declares `||`. The library declares it
+   on String and nowhere else, so this must not silently become "34". *)
+run():() = println(3 || 4)
+end

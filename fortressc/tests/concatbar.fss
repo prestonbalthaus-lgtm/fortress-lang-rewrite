@@ -1,0 +1,7 @@
+component concatbar
+export Executable
+run():() = do
+  println("a" || "b")
+  println("count = " || 7)
+end
+end

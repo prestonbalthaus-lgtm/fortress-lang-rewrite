@@ -1,0 +1,7 @@
+component badsubscriptvalue
+export Executable
+trait T
+  opr[i:ZZ32]:=(v:ZZ32, w:ZZ32): ()
+end
+run():() = ()
+end

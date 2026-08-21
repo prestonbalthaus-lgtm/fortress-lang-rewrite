@@ -1,0 +1,10 @@
+component concatbarlocal
+export Executable
+
+(* A DECLARED `||` WINS over the builtin. Every other builtin shadows a user
+   declaration; this one is the inversion, because `||` is an ordinary library
+   operator and not a keyword. *)
+opr ||(a: ZZ32, b: ZZ32): ZZ32 = a + b
+
+run():() = println(3 || 4)
+end

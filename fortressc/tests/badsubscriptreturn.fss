@@ -1,0 +1,7 @@
+component badsubscriptreturn
+export Executable
+trait T
+  opr[i:ZZ32]:=(v:String): ZZ32
+end
+run():() = ()
+end

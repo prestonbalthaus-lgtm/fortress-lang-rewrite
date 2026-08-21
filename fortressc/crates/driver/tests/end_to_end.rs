@@ -2104,6 +2104,130 @@ fn a_for_loop_over_something_that_is_not_an_array_is_refused() {
     assert!(message.contains("expected an array"), "{message}");
 }
 
+// ------------------------------------------ operator declarations (SPIKE-OPEXPR)
+//
+// THE BOOTSTRAP ROOT'S TWO WALLS. `Library/FortressLibrary.fsi` died at byte
+// 44522 on a subscripted assignment and then at 79037 on a postfix declaration;
+// with both of these it parses in full.
+
+/// `subscripting.tex:44-54`. Every spacing the corpus writes, multiple indices,
+/// an `_` index name and the `abstract` prefix -- and the GET and the SET
+/// coexisting, which is what the `:=` in the member NAME is for.
+#[test]
+fn every_subscripted_assignment_shape_the_corpus_writes_parses() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture("oprsubscriptdecl.fsi"))
+        .arg("--emit-obj")
+        .arg("-o")
+        .arg("/dev/null")
+        .output()
+        .expect("could not run fortressc");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// A postfix DECLARATION has no trailing parameter list.
+#[test]
+fn a_postfix_operator_declaration_parses() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture("oprpostfixdecl.fsi"))
+        .arg("--emit-obj")
+        .arg("-o")
+        .arg("/dev/null")
+        .output()
+        .expect("could not run fortressc");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// AND THE ROOT ITSELF, by path. This is the one assertion that says the
+/// milestone happened: the file the whole bootstrap depends on is READ.
+/// It does not CHECK -- the shipped library extends its own open-`comprises`
+/// trait -- and `resolve()` needs an api to parse, not to check.
+#[test]
+fn the_bootstrap_root_parses_in_full() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(corpus("Library/FortressLibrary.fsi"))
+        .arg("--emit-obj")
+        .arg("-o")
+        .arg("/dev/null")
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !message.contains("expected"),
+        "FortressLibrary.fsi must not fail to PARSE: {message}"
+    );
+    assert!(
+        message.contains("`comprises` clause is open"),
+        "the remaining blocker should be the library's own comprises defect: {message}"
+    );
+}
+
+/// `subscripting.tex:53-54` -- a result type may appear "but it must be ()".
+/// WITHOUT THIS, Compiled5.az.fss became a new must-fail acceptance the moment
+/// the form parsed. The gate caught it; review did not.
+#[test]
+fn a_subscripted_assignment_with_a_non_unit_result_is_refused() {
+    let message = refusal("badsubscriptreturn.fss");
+    assert!(
+        message.contains("if a result type is given it must be `()`"),
+        "{message}"
+    );
+}
+
+/// Same section, :47-49 -- exactly one value parameter after `:=`.
+#[test]
+fn a_subscripted_assignment_with_two_values_is_refused() {
+    let message = refusal("badsubscriptvalue.fss");
+    assert!(
+        message.contains("takes exactly one value parameter after `:=`"),
+        "{message}"
+    );
+}
+
+// ------------------------------------------------------------- `||`, and only `||`
+//
+// The one builtin a USER DECLARATION BEATS. Every other builtin shadows a
+// declaration of its name; `||` is an ordinary library operator
+// (`FortressLibrary.fss:4020`) and not a keyword, and a program declaring its
+// own compiles and runs. Both directions are asserted because a naive builtin
+// arm passes the first and silently breaks the second.
+
+/// The fallback: PLAIN concatenation, per the 2026-08-21 juxtaposition ruling.
+#[test]
+fn an_undeclared_bar_bar_concatenates_strings() {
+    let binary = compile_fixture("concatbar.fss", "concatbar");
+    let out = run(&binary);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "ab\ncount = 7\n");
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// AND THE INVERSION.
+#[test]
+fn a_declared_bar_bar_wins_over_the_builtin() {
+    let binary = compile_fixture("concatbarlocal.fss", "concatbarlocal");
+    let out = run(&binary);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "7\n");
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// Neither side a String and nothing declared: the library declares `||` on
+/// String and nowhere else, so this must not silently become "34".
+#[test]
+fn bar_bar_on_two_numbers_is_refused() {
+    let message = refusal("badconcatbar.fss");
+    assert!(message.contains("unknown name `||`"), "{message}");
+}
+
 // ------------------------------------------------------- `nat`/`int`/`bool`
 //
 // D7 §3.1. A value static parameter is substituted with a NUMBER, and the
