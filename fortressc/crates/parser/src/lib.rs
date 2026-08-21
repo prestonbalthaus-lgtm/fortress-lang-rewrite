@@ -1748,6 +1748,7 @@ impl<'t, 'a> Parser<'t, 'a> {
             Kind::Reserved("typecase") => self.typecase_expr(),
             Kind::Reserved("label") => self.label_expr(),
             Kind::Reserved("exit") => self.exit_expr(),
+            Kind::Reserved("fn") => self.lambda_expr(),
             Kind::Reserved(word) => Err(ParseError::ReservedWord {
                 span,
                 word: (*word).to_owned(),
@@ -1983,6 +1984,52 @@ impl<'t, 'a> Parser<'t, 'a> {
                 items: vec![other],
                 span: Span::new(start.start, end.end),
             },
+        })
+    }
+
+    /// `fn (x: T): R => e`, and `fn (x: T) => e`. The parenthesised,
+    /// TYPE-ANNOTATED parameter list only.
+    ///
+    /// The corpus also writes `fn n => e` and `fn(a,b) => e` with no types at
+    /// all, and those are refused by name rather than guessed at: the types
+    /// would have to come from the arrow the lambda lands in, which is a
+    /// checker fact and this is the parser. The diagnostic says so.
+    fn lambda_expr(&mut self) -> Parsed<Expr> {
+        let start = self.span_here();
+        self.pos += 1; // `fn`
+        self.skip_newlines();
+        if !self.at(&Kind::LParen) {
+            return Err(ParseError::LambdaFormUnsupported {
+                span: Span::new(start.start, self.span_here().end),
+                form: "a parameter with no parentheses",
+            });
+        }
+        self.pos += 1;
+        // `params` requires `name: Type` for every parameter, which is exactly
+        // the subset this lowering can mint an object for.
+        let params = self
+            .params()
+            .map_err(|_| ParseError::LambdaFormUnsupported {
+                span: Span::new(start.start, self.span_here().end),
+                form: "a parameter without a written type",
+            })?;
+        self.expect(&Kind::RParen, "`)`")?;
+        let return_type = if self.at(&Kind::Colon) {
+            self.pos += 1;
+            Some(self.type_ref()?)
+        } else {
+            None
+        };
+        self.skip_newlines();
+        self.expect(&Kind::FatArrow, "`=>`")?;
+        self.skip_newlines();
+        let body = self.expr()?;
+        let span = Span::new(start.start, body.span().end);
+        Ok(Expr::Lambda {
+            params,
+            return_type,
+            body: Box::new(body),
+            span,
         })
     }
 

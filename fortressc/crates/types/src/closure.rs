@@ -56,6 +56,7 @@ pub(crate) fn lower(component: &Component) -> Result<Component, TypeError> {
         traits: BTreeMap::new(),
         objects: BTreeMap::new(),
         known: BUILTIN_TYPES.iter().map(|s| (*s).to_owned()).collect(),
+        lambdas: 0,
     };
     for decl in &component.decls {
         match decl {
@@ -72,9 +73,10 @@ pub(crate) fn lower(component: &Component) -> Result<Component, TypeError> {
             }
         }
     }
-    if !pass.uses_arrows(component) {
-        return Ok(component.clone());
-    }
+    // Unconditional. A precheck for "does this component write an arrow" was
+    // wrong twice over: a `fn` needs lowering with no arrow written anywhere in
+    // the file, and a component that needs nothing is walked and returned
+    // unchanged for a cost the sweep cannot measure.
     pass.run(component)
 }
 
@@ -100,10 +102,17 @@ struct Pass {
     /// declaration order and declaration order has to be a fact about the
     /// source rather than about a hash.
     traits: BTreeMap<ArrowKey, ArrowTrait>,
-    /// `(function name, arrow)` to the object minted for it.
+    /// `(what it came from, arrow)` to the object minted for it. For a named
+    /// function that is the function's name, so two sites sharing a function
+    /// and an arrow share a tag; for a lambda it is the generated name, which
+    /// is unique per site, because two identical lambdas at two sites are two
+    /// closures.
     objects: BTreeMap<(String, ArrowKey), ObjectDecl>,
     /// Every type name this component declares, plus the builtins.
     known: BTreeSet<String>,
+    /// Numbers the objects minted for anonymous functions. A lambda has no name
+    /// to key on, and two identical ones at different sites are two closures.
+    lambdas: usize,
 }
 
 struct ArrowTrait {
@@ -124,23 +133,6 @@ fn arrow_key(from: &TypeRef, to: &TypeRef) -> ArrowKey {
 }
 
 impl Pass {
-    /// A cheap precheck. A component with no arrow anywhere is returned
-    /// untouched and emits byte-identical IR, which is what keeps the corpus
-    /// number and every existing gate exactly where they were.
-    fn uses_arrows(&self, component: &Component) -> bool {
-        component.decls.iter().any(|d| match d {
-            Decl::Function(f) => {
-                f.params.iter().any(|p| is_arrow(&p.ty))
-                    || f.return_type.as_ref().is_some_and(is_arrow)
-            }
-            Decl::Trait(t) => t.members.iter().any(member_uses_arrow),
-            Decl::Object(o) => {
-                o.params.iter().flatten().any(|p| is_arrow(&p.ty))
-                    || o.members.iter().any(member_uses_arrow)
-            }
-        })
-    }
-
     fn run(&mut self, component: &Component) -> Result<Component, TypeError> {
         // Pass one: every arrow that appears in a signature mints its trait.
         // Signatures only -- a local binding takes its type from its
@@ -336,6 +328,174 @@ impl Pass {
         }
     }
 
+    /// `fn (x: T): R => e`, lowered to a generated object whose CONSTRUCTOR
+    /// PARAMETERS are the names the body captures.
+    ///
+    /// That choice is what makes the body need no rewriting at all: a dotted
+    /// method reads its receiver's fields by their own spelling, so `k` inside
+    /// `apply` resolves to the field `k` exactly as it resolved to the
+    /// enclosing local before. No environment struct, no fat pointer, and
+    /// nothing in codegen that did not already exist.
+    ///
+    /// FOUR THINGS ARE REFUSED BY NAME rather than guessed at, and each is a
+    /// boundary rather than an oversight:
+    ///   * more than one parameter -- the arrow would be `(A, B) -> C`, a tuple
+    ///     domain, which is unliftable until composite types are real;
+    ///   * no return type and no arrow to take one from;
+    ///   * a captured name with no written type, because a constructor
+    ///     parameter needs one and inventing it is how a wrong type gets in;
+    ///   * capturing `self`, because the generated object's own `apply` binds
+    ///     `self` to the closure and the capture would be silently shadowed.
+    fn lambda(
+        &mut self,
+        e: &mut Expr,
+        wanted: Option<&ArrowKey>,
+        scope: &mut Scope,
+    ) -> Result<(), TypeError> {
+        let Expr::Lambda {
+            params,
+            return_type,
+            body,
+            span,
+        } = e
+        else {
+            return Ok(());
+        };
+        let span = *span;
+        let [param] = params.as_slice() else {
+            return Err(TypeError::LambdaUnsupported {
+                span,
+                form: "a lambda with a parameter list that is not exactly one parameter",
+            });
+        };
+        let mut param = param.clone();
+        self.rewrite_type(&mut param.ty);
+
+        // The arrow, from the written return type or from the slot the lambda
+        // lands in. Those are the only two sources; there is no inference here.
+        let (from, to) = match (return_type.as_ref(), wanted) {
+            (Some(r), _) => {
+                let mut r = r.clone();
+                self.rewrite_type(&mut r);
+                (param.ty.clone(), r)
+            }
+            (None, Some(key)) => {
+                let arrow = self.traits.get(key).ok_or(TypeError::LambdaUnsupported {
+                    span,
+                    form: "a lambda whose arrow is not known here",
+                })?;
+                (arrow.from.clone(), arrow.to.clone())
+            }
+            (None, None) => {
+                return Err(TypeError::LambdaUnsupported {
+                    span,
+                    form: "a lambda with no return type, in a position that does not supply one",
+                })
+            }
+        };
+        if !self.liftable(&from) || !self.liftable(&to) {
+            return Err(TypeError::LambdaUnsupported {
+                span,
+                form: "a lambda over a type this subset cannot store",
+            });
+        }
+        let mut arrow_ref = TypeRef::Arrow {
+            from: Box::new(from.clone()),
+            to: Box::new(to.clone()),
+            span,
+        };
+        self.rewrite_type(&mut arrow_ref);
+        let TypeRef::Named {
+            name: trait_name, ..
+        } = &arrow_ref
+        else {
+            return Err(TypeError::LambdaUnsupported {
+                span,
+                form: "a lambda over a type this subset cannot store",
+            });
+        };
+        let trait_name = trait_name.clone();
+        let key = arrow_key(&from, &to);
+
+        // The body is lowered FIRST, in the lambda's own scope, so a nested
+        // lambda has already become a construction by the time its captures are
+        // counted as free names of this one.
+        let mut lowered = (**body).clone();
+        scope.push();
+        scope.declare(&param.name, &param.ty);
+        let walked = self.rewrite_expr(&mut lowered, scope);
+        scope.pop();
+        walked?;
+
+        let mut free: BTreeSet<String> = BTreeSet::new();
+        free_names(
+            &lowered,
+            &mut vec![[param.name.clone()].into_iter().collect()],
+            &mut free,
+        );
+        let mut captures: Vec<Param> = Vec::new();
+        for name in free {
+            if name == "self" {
+                return Err(TypeError::LambdaCaptureUntyped { span, name });
+            }
+            let Some(slot) = scope.get(&name) else {
+                // Not a local: a top-level function, an object, or a builtin.
+                // Those are reachable from inside `apply` unchanged.
+                continue;
+            };
+            let Some(ty) = slot.ty.clone() else {
+                return Err(TypeError::LambdaCaptureUntyped { span, name });
+            };
+            captures.push(Param { name, ty, span });
+        }
+
+        let index = self.lambdas;
+        self.lambdas = self.lambdas.saturating_add(1);
+        let object_name = format!("fn${index}${trait_name}");
+        let object = ObjectDecl {
+            modifiers: Modifiers::default(),
+            name: object_name.clone(),
+            static_params: Vec::new(),
+            params: Some(captures.clone()),
+            extends: vec![TypeRef::Named {
+                name: trait_name,
+                args: Vec::new(),
+                span,
+            }],
+            comprises: Vec::new(),
+            excludes: Vec::new(),
+            members: vec![Member::Method(MethodDecl {
+                modifiers: Modifiers::default(),
+                name: APPLY.to_owned(),
+                static_params: Vec::new(),
+                params: vec![Param {
+                    name: param.name.clone(),
+                    ty: from,
+                    span,
+                }],
+                return_type: Some(to),
+                body: Some(lowered),
+                accessor: false,
+                span,
+            })],
+            span,
+        };
+        self.objects.insert((object_name.clone(), key), object);
+
+        *e = Expr::Call {
+            callee: Box::new(Expr::Var {
+                name: object_name,
+                span,
+            }),
+            args: captures
+                .into_iter()
+                .map(|c| Expr::Var { name: c.name, span })
+                .collect(),
+            span,
+        };
+        Ok(())
+    }
+
     /// The object for `name` seen at arrow `key`. Minted once per pair: two
     /// call sites handing the same function to the same arrow share a tag.
     fn object_for(&mut self, name: &str, key: &ArrowKey, span: Span) -> Result<String, TypeError> {
@@ -491,6 +651,13 @@ impl Pass {
                             continue;
                         }
                     }
+                    // A lambda in an argument slot takes its return type from
+                    // the arrow the slot declares, which is the only place an
+                    // unannotated one can come from.
+                    if matches!(arg, Expr::Lambda { .. }) {
+                        self.lambda(arg, slot, scope)?;
+                        continue;
+                    }
                     self.rewrite_expr(arg, scope)?;
                 }
                 let _ = span;
@@ -587,6 +754,10 @@ impl Pass {
                 self.rewrite_expr(else_arm, scope)
             }
             Expr::Label { body, .. } => self.rewrite_expr(body, scope),
+            // A lambda in a position that does not say what arrow it is. The
+            // written return type is the only other source, and `lambda` is
+            // where that is decided.
+            Expr::Lambda { .. } => self.lambda(e, None, scope),
             Expr::Exit { value, .. } => match value {
                 Some(e) => self.rewrite_expr(e, scope),
                 None => Ok(()),
@@ -653,10 +824,9 @@ impl Pass {
     /// diagnostic it has -- this pass never guesses a type.
     fn arrow_of(&self, e: &Expr, scope: &Scope) -> Option<String> {
         match e {
-            Expr::Var { name, .. } => match scope.get(name) {
-                Some(Slot::Arrow(trait_name)) => Some(trait_name.clone()),
-                _ => None,
-            },
+            Expr::Var { name, .. } => scope
+                .get(name)
+                .and_then(|s| s.arrow().map(ToOwned::to_owned)),
             Expr::Call { callee, args, .. } => {
                 let Expr::Var { name, .. } = callee.as_ref() else {
                     return None;
@@ -724,32 +894,162 @@ impl Pass {
     }
 }
 
-fn is_arrow(t: &TypeRef) -> bool {
-    match t {
-        TypeRef::Arrow { .. } => true,
-        TypeRef::Named { args, .. } => args.iter().any(is_arrow),
-        TypeRef::Tuple { elems, .. } => elems.iter().any(is_arrow),
-        TypeRef::Unit { .. } => false,
-    }
-}
-
-fn member_uses_arrow(m: &Member) -> bool {
-    match m {
-        Member::Field(f) => is_arrow(&f.ty),
-        Member::Method(m) => {
-            m.params.iter().any(|p| is_arrow(&p.ty)) || m.return_type.as_ref().is_some_and(is_arrow)
+/// Every name an expression READS that is not bound inside it. `bound` is the
+/// stack of names the lambda itself introduces; anything else that is a `Var`
+/// is a free name, and the caller decides which of those are captures and which
+/// are top-level declarations.
+///
+/// Conservative on purpose: a name that is only a callee (`f(x)`) is collected
+/// too, and the caller drops it when the scope does not hold it.
+fn free_names(e: &Expr, bound: &mut Vec<BTreeSet<String>>, out: &mut BTreeSet<String>) {
+    let is_bound = |bound: &Vec<BTreeSet<String>>, n: &str| bound.iter().any(|f| f.contains(n));
+    match e {
+        Expr::Var { name, .. } => {
+            if !is_bound(bound, name) {
+                out.insert(name.clone());
+            }
+        }
+        Expr::Unit { .. }
+        | Expr::IntLit { .. }
+        | Expr::FloatLit { .. }
+        | Expr::StrLit { .. }
+        | Expr::BoolLit { .. } => {}
+        Expr::Tuple { items, .. } | Expr::Juxt { items, .. } | Expr::ArrayLit { items, .. } => {
+            for i in items {
+                free_names(i, bound, out);
+            }
+        }
+        Expr::Infix { lhs, rhs, .. } => {
+            free_names(lhs, bound, out);
+            free_names(rhs, bound, out);
+        }
+        Expr::Prefix { operand, .. } => free_names(operand, bound, out),
+        Expr::Call { callee, args, .. } => {
+            free_names(callee, bound, out);
+            for a in args {
+                free_names(a, bound, out);
+            }
+        }
+        Expr::If {
+            cond,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            free_names(cond, bound, out);
+            free_names(then_branch, bound, out);
+            if let Some(e) = else_branch {
+                free_names(e, bound, out);
+            }
+        }
+        Expr::Block { items, .. } => {
+            bound.push(BTreeSet::new());
+            for item in items {
+                match item {
+                    BlockItem::Binding(b) => {
+                        free_names(&b.value, bound, out);
+                        if let Some(frame) = bound.last_mut() {
+                            frame.insert(b.name.clone());
+                        }
+                    }
+                    BlockItem::Assign(a) => {
+                        free_names(&a.target, bound, out);
+                        free_names(&a.value, bound, out);
+                    }
+                    BlockItem::Expr(e) => free_names(e, bound, out),
+                }
+            }
+            bound.pop();
+        }
+        Expr::Index { base, index, .. } => {
+            free_names(base, bound, out);
+            free_names(index, bound, out);
+        }
+        Expr::While { cond, body, .. } => {
+            free_names(cond, bound, out);
+            free_names(body, bound, out);
+        }
+        Expr::Field { base, .. } => free_names(base, bound, out),
+        Expr::For {
+            binder,
+            lo,
+            hi,
+            body,
+            ..
+        } => {
+            free_names(lo, bound, out);
+            free_names(hi, bound, out);
+            bound.push([binder.clone()].into_iter().collect());
+            free_names(body, bound, out);
+            bound.pop();
+        }
+        Expr::Instantiate { callee, .. } => free_names(callee, bound, out),
+        Expr::Atomic { body, .. } => free_names(body, bound, out),
+        Expr::Case {
+            subject,
+            arms,
+            else_arm,
+            ..
+        } => {
+            free_names(subject, bound, out);
+            for a in arms {
+                free_names(&a.guard, bound, out);
+                free_names(&a.body, bound, out);
+            }
+            if let Some(e) = else_arm {
+                free_names(e, bound, out);
+            }
+        }
+        Expr::TypeCase {
+            subject,
+            arms,
+            else_arm,
+            ..
+        } => {
+            free_names(subject, bound, out);
+            for a in arms {
+                bound.push(a.binder.iter().cloned().collect());
+                free_names(&a.body, bound, out);
+                bound.pop();
+            }
+            free_names(else_arm, bound, out);
+        }
+        Expr::Label { body, .. } => free_names(body, bound, out),
+        Expr::Exit { value, .. } => {
+            if let Some(e) = value {
+                free_names(e, bound, out);
+            }
+        }
+        // A nested lambda has already been lowered into a construction by the
+        // time this runs, so this arm is only reached if one was left; treat
+        // its parameters as bound and its body as read.
+        Expr::Lambda { params, body, .. } => {
+            bound.push(params.iter().map(|p| p.name.clone()).collect());
+            free_names(body, bound, out);
+            bound.pop();
         }
     }
 }
 
-/// What a name in a body is bound to. Only the arrow case carries anything: a
-/// name bound to anything else exists here purely so that it SHADOWS a
-/// top-level function of the same name, which is the rule that keeps
-/// `juxtshadow.fss`'s premise true for this rewrite too.
-enum Slot {
-    /// The name of the minted trait this name is typed with.
-    Arrow(String),
-    Opaque,
+/// What a name in a body is bound to.
+///
+/// A name is here for two reasons and both matter. It SHADOWS a top-level
+/// function of the same name -- the rule that keeps `juxtshadow.fss`'s premise
+/// true for this rewrite. And, when a lambda closes over it, its WRITTEN TYPE
+/// is what the generated object's constructor parameter is declared with; a
+/// name with no written type cannot be captured at all, and is refused by name
+/// rather than guessed at.
+struct Slot {
+    ty: Option<TypeRef>,
+}
+
+impl Slot {
+    fn arrow(&self) -> Option<&str> {
+        match &self.ty {
+            Some(TypeRef::Named { name, .. }) if name.starts_with(TRAIT_PREFIX) => Some(name),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -767,26 +1067,26 @@ impl Scope {
     }
 
     fn declare(&mut self, name: &str, ty: &TypeRef) {
-        let slot = match ty {
-            TypeRef::Named { name: tname, .. } if tname.starts_with(TRAIT_PREFIX) => {
-                Slot::Arrow(tname.clone())
-            }
-            _ => Slot::Opaque,
-        };
+        self.insert(
+            name,
+            Slot {
+                ty: Some(ty.clone()),
+            },
+        );
+    }
+
+    /// A name that is bound and whose type is not written: an unannotated
+    /// binding, a loop binder, a typecase binder with no type of its own.
+    fn declare_opaque(&mut self, name: &str) {
+        self.insert(name, Slot { ty: None });
+    }
+
+    fn insert(&mut self, name: &str, slot: Slot) {
         if self.frames.is_empty() {
             self.frames.push(BTreeMap::new());
         }
         if let Some(frame) = self.frames.last_mut() {
             frame.insert(name.to_owned(), slot);
-        }
-    }
-
-    fn declare_opaque(&mut self, name: &str) {
-        if self.frames.is_empty() {
-            self.frames.push(BTreeMap::new());
-        }
-        if let Some(frame) = self.frames.last_mut() {
-            frame.insert(name.to_owned(), Slot::Opaque);
         }
     }
 

@@ -1629,3 +1629,43 @@ fn a_function_value_whose_signature_is_not_the_arrow_is_refused() {
         "{message}"
     );
 }
+
+// ------------------------------------------------------------ `fn`
+
+/// `fn` on the closure representation: a generated object whose CONSTRUCTOR
+/// PARAMETERS are what the body captures. That is why the body needs no
+/// rewriting at all -- a dotted method reads its receiver's fields by their own
+/// spelling, so a captured `k` resolves to the field `k` exactly as it resolved
+/// to the enclosing local, with no environment struct and no fat pointer.
+///
+/// Eight lines, and the last two are the ones that matter: `adder(100)` is a
+/// closure that OUTLIVES the call that made it, carrying its capture in a
+/// scanned field, and `nested(7)` is a lambda whose body builds another one.
+#[test]
+fn a_lambda_captures_its_enclosing_bindings_and_outlives_them() {
+    let binary = compile_fixture("lambda.fss", "lambda");
+    let out = run(&binary);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "6\n18\n42\n15\n115\nhi-tagged\n105\n12\n"
+    );
+    assert_eq!(out.status.code(), Some(0));
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// A capture becomes a constructor parameter, and a constructor parameter needs
+/// a written type. There is no inference here and no guess: `k = 10` is refused
+/// by name.
+#[test]
+fn a_lambda_may_not_capture_a_name_with_no_written_type() {
+    let message = refusal("badlambdacapture.fss");
+    assert!(message.contains("has no written type"), "{message}");
+}
+
+/// The generated object binds `self` to the CLOSURE, so a captured `self` would
+/// be silently shadowed by it. Refused rather than shadowed.
+#[test]
+fn a_lambda_may_not_capture_self() {
+    let message = refusal("badlambdaself.fss");
+    assert!(message.contains("may not close over `self`"), "{message}");
+}

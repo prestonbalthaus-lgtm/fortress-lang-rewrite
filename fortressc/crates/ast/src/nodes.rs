@@ -444,6 +444,22 @@ pub enum Expr {
         body: Box<Expr>,
         span: Span,
     },
+    /// `fn (x: T): R => e`. An anonymous function, and the FIRST expression in
+    /// this language whose value is a function.
+    ///
+    /// It is lowered, not represented: closure lowering mints a generated
+    /// object whose `apply` is this body and whose CONSTRUCTOR PARAMETERS are
+    /// the names the body captures -- so a captured name is read inside `apply`
+    /// exactly as a field is, by its own spelling, with no environment struct
+    /// and no fat pointer.
+    Lambda {
+        params: Vec<Param>,
+        /// `None` when the source wrote none; the arrow the lambda lands in
+        /// supplies it, and there is no other inference.
+        return_type: Option<TypeRef>,
+        body: Box<Expr>,
+        span: Span,
+    },
     /// `exit L with e`, `exit L`, and `exit`, which names the innermost label.
     Exit {
         /// `None` is the innermost enclosing label.
@@ -534,6 +550,7 @@ impl Expr {
             | Self::Case { span, .. }
             | Self::TypeCase { span, .. }
             | Self::Label { span, .. }
+            | Self::Lambda { span, .. }
             | Self::Exit { span, .. }
             | Self::Instantiate { span, .. } => *span,
         }

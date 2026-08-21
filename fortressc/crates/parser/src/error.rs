@@ -46,6 +46,13 @@ pub enum ParseError {
         span: Span,
         form: &'static str,
     },
+    /// `fn n => e` and `fn(a, b) => e`. A lambda whose parameters carry no
+    /// written type: they would have to come from the arrow the lambda lands
+    /// in, which is a fact the checker holds and the parser does not.
+    LambdaFormUnsupported {
+        span: Span,
+        form: &'static str,
+    },
 }
 
 impl ParseError {
@@ -58,7 +65,8 @@ impl ParseError {
             | Self::StaticParameterKindUnsupported { span, .. }
             | Self::LocalFunctionDeclarationUnsupported { span }
             | Self::ChainedOperatorsDiffer { span, .. }
-            | Self::CaseFormUnsupported { span, .. } => Some(*span),
+            | Self::CaseFormUnsupported { span, .. }
+            | Self::LambdaFormUnsupported { span, .. } => Some(*span),
             Self::UnexpectedEndOfInput { .. } => None,
         }
     }
@@ -113,6 +121,12 @@ impl core::fmt::Display for ParseError {
                 f,
                 "{}..{}: a chain mixes `{first}` with `{second}`; \
                  chained ordering operators must have the same sense",
+                span.start, span.end
+            ),
+            Self::LambdaFormUnsupported { span, form } => write!(
+                f,
+                "{}..{}: `fn` with {form} is not implemented; write \
+                 `fn (x: T): R => ...` with every parameter typed",
                 span.start, span.end
             ),
             Self::CaseFormUnsupported { span, form } => write!(

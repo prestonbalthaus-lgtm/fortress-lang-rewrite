@@ -1798,6 +1798,12 @@ impl Checker {
                 span,
             } => self.typecase_expr(subject, arms, else_arm, *span, expected),
             Expr::Label { name, body, span } => self.label_expr(name, body, *span, expected),
+            // Unreachable: closure lowering runs before the checker and either
+            // rewrites a lambda into a construction or refuses it by name.
+            Expr::Lambda { span, .. } => Err(TypeError::LambdaUnsupported {
+                span: *span,
+                form: "a `fn` in this position",
+            }),
             Expr::Exit { name, value, span } => {
                 self.exit_expr(name.as_deref(), value.as_deref(), *span, expected)
             }
@@ -2353,6 +2359,7 @@ impl Checker {
                     || self.reads_shared(else_arm, floor)
             }
             Expr::Label { body, .. } => self.reads_shared(body, floor),
+            Expr::Lambda { body, .. } => self.reads_shared(body, floor),
             Expr::Exit { value, .. } => value
                 .as_deref()
                 .is_some_and(|e| self.reads_shared(e, floor)),

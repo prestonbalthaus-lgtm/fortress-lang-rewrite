@@ -295,6 +295,19 @@ pub enum TypeError {
         /// path that reaches mutable storage.
         path: String,
     },
+    /// A `fn` form outside the subset this lowering can mint an object for.
+    LambdaUnsupported {
+        span: Span,
+        form: &'static str,
+    },
+    /// A lambda closing over a name whose type is not written, or over `self`.
+    /// A capture becomes a constructor parameter and a constructor parameter
+    /// needs a written type; `self` would be shadowed by the generated
+    /// object's own receiver.
+    LambdaCaptureUntyped {
+        span: Span,
+        name: String,
+    },
     /// A function name in a slot that wants an arrow, where the overload set
     /// has no declaration with that exact signature, or more than one.
     FunctionValueUnresolved {
@@ -488,6 +501,8 @@ impl TypeError {
             | Self::ParallelEscape { span, .. }
             | Self::ParallelIndexNotBinder { span, .. }
             | Self::ParallelSharedArrayArgument { span, .. }
+            | Self::LambdaUnsupported { span, .. }
+            | Self::LambdaCaptureUntyped { span, .. }
             | Self::FunctionValueUnresolved { span, .. }
             | Self::CaseHasNoArms { span }
             | Self::CaseNeedsElse { span }
@@ -764,6 +779,21 @@ impl core::fmt::Display for TypeError {
                  to a call puts any assignment to it out of reach of the \
                  loop's own rules, which are lexical. Wrap the call in \
                  `atomic`, or write `for ... <- seq(...)`"
+            ),
+            Self::LambdaUnsupported { form, .. } => {
+                write!(f, "{form} is not implemented")
+            }
+            Self::LambdaCaptureUntyped { name, .. } if name == "self" => write!(
+                f,
+                "a `fn` may not close over `self`: the generated object binds \
+                 `self` to the closure itself, and the capture would be \
+                 shadowed rather than refused. Pass it as a parameter"
+            ),
+            Self::LambdaCaptureUntyped { name, .. } => write!(
+                f,
+                "`{name}` has no written type, so a `fn` closing over it has \
+                 nothing to declare its constructor parameter with. Annotate \
+                 it -- `{name}: T = ...`"
             ),
             Self::FunctionValueUnresolved {
                 name, arrow, found, ..

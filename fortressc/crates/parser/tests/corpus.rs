@@ -106,6 +106,9 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
                     fortress_parser::ParseError::CaseFormUnsupported { form, .. } => {
                         format!("case form: {form}")
                     }
+                    fortress_parser::ParseError::LambdaFormUnsupported { form, .. } => {
+                        format!("lambda form: {form}")
+                    }
                 };
                 *blockers.entry(label).or_default() += 1;
             }

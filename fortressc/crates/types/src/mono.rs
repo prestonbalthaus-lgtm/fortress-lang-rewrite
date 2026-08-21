@@ -901,6 +901,20 @@ impl<'a> Expander<'a> {
                 body: Box::new(self.expr(body, subst)?),
                 span: *span,
             },
+            Expr::Lambda {
+                params,
+                return_type,
+                body,
+                span,
+            } => Expr::Lambda {
+                params: self.params(params, subst)?,
+                return_type: match return_type {
+                    Some(t) => Some(self.ty(t, subst)?),
+                    None => None,
+                },
+                body: Box::new(self.expr(body, subst)?),
+                span: *span,
+            },
             Expr::Exit { name, value, span } => Expr::Exit {
                 name: name.clone(),
                 value: match value {
