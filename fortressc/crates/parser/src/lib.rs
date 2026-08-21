@@ -48,8 +48,18 @@ struct OprSignature {
 /// `[\` and `\]` are deliberately absent: they open a static-parameter list,
 /// which is part of the declaration and not part of the operator's name. `(`
 /// is absent for the same reason.
-fn operator_text(kind: &Kind<'_>) -> Option<&'static str> {
+fn operator_text<'a>(kind: &Kind<'a>) -> Option<&'a str> {
     Some(match kind {
+        // A run of three or more vertical lines is ONE base operator
+        // (`lexical-structure.tex:1174-1177`) and has no fixed length, so its
+        // text is the source slice rather than a literal.
+        Kind::BarRun(text) => text,
+        Kind::Bang => "!",
+        Kind::Question => "?",
+        Kind::Tilde => "~",
+        Kind::Dollar => "$",
+        Kind::Percent => "%",
+        Kind::At => "@",
         Kind::Plus => "+",
         Kind::Minus => "-",
         Kind::Star => "*",
@@ -81,7 +91,7 @@ fn operator_text(kind: &Kind<'_>) -> Option<&'static str> {
     })
 }
 
-fn join(run: &[&'static str]) -> String {
+fn join(run: &[&str]) -> String {
     run.concat()
 }
 
@@ -296,6 +306,12 @@ impl<'t, 'a> Parser<'t, 'a> {
                     | Kind::FatArrow
                     | Kind::Colon
                     | Kind::ColonEq
+                    | Kind::Bang
+                    | Kind::Question
+                    | Kind::Tilde
+                    | Kind::Dollar
+                    | Kind::Percent
+                    | Kind::At
             )
         )
     }
@@ -1201,7 +1217,7 @@ impl<'t, 'a> Parser<'t, 'a> {
     /// declaration -- `:` before a return type, `=` before a body, `:=` -- none
     /// of which is a bracket, and all three of which `operator_text` maps
     /// because an INFIX operator may be named out of them.
-    fn closing_operator_run(&mut self) -> Vec<&'static str> {
+    fn closing_operator_run(&mut self) -> Vec<&'a str> {
         let mut run = Vec::new();
         loop {
             if matches!(
@@ -1229,7 +1245,7 @@ impl<'t, 'a> Parser<'t, 'a> {
     ///
     /// It stops at `(`, `[\`, an identifier and `self` on purpose: each of those
     /// begins the operand, and which one it is decides the shape.
-    fn operator_run(&mut self, limit: usize) -> Vec<&'static str> {
+    fn operator_run(&mut self, limit: usize) -> Vec<&'a str> {
         let mut run = Vec::new();
         while run.len() < limit {
             let Some(text) = self.peek_kind().and_then(operator_text) else {

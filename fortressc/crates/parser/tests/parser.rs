@@ -1373,3 +1373,37 @@ fn a_declared_operator_may_be_named_out_of_equals_signs() {
     let names = opr_names("api t\nopr ==>(p: Boolean, q: Boolean): Boolean\nend\n");
     assert_eq!(names, ["==>"]);
 }
+
+/// `SpecData/examples/advanced/OprDecl.Nofix.fss:23` and
+/// `ProjectFortress/BirdyLib/Bazaar.fsi:22`. Each of these was a LEXER death
+/// before the six characters had tokens.
+#[test]
+fn an_operator_may_be_named_out_of_the_six_new_characters() {
+    let names = opr_names(
+        "api t\n\
+         opr !(a: ZZ32): ZZ32\n\
+         opr @(a: ZZ32): ZZ32\n\
+         opr ~(a: ZZ32): ZZ32\n\
+         opr $(a: ZZ32): ZZ32\n\
+         opr %(a: ZZ32): ZZ32\n\
+         opr ?(a: ZZ32): ZZ32\n\
+         end\n",
+    );
+    assert_eq!(names, ["!", "@", "~", "$", "%", "?"]);
+}
+
+/// `Library/FortressLibrary.fsi:1991`. The name came out right BEFORE the run
+/// was one token, because the operator run re-glues `BarBar` and `Bar` by span
+/// adjacency -- so this test pins that one token produces the same name, which
+/// is what makes the lexer change safe in declaration position.
+#[test]
+fn a_three_bar_operator_is_named_the_same_as_one_token_as_it_was_as_two() {
+    assert_eq!(
+        opr_names("api t\nopr |||(a: ZZ32, b: ZZ32): ZZ32\nend\n"),
+        ["|||"]
+    );
+    assert_eq!(
+        opr_names("api t\nopr ||(a: ZZ32, b: ZZ32): ZZ32\nend\n"),
+        ["||"]
+    );
+}

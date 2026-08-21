@@ -129,9 +129,11 @@ fn lexes_the_whole_corpus_without_panicking() {
     // `|`, `<|`, `|>`, `||`, `=>`, `^` and `#`. The floor then went unratcheted
     // through the `opr` spike's backslash, which took the real number to 1807.
     // Moving `equals = "=" (!op)` out of the lexer and into the parser's
-    // binding position took it 1807 -> 1810.
+    // binding position took it 1807 -> 1810. The six ordinary operator
+    // characters `! ? ~ $ % @` and the three-or-more vertical-line run took it
+    // 1810 -> 1833, and `UnrecognizedCharacter` 40 -> 2.
     assert!(
-        ok >= 1810,
-        "lexer corpus regressed: {ok} files lex, floor is 1810"
+        ok >= 1833,
+        "lexer corpus regressed: {ok} files lex, floor is 1833"
     );
 }

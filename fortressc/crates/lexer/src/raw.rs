@@ -367,6 +367,37 @@ pub(crate) enum Raw {
     #[token("#")]
     Hash,
 
+    /// The six ordinary operator characters of `operator-app.tex:24` that had
+    /// no arm at all and fell to `UnrecognizedCharacter`. Every one of them is
+    /// a hard lex error today, so a file can only move forward for their
+    /// existing. Real declaration sites:
+    /// `Library/incomplete/basic/Fortress.Number.fsi:136` `opr (self)! : NN`,
+    /// `ProjectFortress/BirdyLib/Bazaar.fsi:22` `opr BIG $()`,
+    /// `SpecData/examples/advanced/OprDecl.Nofix.fss:23` `opr @()`.
+    #[token("!")]
+    Bang,
+    #[token("?")]
+    Question,
+    #[token("~")]
+    Tilde,
+    #[token("$")]
+    Dollar,
+    #[token("%")]
+    Percent,
+    #[token("@")]
+    At,
+
+    /// `lexical-structure.tex:1174-1177`: a contiguous sequence of TWO OR MORE
+    /// vertical lines is ONE base operator. `||` already was; three or more
+    /// split into `BarBar` + `Bar`, which is why `opr |||`
+    /// (`Library/FortressLibrary.fsi:1991`) survives in declaration position --
+    /// the parser re-glues by span adjacency -- and cannot survive in
+    /// expression position. Logos prefers the longest match, so this arm takes
+    /// the run and `Bar`, `BarBar`, `LeftBar` and `RightBar` keep every match
+    /// they had.
+    #[regex(r"\|{3,}")]
+    BarRun,
+
     #[token("===")]
     EqEqEq,
     #[token("=/=")]

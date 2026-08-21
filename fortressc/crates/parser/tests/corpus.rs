@@ -156,8 +156,9 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
     // headers -- static parameters, parameter list, return type, `where` and
     // `throws`, each on the line below what it belongs to -- took it 758 -> 766.
     // Moving the `equals = "=" (!op)` guard out of the lexer took it 766 -> 767.
+    // The six operator characters took it 767 -> 769.
     assert!(
-        parsed >= 767,
-        "parser corpus regressed: {parsed} files parse, floor is 767"
+        parsed >= 769,
+        "parser corpus regressed: {parsed} files parse, floor is 769"
     );
 }

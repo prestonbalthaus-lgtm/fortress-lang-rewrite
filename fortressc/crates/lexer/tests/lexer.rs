@@ -642,3 +642,39 @@ fn while_is_a_keyword_now_that_the_loop_exists() {
     // And still not a prefix of an identifier.
     assert_eq!(kinds("whiled"), vec![Kind::Ident("whiled"), Kind::Eof]);
 }
+
+/// `operator-app.tex:24` lists `! ? ~ $ % @` among the ordinary operator
+/// characters and none of them had an arm, so every one fell to
+/// `UnrecognizedCharacter` -- a hard lex error, which is the whole regression
+/// argument for adding them: a file can only move forward.
+#[test]
+fn the_six_remaining_ordinary_operator_characters_lex() {
+    assert_eq!(
+        kinds("! ? ~ $ % @"),
+        vec![
+            Kind::Bang,
+            Kind::Question,
+            Kind::Tilde,
+            Kind::Dollar,
+            Kind::Percent,
+            Kind::At,
+            Kind::Eof
+        ]
+    );
+}
+
+/// `lexical-structure.tex:1174-1177`: a contiguous sequence of two or more
+/// vertical lines is ONE base operator. Two already was; three or more split
+/// into `BarBar` + `Bar`, which is why `opr |||` survived in DECLARATION
+/// position -- the parser re-glues by span adjacency -- and could not survive
+/// in expression position.
+#[test]
+fn a_run_of_three_or_more_vertical_lines_is_one_operator() {
+    assert_eq!(kinds("|||"), vec![Kind::BarRun("|||"), Kind::Eof]);
+    assert_eq!(kinds("||||"), vec![Kind::BarRun("||||"), Kind::Eof]);
+    // And the runs that already had a token keep it.
+    assert_eq!(kinds("||"), vec![Kind::BarBar, Kind::Eof]);
+    assert_eq!(kinds("|"), vec![Kind::Bar, Kind::Eof]);
+    assert_eq!(kinds("<|"), vec![Kind::LeftBar, Kind::Eof]);
+    assert_eq!(kinds("|>"), vec![Kind::RightBar, Kind::Eof]);
+}

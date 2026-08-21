@@ -110,6 +110,18 @@ pub enum Kind<'a> {
     /// `^`, exponentiation, and `#`, which the library uses as an operator.
     Caret,
     Hash,
+    /// The six ordinary operator characters that had no token at all:
+    /// `! ? ~ $ % @`. Tokenising them is not implementing them.
+    Bang,
+    Question,
+    Tilde,
+    Dollar,
+    Percent,
+    At,
+    /// A contiguous run of THREE OR MORE vertical lines, which
+    /// `lexical-structure.tex:1174-1177` makes one base operator. Two is
+    /// `BarBar`; the slice is carried because the run has no fixed length.
+    BarRun(&'a str),
     /// `===`. There is no `==` in Fortress.
     EqEqEq,
     /// `=/=`.
