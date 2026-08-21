@@ -180,11 +180,17 @@ if [[ ${1:-} == --mutate ]]; then
         'all 38 listed files reported as no longer refused'
 
     # 6. Break the Properties continuation so a wrapped `tests=` truncates.
+    # THE ASSERTION IS THE MECHANISM AND NOT THE NUMBER. This row carried
+    # `495/93` and escaped at the consolidation reporting `495/83`: the case
+    # count is a property of THIS READER and holds, but the pass count that
+    # survives a truncated read is a property of TODAY'S COMPILER, and every
+    # refusal added anywhere moves it. What the row is for is that cases
+    # collapse and the floor breaks, so that is what it says.
     apply tools/oracle-gate.sh 's/^    return n % 2 == 1$/    return False/' || exit 2
-    got=$(gate | field 'str(d["cases"]) + "/" + str(d["outcomes"]["pass"])')
+    got=$(gate | field 'str(d["cases"]) + "/" + ("below-floor" if d["outcomes"]["pass"] < d["passFloor"] else "at-or-above-floor")')
     restore tools/oracle-gate.sh
-    report 'line continuation disabled in the .test reader' "$got" 495/93 \
-        'cases fell 609 -> 495 and pass 291 -> 93, far below the floor; gate red'
+    report 'line continuation disabled in the .test reader' "$got" 495/below-floor \
+        'cases fell 609 -> 495 and pass collapsed far below the floor; gate red'
 
     printf '\n%d mutations, %d refused, %d documented escape(s), %d unexplained\n' \
         "$((mut_pass + mut_fail + mut_doc))" "$mut_pass" "$mut_doc" "$mut_fail"
