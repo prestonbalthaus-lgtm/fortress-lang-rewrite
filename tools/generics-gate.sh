@@ -282,7 +282,7 @@ MUTATIONS=(
   # so the row reported COULD NOT BE APPLIED. Mutating the LOOP INSIDE the
   # function is unique and kills both call sites at once, which is what the row
   # meant in the first place.
-  'crates/types/src/lib.rs|        for obligation in \&component.bounds {|        for obligation in \&Vec::new() {|stop discharging bound obligations'
+  'crates/types/src/lib.rs|        for obligation in &component.bounds {|        for obligation in &Vec::<fortress_ast::BoundObligation>::new() {|stop discharging bound obligations'
   'crates/types/src/mono.rs|if instance.origin == name && instance.member == member {|if instance.origin == name {|emit every instance once per source declaration of its name'
   'crates/types/src/mono.rs|for (member, template) in templates.iter().enumerate() {|for (member, template) in templates.iter().enumerate().take(1) {|instantiate only the first member of an overload set'
 )
