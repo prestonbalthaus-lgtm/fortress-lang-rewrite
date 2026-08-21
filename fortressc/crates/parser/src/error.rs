@@ -57,6 +57,24 @@ pub enum ParseError {
         found: String,
         expected: String,
     },
+    /// `a + b CUP c`. `precedence.tex:20-31` makes Fortress precedence a
+    /// PARTIAL relation: "if there is no specific precedence relationship
+    /// between two operators, then parentheses must be used". A total ladder
+    /// can only ever accept, so the alternative to this diagnostic is a silent
+    /// grouping the program never asked for.
+    OperatorsUnrelated {
+        span: Span,
+        first: String,
+        second: String,
+    },
+    /// `a SUBSET-b`. `opr-fixity.tex:34-55` calls an infix operator with
+    /// whitespace on one side and not the other a static error outright; the
+    /// rule of thumb at :100-102 is that an infix operator may be loose or
+    /// tight but not LOPSIDED.
+    LopsidedOperator {
+        span: Span,
+        name: String,
+    },
 }
 
 impl ParseError {
@@ -70,7 +88,9 @@ impl ParseError {
             | Self::LocalFunctionDeclarationUnsupported { span }
             | Self::ChainedOperatorsDiffer { span, .. }
             | Self::ObjectVarargsParameter { span, .. }
-            | Self::ClosingNameDiffers { span, .. } => Some(*span),
+            | Self::ClosingNameDiffers { span, .. }
+            | Self::OperatorsUnrelated { span, .. }
+            | Self::LopsidedOperator { span, .. } => Some(*span),
             Self::UnexpectedEndOfInput { .. } => None,
         }
     }
@@ -140,6 +160,22 @@ impl core::fmt::Display for ParseError {
             } => write!(
                 f,
                 "{}..{}: `end {found}` closes a declaration named `{expected}`",
+                span.start, span.end
+            ),
+            Self::OperatorsUnrelated {
+                span,
+                first,
+                second,
+            } => write!(
+                f,
+                "{}..{}: `{first}` and `{second}` have no precedence relationship; \
+                 write the parentheses",
+                span.start, span.end
+            ),
+            Self::LopsidedOperator { span, name } => write!(
+                f,
+                "{}..{}: `{name}` has whitespace on one side and not the other; \
+                 an infix operator must be loose or tight, not lopsided",
                 span.start, span.end
             ),
         }

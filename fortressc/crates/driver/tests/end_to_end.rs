@@ -617,7 +617,10 @@ fn an_ambiguous_call_is_refused_at_compile_time_and_names_both_declarations() {
         Some(1),
         "an ambiguity is a user diagnostic, not a compiler bug:\n{message}"
     );
-    assert!(message.contains("is ambiguous for (OL, OR)"), "{message}");
+    assert!(
+        message.contains("is ambiguous for (OLeft, ORight)"),
+        "{message}"
+    );
     assert!(
         message.contains("the declarations at"),
         "the diagnostic must name both declarations:\n{message}"

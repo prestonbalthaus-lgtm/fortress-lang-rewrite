@@ -678,3 +678,28 @@ fn a_run_of_three_or_more_vertical_lines_is_one_operator() {
     assert_eq!(kinds("<|"), vec![Kind::LeftBar, Kind::Eof]);
     assert_eq!(kinds("|>"), vec![Kind::RightBar, Kind::Eof]);
 }
+
+/// `lexical-structure.tex:1167-1172`. Each of the three clauses keeps a real
+/// family of names out of the operator class, and this is the test that says
+/// which: no digits keeps `ZZ32`, two DIFFERENT letters keeps `ZZ`, and the
+/// underscore rule keeps `CT_`.
+#[test]
+fn an_all_capitals_word_is_an_operator_unless_a_clause_saves_it() {
+    for word in ["MAX", "MIN", "SUBSET", "AND", "OR", "NOT", "OL", "A_B"] {
+        assert_eq!(
+            kinds(word),
+            vec![Kind::OpWord(word), Kind::Eof],
+            "{word} is an operator word"
+        );
+    }
+    for word in ["ZZ", "QQ", "RR", "ZZ32", "RR64", "CT_", "_AB", "Foo", "x"] {
+        assert_eq!(
+            kinds(word),
+            vec![Kind::Ident(word), Kind::Eof],
+            "{word} is an identifier"
+        );
+    }
+    // "a word that is NOT RESERVED" is the specification's own first clause,
+    // and the reserved test runs first.
+    assert_eq!(kinds("BIG"), vec![Kind::Reserved("BIG"), Kind::Eof]);
+}

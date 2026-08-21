@@ -1407,3 +1407,151 @@ fn a_three_bar_operator_is_named_the_same_as_one_token_as_it_was_as_two() {
         ["||"]
     );
 }
+
+// -------------------------------------------- the operator expression level
+
+/// `operator-app.tex:28-33` makes an all-capitals word an operator, and
+/// `opr-fixity.tex:28-32` makes the consequence binding: "the Fortress language
+/// dictates only the rules of syntax; whether an operator has a meaning when
+/// used in a particular way depends only on whether there is a definition".
+///
+/// So this must PARSE as an application and only then fail to resolve. Before
+/// the rule it was a three-element juxtaposition that folded with
+/// multiplication: `SUBSET: ZZ64 = 2` then `println(3 SUBSET 4)` printed 24.
+#[test]
+fn a_named_infix_operator_applies_the_function_of_that_name() {
+    match expr("a SUBSET b") {
+        Expr::Call { callee, args, .. } => {
+            assert!(matches!(*callee, Expr::Var { ref name, .. } if name == "SUBSET"));
+            assert_eq!(args.len(), 2);
+        }
+        other => panic!("expected a call to `SUBSET`, got {other:?}"),
+    }
+}
+
+/// Infix `||` was the largest single first-blocker FEATURE in the corpus, filed
+/// under aggregate literals because the marker regex could not see a bare `||`.
+/// A run of three or more is one operator (`lexical-structure.tex:1174-1177`).
+#[test]
+fn the_vertical_line_operators_apply_infix() {
+    match expr("a || b") {
+        Expr::Call { callee, .. } => {
+            assert!(matches!(*callee, Expr::Var { ref name, .. } if name == "||"));
+        }
+        other => panic!("expected a call to `||`, got {other:?}"),
+    }
+    match expr("a ||| b") {
+        Expr::Call { callee, .. } => {
+            assert!(matches!(*callee, Expr::Var { ref name, .. } if name == "|||"));
+        }
+        other => panic!("expected a call to `|||`, got {other:?}"),
+    }
+}
+
+/// `precedence.tex:20-31`: "if there is no specific precedence relationship
+/// between two operators, then parentheses must be used". A total ladder can
+/// only ACCEPT, so the alternative to this refusal is a silent grouping.
+#[test]
+fn operators_from_unrelated_groups_must_be_parenthesised() {
+    for src in [
+        "a + b SUBSET c",
+        "a SUBSET b + c",
+        "a * b SUBSET c",
+        "a SUBSET b UNION c",
+        "a AND b SUBSET c",
+        "a < b SUBSET c",
+    ] {
+        match expr_error(src) {
+            ParseError::OperatorsUnrelated { .. } => {}
+            other => panic!("{src} should need parentheses, got {other:?}"),
+        }
+    }
+}
+
+/// And the parenthesis is what makes it legal, which is the whole point of the
+/// rule. The mark cannot be read off the tree -- `primary` returns a
+/// parenthesised expression unchanged, so `(a SUBSET b) + c` and
+/// `a SUBSET b + c` are the same node.
+#[test]
+fn parentheses_relate_what_precedence_does_not() {
+    for src in [
+        "(a SUBSET b) + c",
+        "a + (b SUBSET c)",
+        "(a SUBSET b) UNION c",
+        "f(a SUBSET b) + c",
+        "a[b SUBSET c] + d",
+    ] {
+        let wrapped = format!("component t\ng() = {src}\nend\n");
+        let tokens = fortress_lexer::lex(&wrapped).unwrap_or_else(|e| panic!("lex failed: {e}"));
+        assert!(parse(&tokens).is_ok(), "should parse: {src}");
+    }
+}
+
+/// The same operator twice is a chain of itself and needs no parentheses.
+#[test]
+fn one_operator_repeated_is_left_associative() {
+    match expr("a SUBSET b SUBSET c") {
+        Expr::Call { callee, args, .. } => {
+            assert!(matches!(*callee, Expr::Var { ref name, .. } if name == "SUBSET"));
+            assert!(
+                matches!(args.first(), Some(Expr::Call { .. })),
+                "left associative"
+            );
+        }
+        other => panic!("expected a call, got {other:?}"),
+    }
+}
+
+/// `opr-fixity.tex:100-102`: an infix operator may be loose or tight but not
+/// LOPSIDED. The table calls that row a static error outright.
+#[test]
+fn a_lopsided_infix_operator_is_refused() {
+    match expr_error("a SUBSET-b") {
+        ParseError::LopsidedOperator { name, .. } => assert_eq!(name, "SUBSET"),
+        other => panic!("expected a lopsided refusal, got {other:?}"),
+    }
+    // Tight on both sides is legal.
+    let wrapped = "component t\ng() = a SUBSET b\nend\n";
+    let tokens = fortress_lexer::lex(wrapped).unwrap_or_else(|e| panic!("lex failed: {e}"));
+    assert!(parse(&tokens).is_ok());
+}
+
+/// The reason the twelve-row table exists rather than `fixity_at`. After a left
+/// encloser the table reads `|` as PREFIX, so the operator level leaves it for
+/// the enclosing-application production -- which is a later milestone, so the
+/// diagnostic must still be about the expression and not about a missing right
+/// operand for an infix `|`.
+#[test]
+fn a_bar_after_a_left_encloser_is_not_taken_as_infix() {
+    match expr_error("f(|x|)") {
+        ParseError::UnexpectedToken { expected, .. } => assert_eq!(expected, "an expression"),
+        other => panic!("expected an expression diagnostic, got {other:?}"),
+    }
+}
+
+/// `AND`, `OR` and `NOT` are operator words under the same lexical rule and
+/// keep their own paths: they have real codegen through `BinOp` and `UnOp`, and
+/// routing them through a call to an undeclared function would break every
+/// program that uses them. The acceptance test is the IR of the corpus, and
+/// this is the shape assertion under it.
+#[test]
+fn the_three_logical_operator_words_keep_their_own_nodes() {
+    assert!(matches!(
+        expr("a AND b"),
+        Expr::Infix { op: BinOp::And, .. }
+    ));
+    assert!(matches!(expr("a OR b"), Expr::Infix { op: BinOp::Or, .. }));
+    assert!(matches!(expr("NOT a"), Expr::Prefix { op: UnOp::Not, .. }));
+}
+
+/// `seq` is LOWERCASE and so an ordinary identifier, not an operator word. It
+/// shared a helper with `AND` and `OR` and stopped being recognised the moment
+/// that helper moved to the operator-word token -- eleven fixtures and nine
+/// corpus files, every one of them a `for` loop.
+#[test]
+fn a_sequential_generator_is_still_recognised() {
+    match expr("for i <- seq(0#5) do i end") {
+        Expr::For { sequential, .. } => assert!(sequential),
+        other => panic!("expected a sequential for, got {other:?}"),
+    }
+}

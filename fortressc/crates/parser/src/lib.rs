@@ -23,6 +23,11 @@ use fortress_lexer::{Kind, Token};
 
 type Parsed<T> = Result<T, ParseError>;
 
+/// Which of the operators this milestone adds built the node a precedence level
+/// is returning, if any. `None` means the node came out of the arithmetic and
+/// relational ladder, or out of a parenthesis, and may be combined freely.
+type Mark<'a> = Option<(&'a str, Span)>;
+
 /// A parenthesised type is the type itself, but its span covers the
 /// parentheses, so a diagnostic points at what was written.
 fn widen(t: TypeRef, span: Span) -> TypeRef {
@@ -54,6 +59,10 @@ fn operator_text<'a>(kind: &Kind<'a>) -> Option<&'a str> {
         // (`lexical-structure.tex:1174-1177`) and has no fixed length, so its
         // text is the source slice rather than a literal.
         Kind::BarRun(text) => text,
+        // An operator WORD is a base operator like any other
+        // (`lexical-structure.tex:1173-1176`), so `opr CMP` reaches the same
+        // run the symbolic names do and needs no branch of its own.
+        Kind::OpWord(text) => text,
         Kind::Bang => "!",
         Kind::Question => "?",
         Kind::Tilde => "~",
@@ -327,6 +336,129 @@ impl<'t, 'a> Parser<'t, 'a> {
     fn at_ellipsis(&self) -> bool {
         let three = (0..3).all(|n| matches!(self.peek_ahead(n), Some(Kind::Dot)));
         three && self.glued_right(self.pos) && self.glued_right(self.pos + 1)
+    }
+
+    /// `opr-fixity.tex:34-55`, all twelve rows.
+    ///
+    /// THIS IS NOT `fixity_at`. That one is `match (glued_left, glued_right)`
+    /// and its own doc comment says "from adjacency alone", which cannot decide
+    /// `|` in `a |b| c` -- the same `|`, the same spacing, and an encloser
+    /// rather than an infix operator. The specification decides fixity from
+    /// LEFT CONTEXT and RIGHT CONTEXT, with whitespace as a secondary
+    /// discriminator on only some rows.
+    ///
+    /// Only the operators this milestone ADDS are routed through it. Moving
+    /// `+ - * / < > =` off `fixity_at` would change how programs that compile
+    /// today are grouped, and that is a measurement and a commit of its own.
+    fn table_fixity_at(&self, index: usize) -> TableFixity {
+        let left = self.left_context(index);
+        let right = self.right_context(index);
+        let space_left = !self.glued_left(index);
+        let space_right = !self.glued_right(index);
+        match (left, right) {
+            (LeftContext::PrimaryTail, RightContext::PrimaryFront | RightContext::Operator) => {
+                match (space_left, space_right) {
+                    (true, true) | (false, false) => TableFixity::Infix,
+                    // Lopsided: whitespace on one side and not the other.
+                    (true, false) => TableFixity::Lopsided,
+                    (false, true) => TableFixity::Postfix,
+                }
+            }
+            (LeftContext::PrimaryTail, RightContext::Delimiter) => {
+                if space_left {
+                    TableFixity::Lopsided
+                } else {
+                    TableFixity::Postfix
+                }
+            }
+            (LeftContext::PrimaryTail, RightContext::LineBreak) => {
+                if space_left {
+                    TableFixity::Infix
+                } else {
+                    TableFixity::Postfix
+                }
+            }
+            (
+                LeftContext::Operator | LeftContext::Delimiter,
+                RightContext::PrimaryFront | RightContext::Operator,
+            ) => TableFixity::Prefix,
+            (LeftContext::Delimiter, RightContext::Delimiter) => TableFixity::Nofix,
+            (LeftContext::Operator, _) | (LeftContext::Delimiter, RightContext::LineBreak) => {
+                TableFixity::Nofix
+            }
+        }
+    }
+
+    /// A PRIMARY TAIL is "an identifier, a literal, a right encloser, or a
+    /// superscripted postfix operator". Nothing else on the left is a primary,
+    /// and a newline or the start of the file is neither -- both behave as a
+    /// left encloser, which is what makes a leading `-` prefix.
+    fn left_context(&self, index: usize) -> LeftContext {
+        let Some(prev) = index.checked_sub(1).and_then(|i| self.tokens.get(i)) else {
+            return LeftContext::Delimiter;
+        };
+        match &prev.kind {
+            Kind::Ident(_)
+            | Kind::KwSelf
+            | Kind::IntLit { .. }
+            | Kind::FloatLit { .. }
+            | Kind::StrLit(_)
+            | Kind::True
+            | Kind::False
+            | Kind::RParen
+            | Kind::RBracket
+            | Kind::RBrace
+            | Kind::RGeneric
+            | Kind::RightBar
+            | Kind::KwEnd => LeftContext::PrimaryTail,
+            Kind::Newline
+            | Kind::Eof
+            | Kind::Comma
+            | Kind::Semi
+            | Kind::LParen
+            | Kind::LBracket
+            | Kind::LBrace
+            | Kind::LGeneric
+            | Kind::LeftBar => LeftContext::Delimiter,
+            _ => LeftContext::Operator,
+        }
+    }
+
+    /// A PRIMARY FRONT is "an identifier, a literal, or a left encloser". The
+    /// keywords that open a delimited expression -- `if`, `do`, `while`, `for`,
+    /// `atomic` -- are primaries too, and leaving them out would read a prefix
+    /// operator before one as nofix.
+    fn right_context(&self, index: usize) -> RightContext {
+        let Some(next) = self.tokens.get(index + 1) else {
+            return RightContext::LineBreak;
+        };
+        match &next.kind {
+            Kind::Ident(_)
+            | Kind::KwSelf
+            | Kind::IntLit { .. }
+            | Kind::FloatLit { .. }
+            | Kind::StrLit(_)
+            | Kind::True
+            | Kind::False
+            | Kind::LParen
+            | Kind::LBracket
+            | Kind::LBrace
+            | Kind::LGeneric
+            | Kind::LeftBar
+            | Kind::KwIf
+            | Kind::KwDo
+            | Kind::KwWhile
+            | Kind::Reserved("for" | "atomic") => RightContext::PrimaryFront,
+            Kind::Newline | Kind::Eof => RightContext::LineBreak,
+            Kind::Comma
+            | Kind::Semi
+            | Kind::RParen
+            | Kind::RBracket
+            | Kind::RBrace
+            | Kind::RGeneric
+            | Kind::RightBar => RightContext::Delimiter,
+            _ => RightContext::Operator,
+        }
     }
 
     /// The four readings of an operator, from adjacency alone.
@@ -1461,34 +1593,69 @@ impl<'t, 'a> Parser<'t, 'a> {
     // --------------------------------------------------------- expressions
 
     fn expr(&mut self) -> Parsed<Expr> {
-        self.disjunction()
+        Ok(self.disjunction()?.0)
+    }
+
+    /// `precedence.tex:20-31`: Fortress precedence is a PARTIAL relation --
+    /// "if there is no specific precedence relationship between two operators,
+    /// then parentheses must be used". A total ladder can only ever ACCEPT, so
+    /// adding a second operator family to one makes wrong grouping SILENT,
+    /// which is the worst class this project recognises.
+    ///
+    /// Every level therefore reports back which operator built the node it
+    /// returns, when that operator is one of the ones this milestone adds and
+    /// so has no relation to the arithmetic and relational ladder. A level that
+    /// is about to combine such a node with its own operator refuses instead.
+    ///
+    /// The mark is carried rather than read off the tree because the tree
+    /// cannot tell `(a SUBSET b) + c` from `a SUBSET b + c`: `primary` returns
+    /// a parenthesised expression unchanged, so both are the same node. What
+    /// clears the mark is the parenthesis, and the only place that knows about
+    /// it is the parse.
+    fn require_unmarked(&self, mark: Mark<'a>, other: &str, span: Span) -> Parsed<()> {
+        match mark {
+            Some((name, _)) => Err(ParseError::OperatorsUnrelated {
+                span,
+                first: name.to_owned(),
+                second: other.to_owned(),
+            }),
+            None => Ok(()),
+        }
     }
 
     /// `a OR b`, left associative, and below every conjunction --
     /// `appendices/operators.tex:840-851`.
-    fn disjunction(&mut self) -> Parsed<Expr> {
-        let mut lhs = self.conjunction()?;
+    fn disjunction(&mut self) -> Parsed<(Expr, Mark<'a>)> {
+        let (mut lhs, mut mark) = self.conjunction()?;
         while self.at_word_op("OR") {
+            let span = self.span_here();
+            self.require_unmarked(mark, "OR", span)?;
             self.pos += 1;
             self.skip_newlines();
-            let rhs = self.conjunction()?;
+            let (rhs, rhs_mark) = self.conjunction()?;
+            self.require_unmarked(rhs_mark, "OR", span)?;
             lhs = infix(BinOp::Or, Fixity::Loose, lhs, rhs);
+            mark = None;
         }
-        Ok(lhs)
+        Ok((lhs, mark))
     }
 
     /// `a AND b`, left associative, and below every relational operator --
     /// which is what puts `comparison` underneath it and makes
     /// `a = 3 AND b = 8` mean `(a = 3) AND (b = 8)`.
-    fn conjunction(&mut self) -> Parsed<Expr> {
-        let mut lhs = self.comparison()?;
+    fn conjunction(&mut self) -> Parsed<(Expr, Mark<'a>)> {
+        let (mut lhs, mut mark) = self.comparison()?;
         while self.at_word_op("AND") {
+            let span = self.span_here();
+            self.require_unmarked(mark, "AND", span)?;
             self.pos += 1;
             self.skip_newlines();
-            let rhs = self.comparison()?;
+            let (rhs, rhs_mark) = self.comparison()?;
+            self.require_unmarked(rhs_mark, "AND", span)?;
             lhs = infix(BinOp::And, Fixity::Loose, lhs, rhs);
+            mark = None;
         }
-        Ok(lhs)
+        Ok((lhs, mark))
     }
 
     /// A word operator is an all-capitals identifier the parser reads as an
@@ -1499,7 +1666,7 @@ impl<'t, 'a> Parser<'t, 'a> {
     /// identifier -- so `a AND (b)` reads as `Prefix` and the operator would be
     /// left unconsumed, turning a correct program into a parse error.
     fn at_word_op(&self, word: &str) -> bool {
-        matches!(self.peek_kind(), Some(Kind::Ident(name)) if *name == word)
+        matches!(self.peek_kind(), Some(Kind::OpWord(name)) if *name == word)
     }
 
     /// An infix word operator, which the juxtaposition run must stop at. `NOT`
@@ -1511,8 +1678,9 @@ impl<'t, 'a> Parser<'t, 'a> {
 
     /// Comparison operators chain. One operator is left exactly as it was: no
     /// block, no temporaries, and nothing about existing generated code moves.
-    fn comparison(&mut self) -> Parsed<Expr> {
-        let first = self.additive()?;
+    fn comparison(&mut self) -> Parsed<(Expr, Mark<'a>)> {
+        let (first, first_mark) = self.additive()?;
+        let mut mark = first_mark;
         let mut operands = vec![first];
         let mut ops: Vec<(BinOp, Fixity, Span)> = Vec::new();
         let mut sense: Option<(Sense, BinOp)> = None;
@@ -1536,23 +1704,27 @@ impl<'t, 'a> Parser<'t, 'a> {
                     None => sense = Some((this, op)),
                 }
             }
+            self.require_unmarked(mark, op_text(op), op_span)?;
             self.pos += 1;
             self.skip_newlines(); // a newline may follow an infix operator
-            operands.push(self.additive()?);
+            let (operand, operand_mark) = self.additive()?;
+            self.require_unmarked(operand_mark, op_text(op), op_span)?;
+            operands.push(operand);
             ops.push((op, fixity, op_span));
+            mark = None;
         }
 
         if ops.is_empty() {
-            return operands.pop().ok_or(missing_operand());
+            return Ok((operands.pop().ok_or(missing_operand())?, mark));
         }
         if ops.len() == 1 {
             let (op, fixity, _) = ops.first().copied().ok_or_else(missing_operand)?;
             let mut both = operands.into_iter();
             let lhs = both.next().ok_or_else(missing_operand)?;
             let rhs = both.next().ok_or_else(missing_operand)?;
-            return Ok(infix(op, fixity, lhs, rhs));
+            return Ok((infix(op, fixity, lhs, rhs), None));
         }
-        self.desugar_chain(&operands, &ops)
+        Ok((self.desugar_chain(&operands, &ops)?, None))
     }
 
     /// `a < b < c` becomes a block of one binding per operand and a nested
@@ -1616,8 +1788,8 @@ impl<'t, 'a> Parser<'t, 'a> {
         Ok(Expr::Block { items, span })
     }
 
-    fn additive(&mut self) -> Parsed<Expr> {
-        let mut lhs = self.multiplicative()?;
+    fn additive(&mut self) -> Parsed<(Expr, Mark<'a>)> {
+        let (mut lhs, mut mark) = self.multiplicative()?;
         loop {
             let op = match self.peek_kind() {
                 Some(Kind::Plus) => BinOp::Add,
@@ -1635,16 +1807,20 @@ impl<'t, 'a> Parser<'t, 'a> {
             let Some(fixity) = self.infix_fixity(index)? else {
                 break;
             };
+            let op_span = self.span_here();
+            self.require_unmarked(mark, op_text(op), op_span)?;
             self.pos += 1;
             self.skip_newlines();
-            let rhs = self.multiplicative()?;
+            let (rhs, rhs_mark) = self.multiplicative()?;
+            self.require_unmarked(rhs_mark, op_text(op), op_span)?;
             lhs = infix(op, fixity, lhs, rhs);
+            mark = None;
         }
-        Ok(lhs)
+        Ok((lhs, mark))
     }
 
-    fn multiplicative(&mut self) -> Parsed<Expr> {
-        let mut lhs = self.juxtaposition()?;
+    fn multiplicative(&mut self) -> Parsed<(Expr, Mark<'a>)> {
+        let (mut lhs, mut mark) = self.operator_expr()?;
         loop {
             let op = match self.peek_kind() {
                 Some(Kind::Star) => BinOp::Mul,
@@ -1655,12 +1831,101 @@ impl<'t, 'a> Parser<'t, 'a> {
             let Some(fixity) = self.infix_fixity(index)? else {
                 break;
             };
+            let op_span = self.span_here();
+            self.require_unmarked(mark, op_text(op), op_span)?;
+            self.pos += 1;
+            self.skip_newlines();
+            let (rhs, rhs_mark) = self.operator_expr()?;
+            self.require_unmarked(rhs_mark, op_text(op), op_span)?;
+            lhs = infix(op, fixity, lhs, rhs);
+            mark = None;
+        }
+        Ok((lhs, mark))
+    }
+
+    /// The operators this milestone adds, applied infix.
+    ///
+    /// `opr-fixity.tex:28-32` is what decides the shape of this: "the Fortress
+    /// language dictates only the rules of syntax; whether an operator has a
+    /// meaning when used in a particular way depends only on whether there is a
+    /// definition in the program". So `a SUBSET b` must PARSE as an infix
+    /// application whether or not any `opr SUBSET` exists, and only then fail to
+    /// resolve. Driving the syntax off declarations inverts that.
+    ///
+    /// It lowers to an ordinary `Call` to a function whose NAME is the
+    /// operator's own text, which is exactly what an `opr` declaration already
+    /// lifts to -- so nothing downstream learns a new node, dispatch and
+    /// codegen are untouched, and an undeclared operator comes out as
+    /// `unknown name`, which is the specification's own second half.
+    ///
+    /// `AND`, `OR` and `NOT` are deliberately NOT here. They are operator words
+    /// under the same lexical rule, and they already have real codegen through
+    /// `BinOp::And`, `BinOp::Or` and `UnOp::Not`; routing them through a call to
+    /// a function nobody declared would break every program that uses them.
+    fn operator_expr(&mut self) -> Parsed<(Expr, Mark<'a>)> {
+        let mut lhs = self.juxtaposition()?;
+        let mut mark: Mark<'a> = None;
+        while let Some((text, span)) = self.infix_added_operator()? {
+            if let Some((first, _)) = mark {
+                if first != text {
+                    return Err(ParseError::OperatorsUnrelated {
+                        span,
+                        first: first.to_owned(),
+                        second: text.to_owned(),
+                    });
+                }
+            }
             self.pos += 1;
             self.skip_newlines();
             let rhs = self.juxtaposition()?;
-            lhs = infix(op, fixity, lhs, rhs);
+            let full = Span::new(lhs.span().start, rhs.span().end);
+            lhs = Expr::Call {
+                callee: Box::new(Expr::Var {
+                    name: text.to_owned(),
+                    span,
+                }),
+                args: vec![lhs, rhs],
+                span: full,
+            };
+            mark = Some((text, span));
         }
-        Ok(lhs)
+        Ok((lhs, mark))
+    }
+
+    /// The added operators, and only when the twelve-row table reads this
+    /// occurrence as infix. That test is what stops `|` being taken here in
+    /// `f(|x|)`: after a left encloser the table says PREFIX, and an enclosing
+    /// application is a different production.
+    fn infix_added_operator(&self) -> Parsed<Option<(&'a str, Span)>> {
+        let Some(kind) = self.peek_kind() else {
+            return Ok(None);
+        };
+        let text = match kind {
+            Kind::OpWord(word) if !matches!(*word, "AND" | "OR" | "NOT") => *word,
+            Kind::BarBar => "||",
+            Kind::BarRun(text) => *text,
+            Kind::Bang => "!",
+            Kind::Question => "?",
+            Kind::Tilde => "~",
+            Kind::Dollar => "$",
+            Kind::Percent => "%",
+            Kind::At => "@",
+            // `#` is DELIBERATELY absent. `for i <- 0#n` writes the extent
+            // form of a generator range with it (`for_expr` reads it at
+            // :2030), so taking it here as an infix operator makes the range
+            // unparseable -- measured: nine corpus files, every one of them a
+            // `for` loop, and the IR diff is what caught it.
+            _ => return Ok(None),
+        };
+        match self.table_fixity_at(self.pos) {
+            TableFixity::Infix => Ok(Some((text, self.span_here()))),
+            // `opr-fixity.tex:90-93` calls this row a static error outright.
+            TableFixity::Lopsided => Err(ParseError::LopsidedOperator {
+                span: self.span_here(),
+                name: text.to_owned(),
+            }),
+            _ => Ok(None),
+        }
     }
 
     /// `None` means "this operator is not infix here, stop climbing"; the
@@ -1754,7 +2019,11 @@ impl<'t, 'a> Parser<'t, 'a> {
         // `seq(...)` is recognised HERE rather than as a call, because it is
         // what decides whether the loop is parallel and the checker must not
         // have to guess that back from an application node.
-        let sequential = self.at_word_op("seq") && matches!(self.peek_ahead(1), Some(Kind::LParen));
+        // `seq` is LOWERCASE and so is an ordinary identifier, not an operator
+        // word: `lexical-structure.tex:1167-1172` admits only uppercase
+        // letters and underscores. It shares no test with `AND` and `OR`.
+        let sequential = matches!(self.peek_kind(), Some(Kind::Ident("seq")))
+            && matches!(self.peek_ahead(1), Some(Kind::LParen));
         if sequential {
             self.pos += 2;
             self.skip_newlines();
@@ -2319,6 +2588,37 @@ impl<'t, 'a> Parser<'t, 'a> {
             span,
         }))
     }
+}
+
+/// The five outcomes of `opr-fixity.tex`'s table. `Lopsided` and `Nofix` are
+/// the rows the specification calls a STATIC ERROR: it names a recommended
+/// reading for each so a parse can continue looking for further errors, and
+/// this parser stops at the first error, so they are refusals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TableFixity {
+    Infix,
+    Prefix,
+    Postfix,
+    /// Whitespace on one side and not the other.
+    Lopsided,
+    Nofix,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LeftContext {
+    PrimaryTail,
+    Operator,
+    /// A comma, a semicolon, a left encloser, a line break, or the start.
+    Delimiter,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RightContext {
+    PrimaryFront,
+    Operator,
+    /// A comma, a semicolon, or a right encloser.
+    Delimiter,
+    LineBreak,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

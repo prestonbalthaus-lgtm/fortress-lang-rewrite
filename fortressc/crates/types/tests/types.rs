@@ -706,12 +706,12 @@ fn a_symmetrically_ambiguous_call_is_refused_and_names_both_declarations() {
         trait Top end\n\
         trait Left extends {Top} end\n\
         trait Right extends {Top} end\n\
-        object OL extends {Left} end\n\
-        object OR extends {Right} end\n\
+        object OLeft extends {Left} end\n\
+        object ORight extends {Right} end\n\
         pick(x: Top, y: Top): ZZ32 = 0\n\
         pick(x: Left, y: Top): ZZ32 = 1\n\
         pick(x: Top, y: Right): ZZ32 = 2\n\
-        topOf(n: ZZ32): Top = if n === 0 then OL else OR end\n\
+        topOf(n: ZZ32): Top = if n === 0 then OLeft else ORight end\n\
         run(): ZZ32 = pick(topOf(0), topOf(1))\n\
         end\n";
     let e = type_error(src);
@@ -724,7 +724,7 @@ fn a_symmetrically_ambiguous_call_is_refused_and_names_both_declarations() {
     else {
         panic!("expected an ambiguity, got {e}")
     };
-    assert_eq!(arguments, "OL, OR");
+    assert_eq!(arguments, "OLeft, ORight");
     assert_ne!(first, second, "two different declarations must be named");
 }
 

@@ -109,6 +109,12 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
                     fortress_parser::ParseError::ClosingNameDiffers { .. } => {
                         "`end` names a different declaration".to_owned()
                     }
+                    fortress_parser::ParseError::OperatorsUnrelated { .. } => {
+                        "operators with no precedence relationship".to_owned()
+                    }
+                    fortress_parser::ParseError::LopsidedOperator { .. } => {
+                        "lopsided infix operator".to_owned()
+                    }
                 };
                 *blockers.entry(label).or_default() += 1;
             }
@@ -156,9 +162,12 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
     // headers -- static parameters, parameter list, return type, `where` and
     // `throws`, each on the line below what it belongs to -- took it 758 -> 766.
     // Moving the `equals = "=" (!op)` guard out of the lexer took it 766 -> 767.
-    // The six operator characters took it 767 -> 769.
+    // The six operator characters took it 767 -> 769. The operator-word lexical
+    // rule plus the operator expression level -- named infix, infix `||` and
+    // the vertical-line run, each lowered to a call to a function of the
+    // operator's own name -- took it 769 -> 798.
     assert!(
-        parsed >= 769,
-        "parser corpus regressed: {parsed} files parse, floor is 769"
+        parsed >= 798,
+        "parser corpus regressed: {parsed} files parse, floor is 798"
     );
 }
