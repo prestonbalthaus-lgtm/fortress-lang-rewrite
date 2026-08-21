@@ -211,6 +211,17 @@ impl<'ctx> Lowering<'ctx> {
             Type::Boolean => Some(self.context.bool_type().into()),
             Type::String | Type::Array(_) | Type::Object(_) | Type::Trait(_) => Some(self.ptr()),
             Type::Void => None,
+            // A TUPLE HAS NO REPRESENTATION IN THIS BACKEND, and `None` here
+            // means "no storage" -- which is what `Void` means and is NOT what
+            // a tuple means. Nothing can reach this arm: `registry.rs`'s
+            // `resolve` refuses `TypeRef::Tuple` by name and is the single
+            // construction gate, so a `Type::Tuple` in the typed AST is a
+            // compiler defect and not a program. Returning a pointer would be
+            // the silent answer -- every tuple would lower to one word and the
+            // first two-element tuple would corrupt a frame.
+            Type::Tuple(_) => unreachable!(
+                "a tuple type reached codegen; `Registry::resolve` is the only                  gate that can build one and it refuses"
+            ),
         }
     }
 

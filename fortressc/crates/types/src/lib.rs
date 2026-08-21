@@ -22,11 +22,12 @@ pub use mono::{expand, mangle_static, MAX_INSTANTIATIONS};
 
 pub use error::TypeError;
 pub use types::{
-    intern, ArithOp, AssignTarget, CompareOp, DispatchFn, DispatchNode, Elem, MpiOp, Target, Type,
-    TypedBlockItem, TypedCapture, TypedComponent, TypedExpr, TypedExprKind, TypedField, TypedFn,
-    TypedObject, TypedParam, TypedReduction, TypedTypeCaseArm, ARRAY_ALLOC, ARRAY_LENGTH,
-    ARRAY_SLOT, ASSERT_FAILED, ATOMIC_ENTER, ATOMIC_LEAVE, CASE_FAILED, DISPATCH_FAILED, ENV_ALLOC,
-    FIRST_TAG, OBJECT_ALLOC, PARALLEL_FOR, REDUCTION_ALLOC, REDUCTION_WORKERS,
+    intern, intern_types, ArithOp, AssignTarget, CompareOp, DispatchFn, DispatchNode, Elem, MpiOp,
+    Target, Type, TypedBlockItem, TypedCapture, TypedComponent, TypedExpr, TypedExprKind,
+    TypedField, TypedFn, TypedObject, TypedParam, TypedReduction, TypedTypeCaseArm, ARRAY_ALLOC,
+    ARRAY_LENGTH, ARRAY_SLOT, ASSERT_FAILED, ATOMIC_ENTER, ATOMIC_LEAVE, CASE_FAILED,
+    DISPATCH_FAILED, ENV_ALLOC, FIRST_TAG, OBJECT_ALLOC, PARALLEL_FOR, REDUCTION_ALLOC,
+    REDUCTION_WORKERS,
 };
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};

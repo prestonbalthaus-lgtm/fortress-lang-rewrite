@@ -2,7 +2,9 @@
 // integration test is its own crate, so the workspace denies apply here.
 #![allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 
-use fortress_types::{check, Type, TypeError, TypedComponent, TypedExpr, TypedExprKind};
+use fortress_types::{
+    check, intern_types, Type, TypeError, TypedComponent, TypedExpr, TypedExprKind,
+};
 
 fn typed(src: &str) -> TypedComponent {
     let tokens = fortress_lexer::lex(src).unwrap_or_else(|e| panic!("lex: {e}"));
@@ -1452,4 +1454,64 @@ fn and_becomes_an_if_so_that_codegen_needs_no_new_node() {
         "AND must lower to an If: {:?}",
         b.kind
     );
+}
+
+// ------------------------------------------------------ SPIKE-COMPOSITE-TYPE
+
+/// The interner is what lets `Type` carry a composite and stay `Copy`: a shared
+/// reference is `Copy` whatever it points at. Two equal element lists must come
+/// back as the SAME pointer, or `Type`'s derived `PartialEq` compares slices
+/// that happen to be equal today and stops being a cheap identity tomorrow.
+#[test]
+fn interning_dedups_and_type_stays_copy() {
+    let a = intern_types(&[Type::ZZ32, Type::String]);
+    let b = intern_types(&[Type::ZZ32, Type::String]);
+    let c = intern_types(&[Type::ZZ32, Type::ZZ64]);
+    assert!(
+        std::ptr::eq(a, b),
+        "equal element lists must intern to one slice"
+    );
+    assert!(!std::ptr::eq(a, c));
+    assert_eq!(Type::Tuple(a), Type::Tuple(b));
+    assert_ne!(Type::Tuple(a), Type::Tuple(c));
+
+    // `Copy` by use: if `Type` ever stops being `Copy` this line stops
+    // compiling, which is the same guard `types.rs`'s `assert_copy` makes at
+    // the definition. Two independent statements of one invariant on purpose.
+    let t = Type::Tuple(a);
+    let moved = t;
+    assert_eq!(t, moved);
+}
+
+/// `name` and `symbol` BUILD the answer rather than returning a placeholder.
+/// One string for every tuple would give two different tuples the same symbol,
+/// which is a collision in the emitted object rather than a diagnostic.
+#[test]
+fn a_tuple_type_names_and_symbolises_its_elements() {
+    let t = Type::Tuple(intern_types(&[Type::ZZ32, Type::String]));
+    assert_eq!(t.name(), "(ZZ32, String)");
+    assert_eq!(t.symbol(), "tuple_zz32_string");
+    let u = Type::Tuple(intern_types(&[Type::String, Type::ZZ32]));
+    assert_ne!(t.symbol(), u.symbol());
+}
+
+/// A tuple is NOT an array element and is NOT a reference, and both answers are
+/// written down rather than defaulted.
+#[test]
+fn a_tuple_is_neither_an_array_element_nor_a_reference() {
+    let t = Type::Tuple(intern_types(&[Type::ZZ32, Type::ZZ32]));
+    assert!(fortress_types::Elem::of(t).is_none());
+    assert!(!t.is_reference());
+    assert!(!t.is_numeric());
+}
+
+/// AND THE VARIANT IS STILL UNCONSTRUCTABLE FROM SOURCE. `registry.rs`'s
+/// `resolve` is the single gate and it still refuses -- that is what makes the
+/// twenty non-exhaustive sites safe today rather than merely unexercised.
+#[test]
+fn a_tuple_type_written_in_source_is_still_refused_at_the_one_gate() {
+    match body_error("f(x: (ZZ32, ZZ32)): () = ()") {
+        TypeError::TypeNotImplemented { form, .. } => assert_eq!(form, "a tuple type"),
+        other => panic!("expected TypeNotImplemented, got {other:?}"),
+    }
 }

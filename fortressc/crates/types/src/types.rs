@@ -23,10 +23,29 @@ pub fn intern(name: &str) -> &'static str {
     leaked
 }
 
+/// A tuple's element types, promoted to `'static` for the same reason names
+/// are: a shared reference is `Copy` whatever it points at, which is the whole
+/// trick that lets [`Type`] carry a composite and stay `Copy`.
+///
+/// SPIKE-COMPOSITE-TYPE measured the alternative -- making `Type` non-`Copy`
+/// produced 162 located errors across the workspace. Interning produces four.
+#[must_use]
+pub fn intern_types(types: &[Type]) -> &'static [Type] {
+    static TABLE: LazyLock<Mutex<HashSet<&'static [Type]>>> =
+        LazyLock::new(|| Mutex::new(HashSet::new()));
+    let mut table = TABLE.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(found) = table.get(types) {
+        return found;
+    }
+    let leaked: &'static [Type] = Box::leak(types.to_vec().into_boxed_slice());
+    table.insert(leaked);
+    leaked
+}
+
 /// What an array holds. A separate enum from [`Type`] so that [`Type`] stays
 /// `Copy` without boxing, and so that "array of array" is unrepresentable
 /// rather than merely rejected.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Elem {
     ZZ32,
     ZZ64,
@@ -55,7 +74,7 @@ impl Elem {
             Type::RR64 => Some(Self::RR64),
             Type::Boolean => Some(Self::Boolean),
             Type::String => Some(Self::String),
-            Type::Void | Type::Array(_) | Type::Object(_) | Type::Trait(_) => None,
+            Type::Void | Type::Array(_) | Type::Object(_) | Type::Trait(_) | Type::Tuple(_) => None,
         }
     }
 
@@ -78,12 +97,12 @@ impl Elem {
     }
 
     #[must_use]
-    pub const fn symbol(self) -> &'static str {
+    pub fn symbol(self) -> &'static str {
         self.as_type().symbol()
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Type {
     ZZ32,
     ZZ64,
@@ -99,11 +118,37 @@ pub enum Type {
     /// a pointer to some concrete object, and its membership is a compile time
     /// fact about that object's tag.
     Trait(&'static str),
+    /// Two or more element types, interned. SPIKE-COMPOSITE-TYPE's landing.
+    ///
+    /// UNCONSTRUCTABLE ON PURPOSE, AND THAT IS THE WHOLE POINT OF LANDING IT
+    /// THIS WAY. Nothing builds one: `registry.rs`'s `resolve` still refuses
+    /// `TypeRef::Tuple` by name, and that ONE site is the single gate. What
+    /// this variant buys is that the compiler can now be ASKED where a tuple
+    /// would go -- the four exhaustive matches below were found by adding it
+    /// and harvesting E0004, which ripgrep cannot do -- and that the twenty
+    /// non-exhaustive sites that would SWALLOW one have been read and answered.
+    ///
+    /// A tuple VALUE is a separate milestone and is not this: there is no
+    /// boxing in this backend, so it needs a representation, and
+    /// `overloading.tex:124-126` makes `f(x: (A,B))` and `f(a:A,b:B)` the same
+    /// declaration, which means M3c's dispatch has to arity-flatten first.
+    Tuple(&'static [Type]),
 }
 
+/// `Type` IS `Copy`, asserted by the compiler rather than claimed. A shared
+/// reference is `Copy` whatever it points at; if a later composite is ever
+/// added by value this line is what stops it silently.
+const fn assert_copy<T: Copy>() {}
+const _: () = assert_copy::<Type>();
+
 impl Type {
+    /// NOT `const` any more, and that is the tuple variant's one real cost. A
+    /// placeholder here -- one string for every tuple -- would give two
+    /// different tuples the same SYMBOL below, which is a silent collision in
+    /// the emitted object rather than a diagnostic. Interning the built name
+    /// keeps the `'static` lifetime and keeps distinct tuples distinct.
     #[must_use]
-    pub const fn name(self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match self {
             Self::ZZ32 => "ZZ32",
             Self::ZZ64 => "ZZ64",
@@ -117,12 +162,16 @@ impl Type {
             Self::Array(Elem::Boolean) => "Array[\\Boolean\\]",
             Self::Array(Elem::String) => "Array[\\String\\]",
             Self::Object(name) | Self::Trait(name) => name,
+            Self::Tuple(elems) => {
+                let inner: Vec<&str> = elems.iter().map(|t| t.name()).collect();
+                intern(&format!("({})", inner.join(", ")))
+            }
         }
     }
 
     /// Lowercase form used to build target symbols like `add_zz64_zz64`.
     #[must_use]
-    pub const fn symbol(self) -> &'static str {
+    pub fn symbol(self) -> &'static str {
         match self {
             Self::ZZ32 => "zz32",
             Self::ZZ64 => "zz64",
@@ -136,6 +185,10 @@ impl Type {
             Self::Array(Elem::Boolean) => "array_boolean",
             Self::Array(Elem::String) => "array_string",
             Self::Object(name) | Self::Trait(name) => name,
+            Self::Tuple(elems) => {
+                let inner: Vec<&str> = elems.iter().map(|t| t.symbol()).collect();
+                intern(&format!("tuple_{}", inner.join("_")))
+            }
         }
     }
 

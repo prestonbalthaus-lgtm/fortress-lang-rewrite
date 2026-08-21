@@ -1,36 +1,45 @@
 #!/usr/bin/env bash
 #
-# The tuple gate. READ THIS BEFORE ASSUMING IT GATES TUPLES.
+# The tuple gate. READ THIS BEFORE ASSUMING IT GATES TUPLE VALUES.
 #
-# TUPLES ARE NOT IMPLEMENTED. `Type` (crates/types/src/types.rs) is still the
-# nine-variant `Copy` enum with no composite case, and `Expr::Tuple` is refused
-# by name. So what this gate pins is the REFUSAL: that a tuple is refused at
-# every position it can appear in, cleanly, with a diagnostic that says which
-# construct it is -- and not silently accepted, mis-parsed, or crashed on.
+# SPIKE-COMPOSITE-TYPE HAS LANDED AND TUPLE VALUES HAVE NOT, and the distance
+# between those two sentences is what this gate now pins.
 #
-# THAT IS WORTH GATING ON ITS OWN. `04-state`'s own record has a construct that
-# parsed and was silently accepted (`[1 2 3]` yields ONE element holding 6), and
-# section 5 of the gap analysis is a list of forms that "parse, type-check clean,
-# and mean nothing". A refusal is a contract like any other, and this one is
-# load bearing: `overloading.tex:124-126` makes a functional's parameter a value
-# that MAY BE A TUPLE, so M3c's dispatch is already written against a world
-# where tuples do not exist.
+# WHAT LANDED: `Type::Tuple(&'static [Type])`, interned, with `Type` still
+# `Copy` -- asserted by a compiled `const _: () = assert_copy::<Type>()` rather
+# than claimed. Four exhaustive matches were forced by the variant and answered;
+# the two catch-alls a tuple would have been silently WRONG in were given
+# explicit arms. That is the spike's pricing, delivered.
 #
-# THIS GATE IS DESIGNED TO GO RED WHEN TUPLES LAND. That is not a bug. When
-# SPIKE-COMPOSITE-TYPE ships and `Type` stops being `Copy`, every assertion here
-# fails at once, and the person who landed it converts this file into a real
-# tuple gate -- positive fixtures, an IR shape, a mutation table -- instead of
-# discovering months later that nothing ever checked tuples. The failure message
-# says so.
+# WHAT DID NOT: a tuple VALUE. There is no boxing in this backend, so a tuple
+# needs a representation, and `overloading.tex:124-126` makes `f(x: (A,B))` and
+# `f(a:A,b:B)` THE SAME DECLARATION -- so M3c's dispatch has to arity-flatten
+# before any of it is sound. `registry.rs`'s `resolve` still refuses
+# `TypeRef::Tuple` by name and is the SINGLE CONSTRUCTION GATE, which is what
+# makes the twenty non-exhaustive sites safe today rather than merely
+# unexercised.
+#
+# SO THIS GATE ASSERTS BOTH HALVES, and neither is decoration:
+#   A. the variant exists, interns, dedups, and `Type` is still `Copy`
+#   B. every SOURCE position a tuple can be written in is still refused cleanly
+#      and by name -- five positions, plus the assertion that a parenthesised
+#      single expression is NOT a tuple, which is what keeps the other five
+#      honest
+#   C. the refusal is still the ONLY gate: nothing outside types.rs and its
+#      tests constructs a `Type::Tuple`
+#
+# WHEN TUPLE VALUES LAND, part B goes red and that is this file's job: whoever
+# lands them converts B into positive fixtures, an IR shape and a mutation
+# table. Part A stays.
 #
 #   ./tools/tuple-gate.sh              run the gate
 #   ./tools/tuple-gate.sh --selftest   only prove the assertions can refuse
 #
-# There is no --mutate. A mutation table breaks the compiler and proves the gate
-# notices; here the ONLY thing to break is the refusal itself, which is what
-# `--selftest`'s negative cases already cover and what landing tuples will do
-# for real. Adding a table that deletes a diagnostic to watch a refusal stop
-# would assert nothing this file does not already assert.
+# There is still no --mutate. An UNCONSTRUCTABLE variant gives a mutation
+# nothing to fire on, and the only other thing to break is the refusal itself,
+# which `--selftest`'s negative cases already cover and which landing tuple
+# values will do for real. A table that deletes a diagnostic to watch a refusal
+# stop would assert nothing this file does not already assert.
 #
 # FORTRESSC pins the binary. KEEP THE PINNED COPY OUTSIDE fortressc/build/.
 set -uo pipefail
@@ -42,11 +51,12 @@ export LLVM_SYS_221_PREFIX=${LLVM_SYS_221_PREFIX:-$HOME/.local/opt/llvm22-root/u
 export CPATH=${CPATH:-$HOME/.local/opt/gc-root/usr/include}
 export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 
-# Measured over the whole corpus with tools/triage.sh at the M6 merge. The
-# number is here so that when it MOVES, someone asks why -- it is the size of
-# what tuples unlock and the reason SPIKE-COMPOSITE-TYPE is sequenced where it
-# is (D6 makes it sub-phase 4a's exit condition).
-TUPLE_FIRST_BLOCKERS=35
+# Measured over the whole corpus with tools/triage.sh. The number is here so
+# that when it MOVES, someone asks why -- it is the size of what tuple VALUES
+# unlock, and landing the type variant moved none of it.
+# 35 at the M6 merge, 40 at the consolidation: the corpus set itself moved
+# (api check mode, and the refusals the consolidation added), not the feature.
+TUPLE_FIRST_BLOCKERS=40
 
 passed=0
 failed=0
@@ -102,9 +112,9 @@ selftest() {
 }
 
 run_gate() {
-    printf '== tuples: the refusal, at every position one can appear ==\n'
-    printf '   TUPLES ARE NOT IMPLEMENTED. This gate pins the refusal, and it is\n'
-    printf '   MEANT to go red the day they land. See the header.\n\n'
+    printf '== part B: tuple VALUES, refused at every position one can appear ==\n'
+    printf '   The TYPE variant has landed and tuple VALUES have not. This half\n'
+    printf '   pins the refusal and is MEANT to go red the day they do.\n\n'
 
     probe 'a tuple TYPE in a parameter' 'a tuple type' \
 'f(p: (ZZ32, ZZ32)): ZZ32 = 1
@@ -145,14 +155,56 @@ end'
             'the tuple refusal is firing on ordinary parentheses'
     fi
 
-    # The `Type` representation is the reason all of the above is true, so the
-    # gate says so out loud rather than leaving it implicit.
-    if grep -q 'pub enum Type {' "$repo/fortressc/crates/types/src/types.rs" &&
-       ! grep -q 'Tuple' "$repo/fortressc/crates/types/src/types.rs"; then
-        ok '`Type` still has no tuple variant -- the refusal is structural'
+    # ---------------------------------------------------------------- part A
+    printf '\n== the representation: interned, and `Type` is still Copy ==\n'
+    local types=$repo/fortressc/crates/types/src/types.rs
+
+    if grep -q "Tuple(&'static \[Type\])" "$types"; then
+        ok '`Type` carries an INTERNED tuple variant'
     else
-        bad '`Type` still has no tuple variant' \
-            'if a Tuple variant exists, tuples are landing: rewrite this gate'
+        bad '`Type` carries an interned tuple variant' \
+            'SPIKE-COMPOSITE-TYPE landed this; if it is gone, say why'
+    fi
+    if grep -q 'const _: () = assert_copy::<Type>();' "$types"; then
+        ok '`Type` is asserted `Copy` BY THE COMPILER, not by a comment'
+    else
+        bad '`Type` is asserted Copy by the compiler' \
+            'the whole interning trick is that a shared reference is Copy'
+    fi
+    if grep -q 'pub fn intern_types' "$types"; then
+        ok 'the element-list interner exists'
+    else
+        bad 'the element-list interner exists'
+    fi
+    # A PLACEHOLDER NAME WOULD BE A SYMBOL COLLISION, not a cosmetic loss: two
+    # different tuples sharing one `symbol()` collide in the emitted object.
+    if grep -q 'pub fn name(self)' "$types" && grep -q 'pub fn symbol(self)' "$types"; then
+        ok '`name` and `symbol` BUILD the answer rather than returning one string'
+    else
+        bad '`name` and `symbol` build the answer' \
+            'if either is `const fn` again it is returning a placeholder per tuple'
+    fi
+
+    # ---------------------------------------------------------------- part C
+    printf '\n== the single construction gate ==\n'
+    local gate
+    gate=$(grep -c 'form: "a tuple type"' "$repo/fortressc/crates/types/src/registry.rs")
+    if [[ $gate -eq 1 ]]; then
+        ok 'registry.rs refuses `TypeRef::Tuple` at exactly one site'
+    else
+        bad 'registry.rs refuses TypeRef::Tuple at exactly one site' "found $gate"
+    fi
+    # Nothing outside the definition and its tests may BUILD one. That is what
+    # makes the twenty non-exhaustive sites safe rather than merely unexercised.
+    local builders
+    builders=$(grep -rln 'Type::Tuple(' "$repo/fortressc/crates" --include=*.rs \
+               | grep -vE 'crates/types/src/types.rs|crates/types/tests/|crates/types/src/registry.rs|crates/codegen/src/lib.rs' \
+               | wc -l)
+    if [[ $builders -eq 0 ]]; then
+        ok 'nothing outside the definition, the gate and codegen names `Type::Tuple`'
+    else
+        bad 'nothing outside the definition names `Type::Tuple`' \
+            "$builders other file(s) do -- a tuple can now be built without passing the gate"
     fi
 
     printf '\n%d passed, %d failed\n' "$passed" "$failed"

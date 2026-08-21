@@ -60,6 +60,13 @@ impl Registry {
                 .traits
                 .get(name)
                 .is_some_and(|t| t.supertraits.contains(wanted)),
+            // A TUPLE IS OUTSIDE THE TRAIT HIERARCHY, and saying so here is a
+            // decision rather than a default. `types.tex` gives tuples
+            // structural subtyping element by element; nothing in this compiler
+            // implements it, and a `_` arm would have answered the same `false`
+            // without anyone having decided. The day tuple values land, this
+            // arm is where element-wise subtyping goes.
+            Type::Tuple(_) => false,
             _ => false,
         }
     }
@@ -132,6 +139,19 @@ impl Registry {
                 .concretes_below(name)
                 .into_iter()
                 .find_map(|concrete| self.reaches_from(Type::Object(concrete), seen)),
+            // THE ONE CATCH-ALL IN THIS COMPILER A TUPLE WOULD HAVE BEEN
+            // SILENTLY WRONG IN. `_ => None` means "reaches no mutable
+            // storage", and a tuple holding an array reaches one -- so a
+            // parallel loop body could have written through it and M4's race
+            // freedom would have rested on a default. It recurses.
+            Type::Tuple(elems) => elems.iter().enumerate().find_map(|(index, elem)| {
+                let rest = self.reaches_from(*elem, seen)?;
+                Some(if rest.is_empty() {
+                    index.to_string()
+                } else {
+                    format!("{index}.{rest}")
+                })
+            }),
             _ => None,
         }
     }
