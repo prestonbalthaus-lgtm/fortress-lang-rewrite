@@ -645,7 +645,12 @@ fn an_ambiguous_call_is_refused_at_compile_time_and_names_both_declarations() {
         Some(1),
         "an ambiguity is a user diagnostic, not a compiler bug:\n{message}"
     );
-    assert!(message.contains("is ambiguous for (OL, OR)"), "{message}");
+    // `OL` and `OR` are OPERATOR WORDS now -- `OR` is the disjunction operator --
+    // so the fixture's objects were renamed and this assertion follows them.
+    assert!(
+        message.contains("is ambiguous for (OLeft, ORight)"),
+        "{message}"
+    );
     // The two declarations are secondary spans now, placed by the driver's
     // renderer as `note:` lines, because a `Display` with no source and no path
     // cannot turn a byte offset into a position.
@@ -1980,4 +1985,94 @@ fn a_big_reduction_over_a_range_is_exact_at_every_worker_count() {
 fn a_big_max_is_refused_by_name_rather_than_read_as_a_subscript() {
     let message = refusal("badbigmax.fss");
     assert!(message.contains("identity element"), "{message}");
+}
+
+// ------------------------------------------------------- api resolution
+
+/// A corpus file, by path from the repository root. Resolution's whole subject
+/// is finding OTHER files, so its fixtures cannot live in `tests/`.
+fn corpus(rel: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../..")
+        .join(rel)
+}
+
+fn resolve_output(rel: &str) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(corpus(rel))
+        .arg("--resolve-imports")
+        .arg("--emit-obj")
+        .arg("-o")
+        .arg("/dev/null")
+        .output()
+        .expect("could not run fortressc")
+}
+
+/// The first name to cross a file boundary in this compiler.
+/// `RecursiveApiTest3a.fss` imports `RecursiveApiTest3b`, which imports it
+/// back -- so it is also the test that the walk terminates on a cycle.
+#[test]
+fn a_type_declared_in_an_imported_api_is_in_scope() {
+    let rel = "ProjectFortress/compiler_tests/RecursiveApiTest3a.fss";
+    let with = resolve_output(rel);
+    assert_eq!(
+        with.status.code(),
+        Some(0),
+        "should compile with resolution:\n{}",
+        String::from_utf8_lossy(&with.stderr)
+    );
+    let without = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(corpus(rel))
+        .arg("--emit-obj")
+        .arg("-o")
+        .arg("/dev/null")
+        .output()
+        .expect("could not run fortressc");
+    assert_eq!(
+        without.status.code(),
+        Some(1),
+        "and must NOT compile without it, or the test proves nothing"
+    );
+}
+
+/// `default_repository/configuration:44`, verbatim. `System` exists in
+/// `Library/`, `CompilerLibrary/` and `ProjectFortress/LibraryBuiltin/` and the
+/// three are DIFFERENT libraries; the path order is the only thing that says
+/// which one an import means, and `LibraryBuiltin` comes first.
+#[test]
+fn the_source_path_order_decides_which_of_a_duplicated_api_is_meant() {
+    let out = resolve_output("ProjectFortress/LibraryBuiltin/System.fsi");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        message.contains("an `api` is a set of signatures"),
+        "the LibraryBuiltin api reaches the terminus:\n{message}"
+    );
+    // `Library/System.fsi` names `ImmutableArray`, which nothing declares.
+    let other = resolve_output("Library/System.fsi");
+    assert!(
+        String::from_utf8_lossy(&other.stderr).contains("ImmutableArray"),
+        "and the Library one is a different file"
+    );
+}
+
+/// An api no file on the source path provides is REPORTED and skipped. Of the
+/// 68 top-level `.fsi` files in the library set, most do not yet parse; making
+/// an unreadable api fatal would measure the parser rather than the resolver
+/// and take every importing component down with it.
+#[test]
+fn an_unresolvable_api_is_reported_rather_than_fatal() {
+    let out = resolve_output("ProjectFortress/compiler_tests/RecursiveApiTest3a.fss");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        message.contains("resolved 2 api(s)"),
+        "resolution reports what it loaded:\n{message}"
+    );
+    // `Library/GeneratorLibrary.fsi` imports `CompilerAlgebra` and four others;
+    // whatever is not on the source path is NAMED rather than being fatal.
+    let other = resolve_output("Library/Reader.fsi");
+    let message = String::from_utf8_lossy(&other.stderr);
+    assert!(
+        !message.contains("internal error"),
+        "an unresolvable api is never an internal error:\n{message}"
+    );
 }

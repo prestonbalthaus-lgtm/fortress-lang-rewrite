@@ -22,6 +22,7 @@ struct Options {
     source: PathBuf,
     output: PathBuf,
     emit_ir: bool,
+    resolve_imports: bool,
     emit_obj: bool,
     cc: String,
     cpu: String,
@@ -31,6 +32,7 @@ fn parse_args(args: &[String]) -> Option<Options> {
     let mut source: Option<PathBuf> = None;
     let mut output: Option<PathBuf> = None;
     let mut emit_ir = false;
+    let mut resolve_imports = false;
     let mut emit_obj = false;
     let mut cc = DEFAULT_CC.to_owned();
     let mut cpu = fortress_codegen::DEFAULT_CPU.to_owned();
@@ -40,6 +42,7 @@ fn parse_args(args: &[String]) -> Option<Options> {
         match arg.as_str() {
             "-o" => output = Some(PathBuf::from(rest.next()?)),
             "--emit-ir" => emit_ir = true,
+            "--resolve-imports" => resolve_imports = true,
             "--emit-obj" => emit_obj = true,
             "--cc" => cc = rest.next()?.clone(),
             "--target-cpu" => cpu = rest.next()?.clone(),
@@ -54,6 +57,7 @@ fn parse_args(args: &[String]) -> Option<Options> {
         source,
         output,
         emit_ir,
+        resolve_imports,
         emit_obj,
         cc,
         cpu,
@@ -65,6 +69,7 @@ fn main() -> ExitCode {
     let Some(options) = parse_args(&args) else {
         eprintln!(
             "usage: fortressc <source.fss> [-o <output>] [--emit-ir] [--emit-obj] \
+             [--resolve-imports] \
                   [--cc <driver>] [--target-cpu <{}>]",
             fortress_codegen::SUPPORTED_CPUS.join("|")
         );
@@ -87,6 +92,8 @@ fn main() -> ExitCode {
         }
     }
 }
+
+mod resolve;
 
 enum Failure {
     User(String),
@@ -218,12 +225,21 @@ fn compile(options: &Options) -> Result<(), Failure> {
     let source = std::fs::read_to_string(&options.source)
         .map_err(|e| Failure::User(format!("cannot read source: {e}")))?;
 
+    // The diagnostic renderer is the semantics lane's; the import resolution
+    // step is the frontend lane's, and it sits between the parse and the check
+    // because `registry.concrete` and every type tag freeze in `Checker::new`.
     let path = options.source.as_path();
     let tokens = fortress_lexer::lex(&source)
         .map_err(|e| Failure::Diagnostic(render(path, &source, e.span(), &e.to_string(), &[])))?;
     let component = fortress_parser::parse(&tokens)
         .map_err(|e| Failure::Diagnostic(render(path, &source, e.span(), &e.to_string(), &[])))?;
-    let typed = fortress_types::check(&component).map_err(|e| {
+    let resolved = if options.resolve_imports {
+        Some(resolve::resolve(&component, &options.source))
+    } else {
+        None
+    };
+    let component = resolved.as_ref().map_or(&component, |r| &r.component);
+    let typed = fortress_types::check(component).map_err(|e| {
         Failure::Diagnostic(render(
             path,
             &source,
@@ -239,6 +255,22 @@ fn compile(options: &Options) -> Result<(), Failure> {
         typed.name,
         typed.functions.len()
     );
+    if let Some(r) = resolved.as_ref() {
+        eprintln!(
+            "fortressc: resolved {} api(s){}{}",
+            r.loaded.len(),
+            if r.missing.is_empty() {
+                String::new()
+            } else {
+                format!("; not on the source path: {}", r.missing.join(", "))
+            },
+            if r.unreadable.is_empty() {
+                String::new()
+            } else {
+                format!("; found but unreadable: {}", r.unreadable.join(", "))
+            }
+        );
+    }
 
     if options.emit_ir {
         let ir = fortress_codegen::emit_ir(&typed, &options.cpu)

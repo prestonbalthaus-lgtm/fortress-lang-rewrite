@@ -225,6 +225,7 @@ impl Pass {
                     params: vec![Param {
                         name: "x$0".to_owned(),
                         ty: arrow.from.clone(),
+                        varargs: false,
                         span: Span::new(0, 0),
                     }],
                     return_type: Some(arrow.to.clone()),
@@ -446,7 +447,12 @@ impl Pass {
             let Some(ty) = slot.ty.clone() else {
                 return Err(TypeError::LambdaCaptureUntyped { span, name });
             };
-            captures.push(Param { name, ty, span });
+            captures.push(Param {
+                name,
+                ty,
+                varargs: false,
+                span,
+            });
         }
 
         let index = self.lambdas;
@@ -471,6 +477,7 @@ impl Pass {
                 params: vec![Param {
                     name: param.name.clone(),
                     ty: from,
+                    varargs: false,
                     span,
                 }],
                 return_type: Some(to),
@@ -578,6 +585,7 @@ impl Pass {
                 params: vec![Param {
                     name: "x$0".to_owned(),
                     ty: from,
+                    varargs: false,
                     span,
                 }],
                 return_type: Some(to),
