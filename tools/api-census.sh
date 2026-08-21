@@ -105,7 +105,16 @@ GROUPS['all'] = census + incomplete + builtin + testlib
 # The driver prints `path: start..end: message`. Stripping the span is what
 # turns a few dozen shapes back into a few dozen instead of one per file, and
 # it is the same regex tools/triage.sh:130 uses.
-SPAN = re.compile(r'^\S+?: \d+\.\.\d+: ')
+# THE DRIVER RENDERS A SOURCE EXCERPT UNDER EACH DIAGNOSTIC since the semantics
+# lane's line:col work, and for some variants `note:` lines with excerpts of
+# their own. SO THE LAST STDERR LINE IS A CARET, NOT A MESSAGE. Take the first
+# HEADER line instead -- the one that carries a position and is not a note --
+# which is exactly what tools/triage.sh:140-148 settled on, kept identical here
+# so the two instruments cannot disagree about what a file's diagnostic was.
+HEADER = re.compile(r'^\S+?:\d+:\d+: (?!note: )')
+
+# Both span shapes: `path: start..end: ` (pre-merge) and `path:line:col: `.
+SPAN = re.compile(r'^\S+?:(?: \d+\.\.\d+|\d+:\d+): ')
 
 # EXACT, not a substring search: the terminus is a status and not a keyword.
 # types/src/lib.rs refuses `is_api` as the first statement of Checker::run, so
@@ -172,7 +181,8 @@ def run_one(path):
     r = subprocess.run([FORTRESSC, path, '--emit-obj', '-o', '/dev/null'],
                        capture_output=True, text=True, stdin=subprocess.DEVNULL)
     lines = r.stderr.strip().splitlines()
-    last  = lines[-1] if lines else ''
+    header = next((l for l in lines if HEADER.match(l)), None)
+    last = header if header is not None else (lines[-1] if lines else '')
     return {'path': path, 'code': r.returncode, 'last': last,
             'status': classify(r.returncode, last),
             'diagnostic': diagnostic(last) if r.returncode else ''}
