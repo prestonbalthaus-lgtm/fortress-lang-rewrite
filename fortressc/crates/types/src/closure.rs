@@ -163,23 +163,23 @@ impl Pass {
             match decl {
                 Decl::Function(f) => {
                     for p in &mut f.params {
-                        self.rewrite_type(&mut p.ty);
+                        self.rewrite_type(&mut p.ty)?;
                     }
                     if let Some(t) = &mut f.return_type {
-                        self.rewrite_type(t);
+                        self.rewrite_type(t)?;
                     }
                 }
                 Decl::Trait(t) => {
                     for m in &mut t.members {
-                        self.rewrite_member_types(m);
+                        self.rewrite_member_types(m)?;
                     }
                 }
                 Decl::Object(o) => {
                     for p in o.params.iter_mut().flatten() {
-                        self.rewrite_type(&mut p.ty);
+                        self.rewrite_type(&mut p.ty)?;
                     }
                     for m in &mut o.members {
-                        self.rewrite_member_types(m);
+                        self.rewrite_member_types(m)?;
                     }
                 }
             }
@@ -265,18 +265,19 @@ impl Pass {
         })
     }
 
-    fn rewrite_member_types(&mut self, m: &mut Member) {
+    fn rewrite_member_types(&mut self, m: &mut Member) -> Result<(), TypeError> {
         match m {
-            Member::Field(f) => self.rewrite_type(&mut f.ty),
+            Member::Field(f) => self.rewrite_type(&mut f.ty)?,
             Member::Method(m) => {
                 for p in &mut m.params {
-                    self.rewrite_type(&mut p.ty);
+                    self.rewrite_type(&mut p.ty)?;
                 }
                 if let Some(t) = &mut m.return_type {
-                    self.rewrite_type(t);
+                    self.rewrite_type(t)?;
                 }
             }
         }
+        Ok(())
     }
 
     fn rewrite_member_body(&mut self, m: &mut Member) -> Result<(), TypeError> {
@@ -297,11 +298,23 @@ impl Pass {
     /// Innermost first, so `(A -> B) -> C` mints the trait for `A -> B` before
     /// the one that names it and the composition falls out with no special
     /// case.
-    fn rewrite_type(&mut self, t: &mut TypeRef) {
+    fn rewrite_type(&mut self, t: &mut TypeRef) -> Result<(), TypeError> {
         match t {
             TypeRef::Arrow { from, to, span } => {
-                self.rewrite_type(from);
-                self.rewrite_type(to);
+                self.rewrite_type(from)?;
+                self.rewrite_type(to)?;
+                // A NAME THAT DOES NOT EXIST IS REPORTED HERE, because leaving
+                // the arrow unlifted hands it to a diagnostic that names the
+                // wrong thing -- and inside an ABSTRACT member, to no
+                // diagnostic at all: an unliftable arrow is `TypeNotImplemented`,
+                // which `excusable` skips, so `m(g: Foo -> ZZ32): ZZ32` in a
+                // trait compiled to exit 0 in silence.
+                if let Some(unknown) = self.undeclared_in(from).or_else(|| self.undeclared_in(to)) {
+                    return Err(TypeError::UnknownType {
+                        span: *span,
+                        name: unknown,
+                    });
+                }
                 // NOT EVERY ARROW IS LIFTABLE, and one that is not must be left
                 // exactly as it was so that `Registry::resolve` gives it the
                 // refusal it already had. Minting a trait whose `apply` takes a
@@ -309,7 +322,7 @@ impl Pass {
                 // master into a silent exit 0 -- the worst class this project
                 // recognises, introduced by the pass meant to add a feature.
                 if !self.liftable_domain(from) || !self.liftable(to) {
-                    return;
+                    return Ok(());
                 }
                 let key = arrow_key(from, to);
                 let name = self
@@ -334,15 +347,36 @@ impl Pass {
             }
             TypeRef::Named { args, .. } => {
                 for a in args {
-                    self.rewrite_type(a);
+                    self.rewrite_type(a)?;
                 }
             }
             TypeRef::Tuple { elems, .. } => {
                 for e in elems {
-                    self.rewrite_type(e);
+                    self.rewrite_type(e)?;
                 }
             }
             TypeRef::Unit { .. } => {}
+        }
+        Ok(())
+    }
+
+    /// The first name inside a type that this component does not declare. Only
+    /// asked about the sides of an ARROW: everywhere else the checker resolves
+    /// the type itself and reports it, and asking here as well would report the
+    /// same thing twice with a worse span.
+    fn undeclared_in(&self, t: &TypeRef) -> Option<String> {
+        match t {
+            TypeRef::Named { name, args, .. } => {
+                if !self.known.contains(name) && !name.starts_with(TRAIT_PREFIX) {
+                    return Some(name.clone());
+                }
+                args.iter().find_map(|a| self.undeclared_in(a))
+            }
+            TypeRef::Arrow { from, to, .. } => {
+                self.undeclared_in(from).or_else(|| self.undeclared_in(to))
+            }
+            TypeRef::Tuple { elems, .. } => elems.iter().find_map(|e| self.undeclared_in(e)),
+            TypeRef::Unit { .. } => None,
         }
     }
 
@@ -419,7 +453,7 @@ impl Pass {
             }
         };
         if let Some(p) = param.as_mut() {
-            self.rewrite_type(&mut p.ty);
+            self.rewrite_type(&mut p.ty)?;
         }
 
         // What the slot asks for, when it asks for anything. It is the ONLY
@@ -450,7 +484,7 @@ impl Pass {
         let to = match (return_type.as_ref(), slot.as_ref()) {
             (Some(r), _) => {
                 let mut r = r.clone();
-                self.rewrite_type(&mut r);
+                self.rewrite_type(&mut r)?;
                 r
             }
             (None, Some((_, t))) => t.clone(),
@@ -475,7 +509,7 @@ impl Pass {
             to: Box::new(to.clone()),
             span,
         };
-        self.rewrite_type(&mut arrow_ref);
+        self.rewrite_type(&mut arrow_ref)?;
         let TypeRef::Named {
             name: trait_name, ..
         } = &arrow_ref
@@ -874,7 +908,7 @@ impl Pass {
                         name, ty, value, ..
                     } = b;
                     if let Some(t) = ty {
-                        self.rewrite_type(t);
+                        self.rewrite_type(t)?;
                     }
                     let written = ty.clone();
                     self.rewrite_slotted(value, written.as_ref(), scope)?;

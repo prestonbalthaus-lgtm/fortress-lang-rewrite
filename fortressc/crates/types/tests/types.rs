@@ -1237,6 +1237,27 @@ fn an_arrow_over_liftable_types_becomes_a_trait_and_the_rest_stay_refused() {
         "got {e}"
     );
 
+    // AN ARROW OVER A NAME THAT DOES NOT EXIST NAMES THE NAME. Leaving the
+    // arrow unlifted handed it to a diagnostic about arrows -- and inside an
+    // ABSTRACT member, to no diagnostic at all, because an unliftable arrow is
+    // `TypeNotImplemented`, which an abstract member is allowed to keep.
+    for source in [
+        "f(g: Foo -> ZZ32): ZZ32 = 1",
+        "trait T\n m(g: Foo -> ZZ32): ZZ32\nend\nrun(): ZZ32 = 1",
+    ] {
+        match body_error(source) {
+            TypeError::UnknownType { name, .. } => assert_eq!(name, "Foo"),
+            other => panic!("expected UnknownType for `{source}`, got {other:?}"),
+        }
+    }
+
+    // A TRAIT'S FIELD TYPE IS RESOLVED even though the field itself carries no
+    // storage. `trait T  x: Foo  end` compiled to exit 0 in silence otherwise.
+    match body_error("trait T\n x: Foo = 1\nend\nrun(): ZZ32 = 1") {
+        TypeError::UnknownType { name, .. } => assert_eq!(name, "Foo"),
+        other => panic!("expected UnknownType for a trait field, got {other:?}"),
+    }
+
     // The three that are NOT liftable keep the diagnostic they had, because
     // `apply` would need a parameter this subset cannot store -- or, for an
     // undeclared name, because an abstract member's parameter types are

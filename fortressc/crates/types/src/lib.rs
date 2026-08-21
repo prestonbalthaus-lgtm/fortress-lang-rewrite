@@ -571,6 +571,20 @@ impl Checker {
             }
         }
 
+        // A TRAIT'S FIELDS CARRY NO STORAGE HERE and are dropped -- a trait
+        // typed value is a pointer to some concrete object, and the object
+        // declares its own. Their TYPES were dropped with them, which made
+        // `trait T  x: Foo  end` with no `Foo` compile to exit 0 in silence,
+        // the same hole an abstract member had. Resolving them changes nothing
+        // downstream and refuses that.
+        for decl in &component.decls {
+            let Decl::Trait(t) = decl else { continue };
+            for member in &t.members {
+                let Member::Field(f) = member else { continue };
+                self.storable(&substitute_self(&f.ty, intern(&t.name)), "a field")?;
+            }
+        }
+
         for decl in &component.decls {
             let Decl::Object(o) = decl else { continue };
             let name = intern(&o.name);
