@@ -166,6 +166,59 @@ its line stays in the file with a comment rather than being deleted.
 
 ---
 
+### DEF-6 — 84 diagnostics carry both a `line:col` prefix and a leftover byte span
+
+| | |
+|---|---|
+| **Owner** | the semantics lane (diagnostics) |
+| **Class** | presentation; a reader is shown a byte offset they cannot use |
+| **Status** | open, found by the api-conformance scaffold at the phase-1 merge |
+
+The `line:col` conversion did not reach every diagnostic construction site, so
+84 corpus files report the doubled form:
+
+```
+ProjectFortress/LibraryBuiltin/System.fss:13:8: 375..379: a foreign import
+reaches a JVM implementation and this compiler emits native code
+```
+
+By message: the foreign-import one 39, two `fn` parameter forms 22, lopsided
+infix 3, a `case` arm separator 2, object varargs 2, and a tail. Cheap to fix
+and worth it — every instrument that strips a span now has to strip two shapes,
+and `tools/{triage,api-census,api-conformance}.sh` each carry the same widened
+regex because of it.
+
+### DEF-7 — seven must-fail programs became reachable at the phase-1 merge
+
+| | |
+|---|---|
+| **Owner** | Group 2 for five of them, the frontend lane for one, undiagnosed for one |
+| **Class** | silent wrong acceptance, and **not a new break** |
+| **Status** | baselined with reasons in `tools/oracle-accepted-must-fail.txt` |
+
+The oracle gate went red with 7 new acceptances immediately after the merge.
+Diagnosed rather than re-baselined: none of them is newly broken, they are newly
+**reached**. Import resolution now loads the api, so each file gets past the
+parse or import failure that used to stop it and arrives at a check that does
+not exist.
+
+**Two of them are the acceptance test for component-satisfies-api.**
+`Compiled2.a` expects *"Component Compiled2.a exports API Compiled2.a but does
+not define all declarations"* and `Compiled3.g` expects *"The following
+declarations in API Compiled3.g are not matched"*. When that check lands, those
+two must go red here and come **out** of the list in the same commit. Three more
+(`Compiled3.q`, `Compiled5.bq`, `Compiled5.y`) expect `Invalid comprises
+clause`, which is DEF-5's `comprises` hole and closes with the same work.
+`Compiled1.al` is an operator-expression rule the frontend lane now parses past.
+`Compiled1.i` is **undiagnosed** and is the one line in that file with no reason
+beside it.
+
+*Note on the mechanism:* `--refresh-lists` rewrites those files with a fixed
+header and would **destroy** the per-line reasons above. Maintain them by hand;
+the reader strips `#` comments, so a commented block costs nothing.
+
+---
+
 ## Named deviations from 1.0
 
 Decided, written down, and permanent unless their stated trigger fires. Not

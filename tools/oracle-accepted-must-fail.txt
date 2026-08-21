@@ -43,3 +43,38 @@ ProjectFortress/compiler_tests/Compiled9.r.fss
 ProjectFortress/compiler_tests/Compiled9.z.fss
 ProjectFortress/compiler_tests/NYI.Compiled5.n.fss
 ProjectFortress/parser_tests/XXXPreparser.c.fss
+
+# ---------------------------------------------------------------------------
+# ADDED AT THE PHASE-1 MERGE (repo 917e69138). These seven were NOT newly
+# broken -- they were newly REACHED. Import resolution now loads the api, so
+# each file gets past the parse or import failure that used to stop it and
+# arrives at a check that does not exist yet. Diagnosed one by one from the
+# `compile_err_equals` the legacy implementation recorded:
+#
+#   Compiled2.a   "Component Compiled2.a exports API Compiled2.a but does not
+#   Compiled3.g    define all declarations" / "declarations in API ... are not
+#                  matched" -- COMPONENT-SATISFIES-API. These two are the
+#                  acceptance test for that work: when it lands they must go
+#                  red here and come OUT of this file in the same commit.
+#
+#   Compiled3.q   "Invalid comprises clause" x3 -- `comprises` is recorded and
+#   Compiled5.bq   read by nothing but two mono.rs copies. Defect register
+#   Compiled5.y    DEF-5, and source-code.tex:290-299 makes the exported
+#                  hierarchy a fact about the api, so this closes with the
+#                  conformance work too.
+#
+#   Compiled1.al  "Item at this location must be an expression, not an
+#                  operator" -- an operator-expression rule the frontend lane's
+#                  operator-word work now parses past.
+#
+#   Compiled1.i   no single expected message extracted; UNDIAGNOSED. It is here
+#                  so the ratchet stays meaningful, and it is the one line in
+#                  this file with no reason next to it.
+# ---------------------------------------------------------------------------
+ProjectFortress/compiler_tests/Compiled1.al.fss
+ProjectFortress/compiler_tests/Compiled1.i.fss
+ProjectFortress/compiler_tests/Compiled2.a.fss
+ProjectFortress/compiler_tests/Compiled3.g.fss
+ProjectFortress/compiler_tests/Compiled3.q.fss
+ProjectFortress/compiler_tests/Compiled5.bq.fss
+ProjectFortress/compiler_tests/Compiled5.y.fss
