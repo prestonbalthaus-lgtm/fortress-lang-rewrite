@@ -295,11 +295,19 @@ PY
         else
             "$fortressc" "$repo/fortressc/tests/$fixture.fss" --emit-obj -o /dev/null >/dev/null 2>&1
             local rc=$?
-            if [[ $rc -eq 0 ]]; then
-                printf 'refused  the gate would catch this: %s.fss now COMPILES\n' "$fixture"
+            # CAUGHT MEANS "NO LONGER A CLEAN REFUSAL", NOT "NOW COMPILES", and
+            # the first draft of this table had it wrong. Two of these guards
+            # are load bearing for codegen as well as for the diagnostic, so
+            # removing them yields exit 70 -- an internal error -- rather than
+            # exit 0. The gate's own `refused_cleanly` accepts only exit 1, so
+            # it goes red on 70 too; a mutate check stricter than the gate it
+            # tests reports a catch as an escape.
+            if [[ $rc -ne 1 ]]; then
+                printf 'refused  the gate would catch this: %s.fss exits %s, not 1\n' \
+                    "$fixture" "$rc"
                 refused=$((refused + 1))
             else
-                printf 'ESCAPED  %s.fss is still refused (exit %s)\n' "$fixture" "$rc"
+                printf 'ESCAPED  %s.fss is still cleanly refused (exit 1)\n' "$fixture"
                 survived=$((survived + 1))
             fi
         fi
