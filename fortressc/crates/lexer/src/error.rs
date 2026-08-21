@@ -23,8 +23,6 @@ pub enum LexErrorKind {
     DoubleStar,
     /// Any operator immediately followed by `+`.
     OperatorFollowedByPlus,
-    /// `=` immediately followed by an operator character that formed no known token.
-    MalformedEquals,
     NonAsciiCharacter,
     CharacterLiteralUnsupported,
     RadixNumeralUnsupported,
@@ -55,7 +53,6 @@ impl LexErrorKind {
             Self::MultipleDecimalPoints => "a numeral contains more than one `.` character",
             Self::DoubleStar => "`**` is not a valid operator in Fortress",
             Self::OperatorFollowedByPlus => "an operator may not be immediately followed by `+`",
-            Self::MalformedEquals => "`=` is followed by an operator character",
             Self::NonAsciiCharacter => {
                 "non-ASCII characters are not in the M1 subset outside comments and strings"
             }

@@ -126,9 +126,12 @@ fn lexes_the_whole_corpus_without_panicking() {
     // A ratchet, not a target. The number only ever goes up; a change that drops
     // it is a regression and should fail here rather than be noticed a
     // milestone later. M3d's lexer pass took this from 1277 to 1780 by adding
-    // `|`, `<|`, `|>`, `||`, `=>`, `^` and `#`.
+    // `|`, `<|`, `|>`, `||`, `=>`, `^` and `#`. The floor then went unratcheted
+    // through the `opr` spike's backslash, which took the real number to 1807.
+    // Moving `equals = "=" (!op)` out of the lexer and into the parser's
+    // binding position took it 1807 -> 1810.
     assert!(
-        ok >= 1780,
-        "lexer corpus regressed: {ok} files lex, floor is 1780"
+        ok >= 1810,
+        "lexer corpus regressed: {ok} files lex, floor is 1810"
     );
 }

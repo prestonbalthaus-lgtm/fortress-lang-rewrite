@@ -253,6 +253,53 @@ impl<'t, 'a> Parser<'t, 'a> {
         self.glued_right(index).then_some(op)
     }
 
+    /// `equals = "=" (!op)` (`Symbol.rats:201`): the `=` that INTRODUCES A
+    /// DEFINITION is one not glued to an operator character. `Symbol.rats` has
+    /// a second production for the same character -- `equalsOp`, the equality
+    /// operator -- which carries no such restriction, and the reference grammar
+    /// reaches `equals` only from `Function.rats:33`, `Method.rats:44`,
+    /// `Variable.rats:40`, `LocalDecl.rats:159` and `Parameter.rats:93`: every
+    /// one a binding or a keyword argument.
+    ///
+    /// It used to live in the LEXER, where it applied to every `=` in the file.
+    /// `Library/QuickCheck.fsi`'s `opr ==>` and `Library/RangeInternals.fss:453`'s
+    /// `ex=-1` -- an EQUALITY, inside the body of `opr =` -- were hard lex
+    /// errors for it.
+    ///
+    /// BRACKETS ARE NOT OPERATORS HERE. `Symbol.rats:175-177` excludes
+    /// `encloser`, `leftEncloser` and `rightEncloser` from `singleOp`, so
+    /// `x =[1,2]` stays a definition; the set below is the one the lexer guard
+    /// already used, moved rather than widened.
+    fn definition_equals_at(&self, index: usize) -> bool {
+        if !matches!(self.tokens.get(index).map(|t| &t.kind), Some(Kind::Eq)) {
+            return false;
+        }
+        if !self.glued_right(index) {
+            return true;
+        }
+        !matches!(
+            self.tokens.get(index + 1).map(|t| &t.kind),
+            Some(
+                Kind::Plus
+                    | Kind::Minus
+                    | Kind::Star
+                    | Kind::Slash
+                    | Kind::SlashSlash
+                    | Kind::SlashSlashSlash
+                    | Kind::Lt
+                    | Kind::Gt
+                    | Kind::Le
+                    | Kind::Ge
+                    | Kind::Eq
+                    | Kind::EqEqEq
+                    | Kind::NotEq
+                    | Kind::FatArrow
+                    | Kind::Colon
+                    | Kind::ColonEq
+            )
+        )
+    }
+
     /// `...` after a parameter's type. `Symbol.rats:212` makes `ellipses` one
     /// lexical token; this parser has three `Dot`s, so the three must be glued
     /// to EACH OTHER -- the same trade `->`, `<-` and `+=` take, and no file in
@@ -453,7 +500,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         // `x := 0` to be confused with.
         let save = self.pos;
         self.skip_newlines();
-        let body = if self.at(&Kind::Eq) || self.at(&Kind::ColonEq) {
+        let body = if self.definition_equals_at(self.pos) || self.at(&Kind::ColonEq) {
             self.pos += 1;
             self.skip_newlines();
             Some(self.expr()?)
@@ -830,7 +877,7 @@ impl<'t, 'a> Parser<'t, 'a> {
     fn optional_definition(&mut self) -> Parsed<Option<Expr>> {
         let save = self.pos;
         self.skip_newlines();
-        if !self.at(&Kind::Eq) {
+        if !self.definition_equals_at(self.pos) {
             self.pos = save;
             return Ok(None);
         }
@@ -2151,7 +2198,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         {
             let probe = self.pos;
             if let Ok(Expr::Call { callee, span, .. }) = self.postfix() {
-                if matches!(*callee, Expr::Var { .. }) && self.at(&Kind::Eq) {
+                if matches!(*callee, Expr::Var { .. }) && self.definition_equals_at(self.pos) {
                     return Err(ParseError::LocalFunctionDeclarationUnsupported { span });
                 }
             }
@@ -2232,7 +2279,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         // without one `i := 0` would be a declaration in some scopes and an
         // assignment in others, which is how a typo silently shadows.
         let mutable = match self.peek_kind() {
-            Some(Kind::Eq) => modifier,
+            Some(Kind::Eq) if self.definition_equals_at(self.pos) => modifier,
             Some(Kind::ColonEq) if ty.is_some() => true,
             _ => {
                 self.pos = save;

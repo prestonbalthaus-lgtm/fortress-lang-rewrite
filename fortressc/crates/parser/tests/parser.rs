@@ -1331,3 +1331,45 @@ fn a_where_binding_refuses_the_kinds_a_static_parameter_list_refuses() {
         other => panic!("expected a `nat` refusal, got {other:?}"),
     }
 }
+
+// ------------------------------------------------------------ the `=` guard
+
+/// `Symbol.rats:201` is `equals = "=" (!op)` and the reference grammar reaches
+/// it only from a binding or a keyword argument. `Library/RangeInternals.fss:453`
+/// writes `ex=-1` INSIDE the body of `opr =`, where it is an equality and not a
+/// definition -- which is the whole reason the guard exists and the whole reason
+/// it cannot live in the lexer.
+#[test]
+fn an_equals_glued_to_an_operator_is_not_a_definition() {
+    match expr("ex=-1") {
+        Expr::Infix { op: BinOp::Eq, .. } => {}
+        other => panic!("expected an equality, got {other:?}"),
+    }
+}
+
+/// The spaced form still binds, and so does a glued one whose right-hand side
+/// starts with a bracket: `Symbol.rats:175-177` keeps enclosers out of `op`.
+#[test]
+fn a_definition_equals_still_binds() {
+    let c = component("component t\nf() = do\n  x = -1\n  y =[1, 2]\n  x\nend\nend\n");
+    let Some(Decl::Function(f)) = c.decls.into_iter().next() else {
+        panic!("expected a function");
+    };
+    let Some(Expr::Block { items, .. }) = f.body else {
+        panic!("expected a block");
+    };
+    let bindings = items
+        .iter()
+        .filter(|i| matches!(i, BlockItem::Binding(_)))
+        .count();
+    assert_eq!(bindings, 2, "both are definitions");
+}
+
+/// `Library/QuickCheck.fsi:409`. The longest match splits `==>` into `=` then
+/// `=>`; the operator run re-glues them by span adjacency, which is the same
+/// mechanism `|||` and `<->` already rest on.
+#[test]
+fn a_declared_operator_may_be_named_out_of_equals_signs() {
+    let names = opr_names("api t\nopr ==>(p: Boolean, q: Boolean): Boolean\nend\n");
+    assert_eq!(names, ["==>"]);
+}

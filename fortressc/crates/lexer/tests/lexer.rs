@@ -49,7 +49,27 @@ fn equality_is_three_equals_and_there_is_no_double_equals() {
         kinds("a =/= b"),
         vec![Kind::Ident("a"), Kind::NotEq, Kind::Ident("b"), Kind::Eof]
     );
-    assert_eq!(err("a == b"), LexErrorKind::MalformedEquals);
+    // `==` is TWO `=` tokens. `Symbol.rats` has no `==`, and the guard that
+    // used to make this a lex error was `equals = "=" (!op)` -- a BINDING-
+    // position rule that had been hoisted here, where it applied to every `=`
+    // in the file. It now lives in the parser.
+    assert_eq!(
+        kinds("a == b"),
+        vec![
+            Kind::Ident("a"),
+            Kind::Eq,
+            Kind::Eq,
+            Kind::Ident("b"),
+            Kind::Eof
+        ]
+    );
+    // `Library/QuickCheck.fsi:409` declares `opr ==>`, and the longest match
+    // splits it `=` then `=>` -- which the parser's operator run re-glues by
+    // span adjacency into one name.
+    assert_eq!(
+        kinds("opr ==>"),
+        vec![Kind::Reserved("opr"), Kind::Eq, Kind::FatArrow, Kind::Eof]
+    );
 }
 
 #[test]
@@ -514,8 +534,16 @@ fn fat_arrow_is_one_token_rather_than_a_malformed_equals() {
             Kind::Eof
         ]
     );
-    // A genuinely malformed `=` still reports as one.
-    assert_eq!(err("x =: y"), LexErrorKind::MalformedEquals);
+    assert_eq!(
+        kinds("x =: y"),
+        vec![
+            Kind::Ident("x"),
+            Kind::Eq,
+            Kind::Colon,
+            Kind::Ident("y"),
+            Kind::Eof
+        ]
+    );
 }
 
 /// The characters that were sending 319 of the 737 bracket files to a lexer

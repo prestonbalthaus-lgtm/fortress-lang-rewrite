@@ -276,19 +276,6 @@ always_error!(err_char_literal, CharacterLiteralUnsupported);
 always_error!(err_curly_quote, CurlyQuoteStringUnsupported);
 always_error!(err_non_ascii, NonAsciiCharacter);
 
-/// `equals = "=" (!op)` (`Symbol.rats:201`). `===`, `=/=`, `=>`, `<=` and `>=`
-/// are matched as longer tokens first, so a bare `=` glued to an operator
-/// character is malformed rather than two tokens.
-fn op_equals(lex: &mut Lexer<Raw>) -> Skip {
-    match lex.remainder().chars().next() {
-        Some('+') => FilterResult::Error(LexErrorKind::OperatorFollowedByPlus),
-        Some('-' | '*' | '/' | '<' | '=' | ':' | '!') => {
-            FilterResult::Error(LexErrorKind::MalformedEquals)
-        }
-        _ => FilterResult::Emit(()),
-    }
-}
-
 fn numeral(lex: &mut Lexer<Raw>) -> FilterResult<(), LexErrorKind> {
     let text = lex.slice();
     if lex.remainder().starts_with('_') {
@@ -388,7 +375,14 @@ pub(crate) enum Raw {
     Le,
     #[token(">=")]
     Ge,
-    #[token("=", op_equals)]
+    /// `Symbol.rats` has TWO productions for `=`. `equalsOp` is the equality
+    /// operator and carries no restriction; `equals = "=" (!op)` at :201 is the
+    /// one that introduces a DEFINITION, and the reference grammar reaches it
+    /// only from a binding or a keyword-argument position. The guard used to
+    /// live here, where it applied to every `=` in the file and made `opr ==>`
+    /// and `ex=-1` hard lex errors. It is now `definition_equals_at` in the
+    /// parser.
+    #[token("=")]
     Eq,
     #[token("<", op_lt)]
     Lt,
