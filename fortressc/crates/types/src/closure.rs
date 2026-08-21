@@ -137,6 +137,7 @@ fn apply_params(from: &TypeRef, name: &str, span: Span) -> Vec<Param> {
     vec![Param {
         name: name.to_owned(),
         ty: from.clone(),
+        varargs: false,
         span,
     }]
 }
@@ -550,7 +551,12 @@ impl Pass {
             let Some(ty) = slot.ty.clone() else {
                 return Err(TypeError::LambdaCaptureUntyped { span, name });
             };
-            captures.push(Param { name, ty, span });
+            captures.push(Param {
+                name,
+                ty,
+                varargs: false,
+                span,
+            });
         }
 
         let index = self.lambdas;
@@ -578,6 +584,7 @@ impl Pass {
                         vec![Param {
                             name: p.name.clone(),
                             ty: from.clone(),
+                            varargs: false,
                             span,
                         }]
                     })

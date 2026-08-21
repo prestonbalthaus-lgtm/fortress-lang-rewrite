@@ -6,6 +6,10 @@ use crate::Span;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Component {
     pub name: String,
+    /// `export Executable`, `export Compiled5.a`, `export {A, B}`. Dotted and
+    /// braced forms parse: `parser/src/lib.rs` read the component header with
+    /// `dotted_name` and the export fourteen lines later with `identifier`, so
+    /// `component Compiled5.a` parsed and `export Compiled5.a` did not.
     pub exports: Vec<String>,
     /// Recorded and not read. Whole-program monomorphization has no separate
     /// compilation, so there is nothing for an import to resolve against yet.
@@ -20,15 +24,40 @@ pub struct Component {
     pub span: Span,
 }
 
-/// `import Foo.Bar.{...}`. The name is kept; the brace group and any `except`
-/// clause are consumed without being interpreted, because aliasing an operator
-/// (`opr OPLUS => MYPLUS`) needs a precedence map that does not exist yet.
+/// `import Foo.{a, b as c} except {d}`, `import api Foo`, `import Foo.member`.
+///
+/// The brace group used to be consumed as a balanced token run and thrown away;
+/// it is recorded now, because a resolver cannot answer
+/// `source-code.tex:280-287`'s question -- which of two apis a name came from --
+/// without knowing which names were asked for.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportDecl {
     pub api_name: String,
     /// `import api Foo` rather than `import Foo.{...}`.
     pub is_api: bool,
+    /// What the import names. `OnDemand` is `.{...}` and `import api Foo`,
+    /// which `intro.tex:38-63` calls an import-on-demand.
+    pub items: ImportItems,
+    /// `except {a, b}`. Only meaningful with `OnDemand`.
+    pub except: Vec<String>,
     pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImportItems {
+    /// Every name the api exports.
+    OnDemand,
+    /// `import Foo.{a, b as c}` and the single-member `import Foo.a`.
+    Named(Vec<ImportedName>),
+}
+
+/// `a`, or `a as b`. The alias is recorded and read by nothing yet: aliasing an
+/// OPERATOR (`opr OPLUS => MYPLUS`) needs a precedence map, and recording the
+/// two halves is cheaper than pretending the distinction does not exist.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportedName {
+    pub name: String,
+    pub alias: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -152,6 +181,14 @@ pub struct MethodDecl {
 pub struct Param {
     pub name: String,
     pub ty: TypeRef,
+    /// `failMsg: Any...`. RECORDED AND NOT READ, and deliberately so: what a
+    /// varargs parameter lowers to is an open question. `functions.tex:174-182`
+    /// says `HeapSequence[\T\]`, a library type that does not exist, and the
+    /// only sequence this compiler has is `Array[\T\]`, whose allocator
+    /// REFUSES a reference element type by design. Until that is decided the
+    /// parameter is an ordinary one of type `T`, so a call with the wrong
+    /// arity is refused rather than silently accepted.
+    pub varargs: bool,
     pub span: Span,
 }
 

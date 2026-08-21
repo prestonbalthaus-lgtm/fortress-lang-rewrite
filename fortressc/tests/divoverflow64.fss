@@ -1,0 +1,15 @@
+component divoverflow64
+
+export Executable
+
+quotient(a: ZZ64, b: ZZ64): ZZ64 = a/b
+
+run():()=do
+   least: ZZ64 := -9223372036854775807
+   least := least - 1
+   println("stdout survived the halt")
+   println(least)
+   println(quotient(least, -1))
+   println("unreachable")
+end
+end

@@ -1,0 +1,12 @@
+component kwbuiltin
+
+export Executable
+
+run():()=do
+   count: ZZ32 = 1000
+   assert(count = 1000)
+   println(count = 1000)
+   ignore(count = 1000)
+   println(count = 1000)
+end
+end

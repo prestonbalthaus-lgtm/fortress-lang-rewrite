@@ -2,21 +2,21 @@ component ambiguous
 export Executable
 
 (* The symmetric case, and the whole reason ambiguity is a compile error here.
-   `pick(Left, Top)` and `pick(Top, Right)` are both applicable to (OL, OR) and
+   `pick(Left, Top)` and `pick(Top, Right)` are both applicable to (OLeft, ORight) and
    neither is more specific than the other. Specification 1.0 would choose one
    of them arbitrarily; an arbitrary winner is a silently wrong answer. *)
 trait Top end
 trait Left extends {Top} end
 trait Right extends {Top} end
 
-object OL extends {Left} end
-object OR extends {Right} end
+object OLeft extends {Left} end
+object ORight extends {Right} end
 
 pick(x: Top, y: Top): ZZ32 = 0
 pick(x: Left, y: Top): ZZ32 = 1
 pick(x: Top, y: Right): ZZ32 = 2
 
-topOf(n: ZZ32): Top = if n === 0 then OL else OR end
+topOf(n: ZZ32): Top = if n === 0 then OLeft else ORight end
 
 run() = do
    println(pick(topOf(0), topOf(1)))

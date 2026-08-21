@@ -1,0 +1,10 @@
+component badwhereclause
+
+export Executable
+
+(* The clause was brace-matched and thrown away, so this compiled, linked and
+   printed 3. Nothing inside the braces was parsed at all. *)
+f(x: ZZ32): ZZ32 where { this is total garbage } = x
+
+run():()=println(f(3))
+end

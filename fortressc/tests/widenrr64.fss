@@ -1,0 +1,18 @@
+component widenrr64
+
+export Executable
+
+(* Through functions on purpose: with a constant binding the whole widening is
+   folded before an instruction is emitted, and an assertion about the emitted
+   shape would then be asserting nothing. *)
+asRR64(n: ZZ32): RR64 = widen(n)
+asZZ64(n: ZZ32): ZZ64 = widen(n)
+wideAsRR64(n: ZZ64): RR64 = widen(n)
+
+run():()=do
+   n: ZZ32 = 3
+   println(asRR64(n))
+   println(asZZ64(n))
+   println(wideAsRR64(asZZ64(n)))
+end
+end

@@ -1,0 +1,15 @@
+component arrayhuge
+
+export Executable
+
+run():()=do
+   n: ZZ64 = 3000000000
+   flags: Array[\Boolean\] = array(n)
+   last: ZZ64 = n - 1
+   flags[last] := true
+   flags[0] := false
+   println(length(flags))
+   println(flags[last])
+   println(flags[0])
+end
+end

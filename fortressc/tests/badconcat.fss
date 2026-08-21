@@ -1,0 +1,14 @@
+component badconcat
+
+export Executable
+
+trait Shape end
+object Dot extends {Shape} end
+
+(* Not inside a `println`, on purpose: reusing NotPrintable here reported
+   "`println` does not accept Shape" for a concatenation that has no println
+   anywhere near it. *)
+describe(s: Shape): String = "shape: " s
+
+run():()=println(describe(Dot))
+end

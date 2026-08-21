@@ -1,0 +1,16 @@
+component arrayjuxtaposed
+
+export Executable
+
+run():()=do
+   juxtaposed = [1 2 3]
+   commas = [1, 2, 3]
+   longer = [5 29 10 8]
+   println(length(juxtaposed))
+   println(juxtaposed[0])
+   println(juxtaposed[2])
+   println(length(commas))
+   println(length(longer))
+   println(longer[3])
+end
+end

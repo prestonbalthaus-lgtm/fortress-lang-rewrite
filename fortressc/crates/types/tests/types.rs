@@ -706,12 +706,12 @@ fn a_symmetrically_ambiguous_call_is_refused_and_names_both_declarations() {
         trait Top end\n\
         trait Left extends {Top} end\n\
         trait Right extends {Top} end\n\
-        object OL extends {Left} end\n\
-        object OR extends {Right} end\n\
+        object OLeft extends {Left} end\n\
+        object ORight extends {Right} end\n\
         pick(x: Top, y: Top): ZZ32 = 0\n\
         pick(x: Left, y: Top): ZZ32 = 1\n\
         pick(x: Top, y: Right): ZZ32 = 2\n\
-        topOf(n: ZZ32): Top = if n === 0 then OL else OR end\n\
+        topOf(n: ZZ32): Top = if n === 0 then OLeft else ORight end\n\
         run(): ZZ32 = pick(topOf(0), topOf(1))\n\
         end\n";
     let e = type_error(src);
@@ -724,7 +724,7 @@ fn a_symmetrically_ambiguous_call_is_refused_and_names_both_declarations() {
     else {
         panic!("expected an ambiguity, got {e}")
     };
-    assert_eq!(arguments, "OL, OR");
+    assert_eq!(arguments, "OLeft, ORight");
     assert_ne!(first, second, "two different declarations must be named");
 }
 
@@ -1262,10 +1262,13 @@ fn an_arrow_over_liftable_types_becomes_a_trait_and_the_rest_stay_refused() {
     // `apply` would need a parameter this subset cannot store -- or, for an
     // undeclared name, because an abstract member's parameter types are
     // resolved by nothing and it would compile in silence.
+    // `() -> ZZ32` is NOT in this list any more: a unit DOMAIN became liftable
+    // when `fn () => e` landed -- `apply` simply takes no parameter -- and 169
+    // of the corpus's 1064 `fn` uses are that shape. A unit CODOMAIN is still
+    // refused, because `apply` has to return something.
     for source in [
         "f(g: (ZZ32, ZZ32) -> ZZ32): ZZ32 = 1",
-        "f(g: () -> ZZ32): ZZ32 = 1",
-        "f(g: Foo -> ZZ32): ZZ32 = 1",
+        "f(g: ZZ32 -> ()): ZZ32 = 1",
     ] {
         match body_error(source) {
             TypeError::TypeNotImplemented { form, .. } => assert_eq!(form, "an arrow type"),

@@ -48,7 +48,45 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # 291 at the M6 declaration parser: +6 for modifiers, continuation-line topology
 # clauses and `comprises { ... }`, zero lost, and every one of the 285 that
 # compiled at the opr spike emits byte-identical IR.
-COMPILE_FLOOR=290
+# 2026-08-21, the semantics pass: 291 -> 288 and the floor from 290 to 287,
+# and the count went DOWN because the metric got HONEST. Everything after the
+# component's closing `end` used to be silently discarded, so three files with a
+# spare trailing `end` compiled. All three are must-FAIL tests and the legacy
+# implementation's exact expected error is on disk for each of them:
+#   Compiled0.e.fss  XXX0e.test  `Unmatched delimiter "end".` at 18:1-3
+#   Compiled0.u.fss  XXX0u.test  same, at 15:1-3
+#   Compiled1.c.fss  XXX1c.test  same, at 19:1-3
+# The floor stays ONE below the count for the same reason it always has --
+# XXXimmutable0.fss is a must-FAIL negative test we still accept, and refusing
+# it properly must not break this floor. That single unit of slack is spoken
+# for; it was not spent here.
+# 2026-08-21, SPIKE-TEMPLATE-WELLFORMEDNESS half one: 288 -> 285, floor 287 to
+# 284. Again the count went DOWN because the metric got HONEST, and again every
+# lost file is a must-FAIL test whose expected error is on disk -- this time
+# matching OUR diagnostic at the same LINE AND COLUMN:
+#   Compiled1.ae.fss  XXX1ae.test  `D is undefined.`        14:32
+#   Compiled1.n.fss   XXX1n.test   `Garbage is undefined.`  15:25
+#   Compiled10.e.fss  XXX10e.test  `S is undefined.`        20:26
+# Refusing `Object` and `Any` as well would cost FOUR more -- Compiled12.a0,
+# Compiled12.b0, Go0b and Library/TypeProxy.fss, a quarter of the Library files
+# that compile at all -- and that is the Object/Any seeding decision, not this
+# one. See docs/superpowers/specs/2026-08-21-template-wellformedness.md.
+# 2026-08-21, THE THREE-LANE MERGE: 285 -> 307, floor 284 to 306. The path is
+# not one number and each leg was swept and diffed on its own: the codegen lane
+# took 285 -> 290 (+6 features, and -1 for
+# SpecData/examples/preliminaries/Overview.List.fss, whose abstract member names
+# the unimplemented `Object` -- that lane measured and named the same file), and
+# the frontend lane took 290 -> 307 (+20, and -3 must-FAIL tests the
+# operator-word rule now refuses: XXXLabel, XXXWrongTraitName, XXXtest.OPR.name).
+# The IR BODY of every file compiling on both sides of every leg is byte for
+# byte unchanged -- measured with the unconditional runtime `declare` lines
+# filtered, which is the only thing each leg adds to a module it does not
+# otherwise touch.
+# The floor is 306 rather than 307 for the reason it has always been one below:
+# ProjectFortress/tests/XXXimmutable0.fss is a must-FAIL test we still accept,
+# and refusing it properly must not break this floor. XXXLabel needed the same
+# slack on the codegen branch and no longer does.
+COMPILE_FLOOR=306
 
 passed=0
 failed=0

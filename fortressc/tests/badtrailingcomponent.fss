@@ -1,0 +1,11 @@
+component badtrailingcomponent
+
+export Executable
+
+run():()=println(1)
+end
+
+component sneaked
+export Executable
+run():()=println(2)
+end

@@ -97,6 +97,9 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
                     } => {
                         format!("`{kind}` static parameter")
                     }
+                    fortress_parser::ParseError::WhereClauseFormUnsupported { .. } => {
+                        "where clause form".to_owned()
+                    }
                     fortress_parser::ParseError::LocalFunctionDeclarationUnsupported { .. } => {
                         "local function declaration".to_owned()
                     }
@@ -114,6 +117,24 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
                     }
                     fortress_parser::ParseError::AlsoFormUnsupported { form, .. } => {
                         format!("also form: {form}")
+                    }
+                    fortress_parser::ParseError::ObjectVarargsParameter { .. } => {
+                        "object varargs parameter without `transient`".to_owned()
+                    }
+                    fortress_parser::ParseError::ClosingNameDiffers { .. } => {
+                        "`end` names a different declaration".to_owned()
+                    }
+                    fortress_parser::ParseError::OperatorsUnrelated { .. } => {
+                        "operators with no precedence relationship".to_owned()
+                    }
+                    fortress_parser::ParseError::LopsidedOperator { .. } => {
+                        "lopsided infix operator".to_owned()
+                    }
+                    fortress_parser::ParseError::ForeignImportUnsupported { .. } => {
+                        "foreign (JVM) import".to_owned()
+                    }
+                    fortress_parser::ParseError::CompoundAssignmentUnsupported { .. } => {
+                        "compound assignment operator".to_owned()
                     }
                 };
                 *blockers.entry(label).or_default() += 1;
@@ -152,8 +173,29 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
     // reserved words the lexer keeps out of the identifier namespace, and it is
     // intercepted in the parser rather than given a token, so no file in the
     // corpus lexes differently than it did.
+    // The floor then went unratcheted through M5, the `opr` spike and M6's
+    // declaration modifiers, which between them took the real number to 732.
+    // SPIKE-VARARGS took it 732 -> 749: `...` after a parameter type, static
+    // parameters between an enclosing operator's opener and its operand, an
+    // encloser with no operand at all, and a closing half that need not match
+    // the opening half in length.
+    // The named `end` took it 749 -> 758, and continuation-line declaration
+    // headers -- static parameters, parameter list, return type, `where` and
+    // `throws`, each on the line below what it belongs to -- took it 758 -> 766.
+    // Moving the `equals = "=" (!op)` guard out of the lexer took it 766 -> 767.
+    // The six operator characters took it 767 -> 769. The operator-word lexical
+    // rule plus the operator expression level -- named infix, infix `||` and
+    // the vertical-line run, each lowered to a call to a function of the
+    // operator's own name -- took it 769 -> 798.
+    // Enclosing-operator APPLICATION -- `|x|`, `<|a, b|>`, `{a, b}` -- took it
+    // 798 -> 811. The declaration side has parsed since the `opr` spike; this
+    // closed an exact declaration/expression asymmetry.
+    // The Unicode allowlist took it 811 -> 815.
+    // Import and export names -- dotted and braced exports, the import list
+    // recorded rather than skipped, qualified type names, and a foreign import
+    // refused BY NAME -- took it 815 -> 839.
     assert!(
-        parsed >= 637,
-        "parser corpus regressed: {parsed} files parse, floor is 637"
+        parsed >= 839,
+        "parser corpus regressed: {parsed} files parse, floor is 839"
     );
 }

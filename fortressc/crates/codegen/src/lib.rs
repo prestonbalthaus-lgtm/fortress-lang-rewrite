@@ -319,6 +319,21 @@ impl<'ctx> Lowering<'ctx> {
             );
         }
 
+        // Integer division, which is a shim and not an `sdiv` because two of
+        // its operand pairs fault rather than producing a value. RR64 division
+        // stays an `fdiv`: dividing by zero there is `inf`, not a failure.
+        let divisions: [(&str, BasicTypeEnum<'ctx>); 2] = [
+            ("fortress_div_zz32", i32t.into()),
+            ("fortress_div_zz64", i64t.into()),
+        ];
+        for (name, width) in divisions {
+            self.module.add_function(
+                name,
+                width.fn_type(&[width.into(), width.into()], false),
+                Some(Linkage::External),
+            );
+        }
+
         let concat = ptr.fn_type(&[ptr.into(), ptr.into()], false);
         self.module
             .add_function("concat_string_string", concat, Some(Linkage::External));
@@ -1760,13 +1775,23 @@ impl<'ctx> Lowering<'ctx> {
                     .map_err(CodegenError::from_builder)?;
                 Ok(Some(out.into()))
             }
-            Target::Widen { .. } => {
-                let value = self.one(args)?;
-                let out = self
-                    .builder
-                    .build_int_s_extend(value.into_int_value(), self.context.i64_type(), "widen")
-                    .map_err(CodegenError::from_builder)?;
-                Ok(Some(out.into()))
+            // The arm used to bind `..` and hardcode i64, so a Widen to RR64
+            // would have emitted a `sext` into a slot LLVM expects to be a
+            // double. It reads `to` now, which is why the checker may choose it.
+            Target::Widen { to, .. } => {
+                let value = self.one(args)?.into_int_value();
+                let out: BasicValueEnum<'ctx> = if *to == Type::RR64 {
+                    self.builder
+                        .build_signed_int_to_float(value, self.context.f64_type(), "widen")
+                        .map_err(CodegenError::from_builder)?
+                        .into()
+                } else {
+                    self.builder
+                        .build_int_s_extend(value, self.context.i64_type(), "widen")
+                        .map_err(CodegenError::from_builder)?
+                        .into()
+                };
+                Ok(Some(out))
             }
             Target::ToString { from } => {
                 let value = self.one(args)?;
@@ -1934,8 +1959,11 @@ impl<'ctx> Lowering<'ctx> {
             };
             return Ok(out.map_err(CodegenError::from_builder)?.into());
         }
-        let (l, r) = (l.into_int_value(), r.into_int_value());
+        // Max and Min first, and inline: a compare and a select, not a call.
+        // `max_zz64_zz64` would be a shim for two instructions, and the only
+        // thing that constructs one is a reduction's fold.
         if matches!(op, ArithOp::Max | ArithOp::Min) {
+            let (li, ri) = (l.into_int_value(), r.into_int_value());
             let predicate = if op == ArithOp::Max {
                 IntPredicate::SGT
             } else {
@@ -1943,20 +1971,32 @@ impl<'ctx> Lowering<'ctx> {
             };
             let keep = self
                 .builder
-                .build_int_compare(predicate, l, r, "extremum")
+                .build_int_compare(predicate, li, ri, "extremum")
                 .map_err(CodegenError::from_builder)?;
             return self
                 .builder
-                .build_select(keep, l, r, "extremum")
+                .build_select(keep, li, ri, "extremum")
                 .map_err(CodegenError::from_builder);
         }
+        let (li, ri) = (l.into_int_value(), r.into_int_value());
         let out = match op {
-            ArithOp::Add => self.builder.build_int_add(l, r, "add"),
-            ArithOp::Sub => self.builder.build_int_sub(l, r, "sub"),
-            ArithOp::Mul => self.builder.build_int_mul(l, r, "mul"),
-            ArithOp::Div => self.builder.build_int_signed_div(l, r, "div"),
+            ArithOp::Add => self.builder.build_int_add(li, ri, "add"),
+            ArithOp::Sub => self.builder.build_int_sub(li, ri, "sub"),
+            ArithOp::Mul => self.builder.build_int_mul(li, ri, "mul"),
             ArithOp::Max | ArithOp::Min => {
                 return Err(CodegenError::internal("handled above".to_owned()))
+            }
+            // A shim and not an `sdiv`, because a zero divisor and MIN/-1 both
+            // fault. The operands go in unconverted; the shim is typed by width.
+            ArithOp::Div => {
+                let symbol = if ty == Type::ZZ32 {
+                    "fortress_div_zz32"
+                } else {
+                    "fortress_div_zz64"
+                };
+                return self.call_runtime(symbol, &[l, r], true)?.ok_or_else(|| {
+                    CodegenError::internal(format!("`{symbol}` returned no value"))
+                });
             }
         };
         Ok(out.map_err(CodegenError::from_builder)?.into())

@@ -1,0 +1,9 @@
+component baddivzeroliteral
+
+export Executable
+
+run():()=do
+   a: ZZ32 = 1
+   println(a/0)
+end
+end

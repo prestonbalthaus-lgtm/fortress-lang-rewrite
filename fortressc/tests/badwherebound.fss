@@ -1,0 +1,14 @@
+component badwherebound
+
+export Executable
+
+trait Top end
+object Plain(n: ZZ32) end
+object Fancy(n: ZZ32) extends {Top} end
+
+(* The identical bound written in the bracket list was enforced; written here
+   it was a silent no-op, on objects and on functions alike. *)
+grab[\A\](h: A): ZZ32 where { A extends Top } = 1
+
+run():()=println(grab[\Plain\](Plain(1)))
+end

@@ -1,0 +1,13 @@
+component divzz64
+
+export Executable
+
+quotient(a: ZZ64, b: ZZ64): ZZ64 = a/b
+
+run():()=do
+   println("stdout survived the halt")
+   println(quotient(9000000000, 3))
+   println(quotient(9000000000, 0))
+   println("unreachable")
+end
+end

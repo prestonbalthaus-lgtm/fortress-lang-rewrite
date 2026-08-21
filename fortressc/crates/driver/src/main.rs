@@ -5,6 +5,7 @@
 //! what `--cc` overrides: on a cluster that driver is `mpicc`, and pointing at
 //! it is how the compiler stays ignorant of where the local MPI lives.
 
+use fortress_ast::Span;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
@@ -21,6 +22,7 @@ struct Options {
     source: PathBuf,
     output: PathBuf,
     emit_ir: bool,
+    resolve_imports: bool,
     emit_obj: bool,
     cc: String,
     cpu: String,
@@ -30,6 +32,7 @@ fn parse_args(args: &[String]) -> Option<Options> {
     let mut source: Option<PathBuf> = None;
     let mut output: Option<PathBuf> = None;
     let mut emit_ir = false;
+    let mut resolve_imports = false;
     let mut emit_obj = false;
     let mut cc = DEFAULT_CC.to_owned();
     let mut cpu = fortress_codegen::DEFAULT_CPU.to_owned();
@@ -39,6 +42,7 @@ fn parse_args(args: &[String]) -> Option<Options> {
         match arg.as_str() {
             "-o" => output = Some(PathBuf::from(rest.next()?)),
             "--emit-ir" => emit_ir = true,
+            "--resolve-imports" => resolve_imports = true,
             "--emit-obj" => emit_obj = true,
             "--cc" => cc = rest.next()?.clone(),
             "--target-cpu" => cpu = rest.next()?.clone(),
@@ -53,6 +57,7 @@ fn parse_args(args: &[String]) -> Option<Options> {
         source,
         output,
         emit_ir,
+        resolve_imports,
         emit_obj,
         cc,
         cpu,
@@ -64,6 +69,7 @@ fn main() -> ExitCode {
     let Some(options) = parse_args(&args) else {
         eprintln!(
             "usage: fortressc <source.fss> [-o <output>] [--emit-ir] [--emit-obj] \
+             [--resolve-imports] \
                   [--cc <driver>] [--target-cpu <{}>]",
             fortress_codegen::SUPPORTED_CPUS.join("|")
         );
@@ -76,6 +82,10 @@ fn main() -> ExitCode {
             eprintln!("{}: {message}", options.source.display());
             ExitCode::from(EXIT_USER_ERROR)
         }
+        Err(Failure::Diagnostic(rendered)) => {
+            eprintln!("{rendered}");
+            ExitCode::from(EXIT_USER_ERROR)
+        }
         Err(Failure::Internal(message)) => {
             eprintln!("fortressc: internal error: {message}");
             ExitCode::from(EXIT_INTERNAL_ERROR)
@@ -83,9 +93,124 @@ fn main() -> ExitCode {
     }
 }
 
+mod resolve;
+
 enum Failure {
     User(String),
+    /// Already rendered: path, `line:col`, the message, and the source excerpt.
+    /// `main` prints it as it stands rather than prefixing the path again.
+    Diagnostic(String),
     Internal(String),
+}
+
+/// A byte offset's position in the source, one-based, in CHARACTERS.
+///
+/// The line terminators are the LEXER's four and not `str::lines()`'s one
+/// (`lexer/src/raw.rs:32-34`): `\n`, `\r\n` as a single break, a lone `\r`,
+/// U+2028 and U+2029. 28 corpus files are CRLF and two carry U+2028/U+2029, so
+/// a converter built on `.lines()` disagrees with the lexer about where a line
+/// begins. The column counts CHARACTERS because non-ASCII is legal inside
+/// comments and strings, and one Greek comment ahead of the code is three
+/// columns of drift.
+struct Position {
+    line: usize,
+    column: usize,
+}
+
+const fn is_line_terminator(c: char) -> bool {
+    matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')
+}
+
+fn tail(s: &str, from: usize) -> &str {
+    s.get(from..).unwrap_or("")
+}
+
+/// Walks to `offset`, returning its position and the byte offset where its line
+/// begins. A linear scan per diagnostic, which is free: the compiler emits at
+/// most one.
+fn locate(source: &str, offset: usize) -> (Position, usize) {
+    let mut line = 1;
+    let mut column = 1;
+    let mut line_start = 0;
+    let mut chars = source.char_indices().peekable();
+    while let Some((index, c)) = chars.next() {
+        if index >= offset {
+            break;
+        }
+        if is_line_terminator(c) {
+            let mut next = index + c.len_utf8();
+            if c == '\r' && matches!(chars.peek(), Some((_, '\n'))) {
+                chars.next();
+                next += 1;
+            }
+            line += 1;
+            column = 1;
+            line_start = next;
+        } else {
+            column += 1;
+        }
+    }
+    (Position { line, column }, line_start)
+}
+
+fn line_text(source: &str, line_start: usize) -> &str {
+    let rest = tail(source, line_start);
+    match rest.char_indices().find(|(_, c)| is_line_terminator(*c)) {
+        Some((end, _)) => rest.get(..end).unwrap_or(rest),
+        None => rest,
+    }
+}
+
+/// `path:line:col: message`, then the source line and a caret under the span.
+/// A span that runs past the end of its line -- which every declaration span
+/// does, `Span::new(name.start, end.end)` -- gets one caret rather than a run
+/// that would need a second line to draw.
+fn excerpt(source: &str, span: Span) -> String {
+    let (start, line_start) = locate(source, span.start);
+    let text = line_text(source, line_start);
+    let gutter = start.line.to_string();
+    let pad = " ".repeat(gutter.len());
+    let width = tail(source, span.start)
+        .char_indices()
+        .take_while(|(i, c)| *i < span.end.saturating_sub(span.start) && !is_line_terminator(*c))
+        .count()
+        .max(1);
+    format!(
+        "\n{pad} |\n{gutter} | {text}\n{pad} | {}{}",
+        " ".repeat(start.column.saturating_sub(1)),
+        "^".repeat(width)
+    )
+}
+
+fn render(
+    path: &Path,
+    source: &str,
+    span: Option<Span>,
+    message: &str,
+    notes: &[(Span, &'static str)],
+) -> String {
+    let Some(span) = span else {
+        return format!("{}: {message}", path.display());
+    };
+    let (position, _) = locate(source, span.start);
+    let mut out = format!(
+        "{}:{}:{}: {message}{}",
+        path.display(),
+        position.line,
+        position.column,
+        excerpt(source, span)
+    );
+    for (note_span, label) in notes {
+        let (note_position, _) = locate(source, note_span.start);
+        out.push_str(&format!(
+            "\n{}:{}:{}: note: {label}{}",
+            path.display(),
+            note_position.line,
+            note_position.column,
+            excerpt(source, *note_span)
+        ));
+    }
+    out
 }
 
 fn compile(options: &Options) -> Result<(), Failure> {
@@ -100,9 +225,29 @@ fn compile(options: &Options) -> Result<(), Failure> {
     let source = std::fs::read_to_string(&options.source)
         .map_err(|e| Failure::User(format!("cannot read source: {e}")))?;
 
-    let tokens = fortress_lexer::lex(&source).map_err(|e| Failure::User(e.to_string()))?;
-    let component = fortress_parser::parse(&tokens).map_err(|e| Failure::User(e.to_string()))?;
-    let typed = fortress_types::check(&component).map_err(|e| Failure::User(e.to_string()))?;
+    // The diagnostic renderer is the semantics lane's; the import resolution
+    // step is the frontend lane's, and it sits between the parse and the check
+    // because `registry.concrete` and every type tag freeze in `Checker::new`.
+    let path = options.source.as_path();
+    let tokens = fortress_lexer::lex(&source)
+        .map_err(|e| Failure::Diagnostic(render(path, &source, e.span(), &e.to_string(), &[])))?;
+    let component = fortress_parser::parse(&tokens)
+        .map_err(|e| Failure::Diagnostic(render(path, &source, e.span(), &e.to_string(), &[])))?;
+    let resolved = if options.resolve_imports {
+        Some(resolve::resolve(&component, &options.source))
+    } else {
+        None
+    };
+    let component = resolved.as_ref().map_or(&component, |r| &r.component);
+    let typed = fortress_types::check(component).map_err(|e| {
+        Failure::Diagnostic(render(
+            path,
+            &source,
+            Some(e.span()),
+            &e.to_string(),
+            &e.notes(),
+        ))
+    })?;
 
     eprintln!(
         "fortressc: lexed {} tokens, parsed and typechecked `{}` with {} function(s)",
@@ -110,6 +255,22 @@ fn compile(options: &Options) -> Result<(), Failure> {
         typed.name,
         typed.functions.len()
     );
+    if let Some(r) = resolved.as_ref() {
+        eprintln!(
+            "fortressc: resolved {} api(s){}{}",
+            r.loaded.len(),
+            if r.missing.is_empty() {
+                String::new()
+            } else {
+                format!("; not on the source path: {}", r.missing.join(", "))
+            },
+            if r.unreadable.is_empty() {
+                String::new()
+            } else {
+                format!("; found but unreadable: {}", r.unreadable.join(", "))
+            }
+        );
+    }
 
     if options.emit_ir {
         let ir = fortress_codegen::emit_ir(&typed, &options.cpu)

@@ -1,0 +1,12 @@
+component reductionhuge
+
+export Executable
+
+run():()=do
+   total: ZZ64 := 0
+   for i <- 0#1000000000 do
+      total += i i
+   end
+   println(total)
+end
+end

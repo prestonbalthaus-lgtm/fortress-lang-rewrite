@@ -273,21 +273,8 @@ macro_rules! always_error {
 
 always_error!(err_double_star, DoubleStar);
 always_error!(err_char_literal, CharacterLiteralUnsupported);
-always_error!(err_curly_quote, CurlyQuoteStringUnsupported);
+always_error!(err_unmatched_close, MismatchedStringMarks);
 always_error!(err_non_ascii, NonAsciiCharacter);
-
-/// `equals = "=" (!op)` (`Symbol.rats:201`). `===`, `=/=`, `=>`, `<=` and `>=`
-/// are matched as longer tokens first, so a bare `=` glued to an operator
-/// character is malformed rather than two tokens.
-fn op_equals(lex: &mut Lexer<Raw>) -> Skip {
-    match lex.remainder().chars().next() {
-        Some('+') => FilterResult::Error(LexErrorKind::OperatorFollowedByPlus),
-        Some('-' | '*' | '/' | '<' | '=' | ':' | '!') => {
-            FilterResult::Error(LexErrorKind::MalformedEquals)
-        }
-        _ => FilterResult::Emit(()),
-    }
-}
 
 fn numeral(lex: &mut Lexer<Raw>) -> FilterResult<(), LexErrorKind> {
     let text = lex.slice();
@@ -320,7 +307,13 @@ pub(crate) enum Raw {
     #[regex(r"[0-9][0-9A-Za-z]*(?:['\u{202F}.][0-9A-Za-z]+)*", numeral)]
     Numeral,
 
+    // `Literal.rats:151-155` gives a string literal TWO delimiter pairs, and
+    // `ProjectFortress/tests/matchingStringMarks.fss` is a positive test that
+    // prints through the curly-quoted one. Decision 3's wording does not reach
+    // them either -- a string delimiter is neither an identifier nor an
+    // operator, so no library alias can carry it.
     #[token("\"", string_literal)]
+    #[token("\u{201C}", curly_string_literal)]
     Str,
 
     #[token("(")]
@@ -329,9 +322,15 @@ pub(crate) enum Raw {
     RParen,
     // `[\` and `\]` are listed first so logos prefers them over the bare
     // bracket followed by a backslash.
+    // U+27E6/U+27E7 are the Unicode SPELLING of `[\` and `\]`. They are
+    // BRACKETS rather than operators, so no library alias can carry them --
+    // an alias is a declaration and a bracket is not a name. They are the
+    // same token, spelled differently.
     #[token("[\\")]
+    #[token("\u{27E6}")]
     LGeneric,
     #[token("\\]")]
+    #[token("\u{27E7}")]
     RGeneric,
     #[token("[")]
     LBracket,
@@ -347,7 +346,9 @@ pub(crate) enum Raw {
     Comma,
     #[token(";")]
     Semi,
+    // `Symbol.rats:200`: `colonequals = ":=" / "\u2254"`.
     #[token(":=")]
+    #[token("\u{2254}")]
     ColonEq,
     #[token(":")]
     Colon,
@@ -357,6 +358,7 @@ pub(crate) enum Raw {
     // `=>` is one token and must be listed before `=`; logos prefers the longer
     // match, which is what stops it lexing as `=` followed by `>`.
     #[token("=>")]
+    #[token("\u{21D2}")]
     FatArrow,
     // The enclosing-operator characters. Tokenising them is not the same as
     // implementing enclosing operators: `<| ... |>` and `|x|` still have no
@@ -380,15 +382,84 @@ pub(crate) enum Raw {
     #[token("#")]
     Hash,
 
+    /// The six ordinary operator characters of `operator-app.tex:24` that had
+    /// no arm at all and fell to `UnrecognizedCharacter`. Every one of them is
+    /// a hard lex error today, so a file can only move forward for their
+    /// existing. Real declaration sites:
+    /// `Library/incomplete/basic/Fortress.Number.fsi:136` `opr (self)! : NN`,
+    /// `ProjectFortress/BirdyLib/Bazaar.fsi:22` `opr BIG $()`,
+    /// `SpecData/examples/advanced/OprDecl.Nofix.fss:23` `opr @()`.
+    #[token("!")]
+    Bang,
+    #[token("?")]
+    Question,
+    #[token("~")]
+    Tilde,
+    #[token("$")]
+    Dollar,
+    #[token("%")]
+    Percent,
+    #[token("@")]
+    At,
+
+    /// `lexical-structure.tex:1174-1177`: a contiguous sequence of TWO OR MORE
+    /// vertical lines is ONE base operator. `||` already was; three or more
+    /// split into `BarBar` + `Bar`, which is why `opr |||`
+    /// (`Library/FortressLibrary.fsi:1991`) survives in declaration position --
+    /// the parser re-glues by span adjacency -- and cannot survive in
+    /// expression position. Logos prefers the longest match, so this arm takes
+    /// the run and `Bar`, `BarBar`, `LeftBar` and `RightBar` keep every match
+    /// they had.
+    #[regex(r"\|{3,}")]
+    BarRun,
+
+    /// `Symbol.rats:197`: `leftarrow = "<-" / "\u2190"`. The ASCII spelling is
+    /// two tokens joined by span adjacency, so the Unicode one cannot reuse it
+    /// and needs a token of its own.
+    #[token("\u{2190}")]
+    LeftArrow,
+    /// `->`, the arrow of a function type, whose ASCII spelling is likewise
+    /// `Minus` glued to `Gt`.
+    #[token("\u{2192}")]
+    RightArrow,
+
+    /// THE UNICODE OPERATOR ALLOWLIST. Ten codepoints, and one token for all of
+    /// them: 02-stack's decision 3 says mathematical symbols "resolve through
+    /// standard library symbol aliasing, never through new lexer tokens", so
+    /// each carries its own text and takes its meaning from an `opr`
+    /// declaration exactly as `!`, `@` and `SUBSET` do. What is NOT here is
+    /// every codepoint the reference grammar lists as an alternative SPELLING
+    /// of a token -- those are the same token and are written above.
+    ///
+    /// Measured, not guessed: these are the ten, and there are no others. Over
+    /// all 136 `Library/` and `CompilerLibrary/` files with comments and
+    /// strings stripped there are exactly 18 distinct non-ASCII codepoints and
+    /// ZERO of them are letters.
+    #[regex(r"[\u{00AC}\u{2208}\u{2228}\u{2229}\u{226A}\u{226B}\u{2286}\u{2287}\u{27E8}\u{27E9}]")]
+    UniOp,
+
     #[token("===")]
     EqEqEq,
     #[token("=/=")]
+    #[token("\u{2260}")]
     NotEq,
+    // `Symbol.rats:214-216` lists each of these as an alternative spelling
+    // of the SAME token, which is why they are here and not in the operator
+    // allowlist below.
     #[token("<=")]
+    #[token("\u{2264}")]
     Le,
     #[token(">=")]
+    #[token("\u{2265}")]
     Ge,
-    #[token("=", op_equals)]
+    /// `Symbol.rats` has TWO productions for `=`. `equalsOp` is the equality
+    /// operator and carries no restriction; `equals = "=" (!op)` at :201 is the
+    /// one that introduces a DEFINITION, and the reference grammar reaches it
+    /// only from a binding or a keyword-argument position. The guard used to
+    /// live here, where it applied to every `=` in the file and made `opr ==>`
+    /// and `ex=-1` hard lex errors. It is now `definition_equals_at` in the
+    /// parser.
+    #[token("=")]
     Eq,
     #[token("<", op_lt)]
     Lt,
@@ -412,12 +483,13 @@ pub(crate) enum Raw {
     #[token("'", err_char_literal)]
     #[token("\u{2018}", err_char_literal)]
     #[token("\u{2019}", err_char_literal)]
-    #[token("\u{201C}", err_curly_quote)]
-    #[token("\u{201D}", err_curly_quote)]
+    // A closing curly quote with no opener. The opener is a string literal
+    // above, so reaching this one means the marks do not match.
+    #[token("\u{201D}", err_unmatched_close)]
     // Excludes every non-ASCII character handled by a specific rule above,
     // otherwise logos reports the patterns as ambiguous.
     #[regex(
-        r"[^\x00-\x7F\u{2018}\u{2019}\u{201C}\u{201D}\u{2028}\u{2029}]",
+        r"[^\x00-\x7F\u{00AC}\u{2018}\u{2019}\u{201C}\u{201D}\u{2028}\u{2029}\u{2190}\u{2192}\u{2208}\u{21D2}\u{2228}\u{2229}\u{2254}\u{2260}\u{2264}\u{2265}\u{226A}\u{226B}\u{2286}\u{2287}\u{27E6}\u{27E7}\u{27E8}\u{27E9}]",
         err_non_ascii
     )]
     Rejected,
@@ -427,14 +499,31 @@ pub(crate) enum Raw {
 /// never spans a source line and `&` continuation does not apply inside one
 /// (`Literal.rats:169-196`).
 fn string_literal(lex: &mut Lexer<Raw>) -> Skip {
+    scan_string(lex, '"', '\u{201D}')
+}
+
+/// The curly-quoted spelling, `Literal.rats:151-155`. The marks must MATCH: the
+/// grammar has an explicit error production for each mixed pair, and the corpus
+/// has a positive test for the matched form and a must-fail twin for the other.
+fn curly_string_literal(lex: &mut Lexer<Raw>) -> Skip {
+    scan_string(lex, '\u{201D}', '"')
+}
+
+fn scan_string(lex: &mut Lexer<Raw>, closer: char, wrong_closer: char) -> Skip {
     let rest = lex.remainder();
     let mut i = 0usize;
 
     while let Some(c) = tail(rest, i).chars().next() {
         match c {
-            '"' => {
-                lex.bump(i + 1);
+            c if c == closer => {
+                lex.bump(i + c.len_utf8());
                 return FilterResult::Emit(());
+            }
+            // `InvalidStringLiteralContent` (`Literal.rats:174-175`) makes an
+            // unescaped curly quote illegal inside ANY string, so the only
+            // thing this can be is the wrong closing mark.
+            c if c == wrong_closer || c == '\u{201C}' => {
+                return FilterResult::Error(LexErrorKind::MismatchedStringMarks)
             }
             '\\' => {
                 let Some(e) = tail(rest, i + 1).chars().next() else {

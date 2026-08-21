@@ -3051,13 +3051,22 @@ impl Checker {
                 },
                 left.ty,
             ),
-            BinOp::Div => (
-                Target::Arith {
-                    op: ArithOp::Div,
-                    ty: left.ty,
-                },
-                left.ty,
-            ),
+            BinOp::Div => {
+                // The runtime guard catches every divisor that reaches it, but
+                // a literal zero never does: LLVM folds the division to
+                // `poison` while the module is being built, and the program
+                // prints a value nothing computed.
+                if left.ty.is_integer() && right.kind == TypedExprKind::IntConst(0) {
+                    return Err(TypeError::DivisionByZero { span });
+                }
+                (
+                    Target::Arith {
+                        op: ArithOp::Div,
+                        ty: left.ty,
+                    },
+                    left.ty,
+                )
+            }
             // No source syntax constructs these -- `a MAX b` is a word
             // operator this parser does not read -- so an infix one cannot
             // arise. A diagnostic rather than a panic, because malformed input
@@ -3281,6 +3290,19 @@ impl Checker {
                 t
             } else {
                 let from = t.ty;
+                // The same guard `println` has, and for the same reason it
+                // gives: there is one `to_string` shim per scalar and none for
+                // anything else, so saying so HERE is a diagnostic and leaving
+                // it to codegen is `no runtime symbol to_string_Shape` at exit
+                // 70 -- a compiler internal error raised by ordinary source.
+                // `Elem::of` is the scalar test; it is `None` for a trait, an
+                // object, an array and Void.
+                if Elem::of(from).is_none() {
+                    return Err(TypeError::NotConcatenable {
+                        span: t.span,
+                        found: from,
+                    });
+                }
                 TypedExpr {
                     kind: TypedExprKind::Apply {
                         target: Target::ToString { from },
@@ -3329,6 +3351,7 @@ impl Checker {
             span: dot_span,
         } = callee
         {
+            self.refuse_keyword_argument(args)?;
             // The RECEIVER is an argument too, and the one this compiler used
             // to be able to trust: before a field store existed, a method
             // could not write anything its receiver owned. `b.bump()` where
@@ -3365,10 +3388,12 @@ impl Checker {
             "length" => self.array_length(args, span, expected),
             _ if self.registry.is_object(name) => {
                 self.refuse_shared_array_argument(args)?;
+                self.refuse_keyword_argument(args)?;
                 self.construct(name, args, span, *callee_span, expected)
             }
             _ => {
                 self.refuse_shared_array_argument(args)?;
+                self.refuse_keyword_argument(args)?;
                 self.user_call(name, args, span, *callee_span, expected)
             }
         }
@@ -3463,6 +3488,39 @@ impl Checker {
                     } else {
                         format!("{name}.{path}")
                     },
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// A bare `Ident = e` argument. 1.0 spells a keyword argument exactly that
+    /// way and reserves the parenthesised form for an equality test, but
+    /// `primary`'s LParen arm returns the inner expression with no wrapper, so
+    /// `f(x = 2)` and `f((x = 2))` are the same tree and the distinction cannot
+    /// be recovered. It was resolved silently in favour of the test.
+    ///
+    /// Guarded HERE and not at the top of `call`, so the seven builtins and the
+    /// MPI ops keep the reading they already have: none of them has a named
+    /// parameter, so `assert(count = 1000)` is unambiguous -- and it is legal,
+    /// working Fortress that a blanket guard would regress.
+    ///
+    /// A `Field` left side and a CHAIN are both outside the predicate on
+    /// purpose. A keyword argument names a bare parameter, so `f(p.n = 3)`
+    /// cannot be one, and `f(a = b = c)` is an `Expr::Block` by the time it
+    /// arrives -- `desugar_chain` has already rewritten it.
+    fn refuse_keyword_argument(&self, args: &[Expr]) -> Checked<()> {
+        for arg in args {
+            let Expr::Infix {
+                op: BinOp::Eq, lhs, ..
+            } = arg
+            else {
+                continue;
+            };
+            if let Expr::Var { name, span } = &**lhs {
+                return Err(TypeError::KeywordArgumentUnsupported {
+                    span: *span,
+                    name: name.clone(),
                 });
             }
         }
@@ -3970,17 +4028,34 @@ impl Checker {
                 found: args.len(),
             });
         };
-        let inner = self.expr(arg, Some(Type::ZZ32))?;
-        self.require(Type::ZZ64, expected, span)?;
+        // The source comes from the argument and the target from context, so
+        // every pair `is_widening_of` recognises is expressible. Both used to
+        // be hardcoded to the one integer widening, which made the advice a
+        // dead end: `x: RR64 = widen(n)` repeated `write \`widen(...)\`` one
+        // type up, and no expression anywhere in the language reached an RR64
+        // from an integer.
+        let inner = self.expr(arg, None)?;
+        let from = inner.ty;
+        let to = match expected {
+            Some(want) if want.is_widening_of(from) => want,
+            // With no context the target is FORCED from ZZ64 -- RR64 is the
+            // only widening of it -- and chosen narrowest from ZZ32, which is
+            // what M1 did and what the acceptance program depends on.
+            _ => match from {
+                Type::ZZ32 => Type::ZZ64,
+                Type::ZZ64 => Type::RR64,
+                _ => return Err(TypeError::NotWidenable { span, found: from }),
+            },
+        };
+        // An `expected` that is not a widening of the argument lands here and
+        // is reported as the ordinary mismatch it is.
+        self.require(to, expected, span)?;
         Ok(TypedExpr {
             kind: TypedExprKind::Apply {
-                target: Target::Widen {
-                    from: Type::ZZ32,
-                    to: Type::ZZ64,
-                },
+                target: Target::Widen { from, to },
                 args: vec![inner],
             },
-            ty: Type::ZZ64,
+            ty: to,
             span,
         })
     }
@@ -4964,6 +5039,9 @@ impl Checker {
                 BlockItem::Expr(e) => {
                     // Only the final expression is in value position.
                     let want = if index == last { expected } else { None };
+                    if index != last {
+                        refuse_field_assignment(e)?;
+                    }
                     let value = self.expr(e, want)?;
                     if index == last {
                         let ty = value.ty;
@@ -4995,6 +5073,40 @@ impl Checker {
 
 const fn is_int_literal(e: &Expr) -> bool {
     matches!(e, Expr::IntLit { .. })
+}
+
+/// `o.f = v` in statement position. The parser cannot refuse this: `try_binding`
+/// only recognises a bare `Ident` before the `=`, so `b.x = 7` falls through to
+/// the expression path and becomes an ordinary `Eq` comparison whose value is
+/// then thrown away. Statement position exists only here, in the checker.
+///
+/// Scoped to a FIELD target on purpose. `blocks.tex:49-63` invalidates every
+/// unparenthesised statement-position equality, but the wider rule costs two
+/// corpus files that compile today (`Compiled5.ac.fss`, `Compiled9.r.fss`) and
+/// the widest -- every non-final item must have type `()` -- costs at least
+/// three; both need the compile floor re-ratcheted deliberately. A field target
+/// costs nothing: no corpus file writes one, because a mutable field is refused
+/// at its declaration.
+///
+/// `atomic` is looked through because `atomic b.x = 7` is parsed as an `Atomic`
+/// wrapping the `Infix` directly rather than as a block.
+fn refuse_field_assignment(e: &Expr) -> Checked<()> {
+    let inner = match e {
+        Expr::Atomic { body, .. } => body,
+        other => other,
+    };
+    if let Expr::Infix {
+        op: BinOp::Eq, lhs, ..
+    } = inner
+    {
+        if let Expr::Field { name, span, .. } = &**lhs {
+            return Err(TypeError::FieldAssignmentUnsupported {
+                span: *span,
+                name: name.clone(),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// The type every candidate names at this position, when they all name the
