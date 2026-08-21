@@ -118,6 +118,9 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
                     fortress_parser::ParseError::ForeignImportUnsupported { .. } => {
                         "foreign (JVM) import".to_owned()
                     }
+                    fortress_parser::ParseError::CompoundAssignmentUnsupported { .. } => {
+                        "compound assignment operator".to_owned()
+                    }
                 };
                 *blockers.entry(label).or_default() += 1;
             }

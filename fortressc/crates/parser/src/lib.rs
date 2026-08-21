@@ -2129,6 +2129,16 @@ impl<'t, 'a> Parser<'t, 'a> {
             // `for` loop, and the IR diff is what caught it.
             _ => return Ok(None),
         };
+        // `lexical-structure.tex:1216-1222`: an operator immediately followed
+        // by `=` is ONE token, a compound assignment operator. Reading only the
+        // operator half reports `x ||= e` as a LOPSIDED infix, which is a real
+        // rule and not the one the program broke.
+        if self.glued_right(self.pos) && matches!(self.peek_ahead(1), Some(Kind::Eq)) {
+            return Err(ParseError::CompoundAssignmentUnsupported {
+                span: self.span_here(),
+                op: text.to_owned(),
+            });
+        }
         match self.table_fixity_at(self.pos) {
             TableFixity::Infix => Ok(Some((text, self.span_here()))),
             // `opr-fixity.tex:90-93` calls this row a static error outright.

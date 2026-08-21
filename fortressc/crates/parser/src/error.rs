@@ -83,6 +83,16 @@ pub enum ParseError {
     ForeignImportUnsupported {
         span: Span,
     },
+    /// `x ||= e`, `x MAX= e`. `lexical-structure.tex:1216-1222` makes an
+    /// operator immediately followed by `=` ONE token, a compound assignment
+    /// operator. `||=` alone is 37 corpus uses. Without this the operator level
+    /// reads the `||` and reports it as a LOPSIDED infix -- a real rule, but
+    /// not the one the program broke, and a diagnostic that names the wrong
+    /// mechanism is a defect class this project tracks.
+    CompoundAssignmentUnsupported {
+        span: Span,
+        op: String,
+    },
 }
 
 impl ParseError {
@@ -99,7 +109,8 @@ impl ParseError {
             | Self::ClosingNameDiffers { span, .. }
             | Self::OperatorsUnrelated { span, .. }
             | Self::LopsidedOperator { span, .. }
-            | Self::ForeignImportUnsupported { span } => Some(*span),
+            | Self::ForeignImportUnsupported { span }
+            | Self::CompoundAssignmentUnsupported { span, .. } => Some(*span),
             Self::UnexpectedEndOfInput { .. } => None,
         }
     }
@@ -191,6 +202,12 @@ impl core::fmt::Display for ParseError {
                 f,
                 "{}..{}: a foreign import reaches a JVM implementation and this \
                  compiler emits native code; the body belongs in a C shim",
+                span.start, span.end
+            ),
+            Self::CompoundAssignmentUnsupported { span, op } => write!(
+                f,
+                "{}..{}: the compound assignment operator `{op}=` is not in the \
+                 implemented subset",
                 span.start, span.end
             ),
         }

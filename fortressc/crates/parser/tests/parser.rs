@@ -1745,3 +1745,23 @@ fn a_foreign_import_is_refused_by_name() {
         other => panic!("expected a foreign-import refusal, got {other:?}"),
     }
 }
+
+/// `lexical-structure.tex:1216-1222`: an operator immediately followed by `=`
+/// is ONE token, a compound assignment operator. Reading only the operator half
+/// reports `x ||= e` as a LOPSIDED infix -- a real rule, and not the one the
+/// program broke. `||=` alone is 37 corpus uses.
+#[test]
+fn a_compound_assignment_operator_is_refused_by_its_own_name() {
+    for (src, op) in [("x ||= 1", "||"), ("x MAX= 1", "MAX"), ("x @= 1", "@")] {
+        let wrapped = format!("component t\nf() = do\n  x = 1\n  {src}\n  x\nend\nend\n");
+        let tokens = fortress_lexer::lex(&wrapped).unwrap_or_else(|e| panic!("lex failed: {e}"));
+        match parse(&tokens) {
+            Err(ParseError::CompoundAssignmentUnsupported { op: found, .. }) => {
+                assert_eq!(found, op, "{src}");
+            }
+            other => panic!("{src}: expected a compound-assignment refusal, got {other:?}"),
+        }
+    }
+    // And the operator alone still applies.
+    assert!(matches!(expr("a || b"), Expr::Call { .. }));
+}
