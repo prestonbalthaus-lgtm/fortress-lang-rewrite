@@ -1583,13 +1583,23 @@ impl<'ctx> Lowering<'ctx> {
                     .map_err(CodegenError::from_builder)?;
                 Ok(Some(out.into()))
             }
-            Target::Widen { .. } => {
-                let value = self.one(args)?;
-                let out = self
-                    .builder
-                    .build_int_s_extend(value.into_int_value(), self.context.i64_type(), "widen")
-                    .map_err(CodegenError::from_builder)?;
-                Ok(Some(out.into()))
+            // The arm used to bind `..` and hardcode i64, so a Widen to RR64
+            // would have emitted a `sext` into a slot LLVM expects to be a
+            // double. It reads `to` now, which is why the checker may choose it.
+            Target::Widen { to, .. } => {
+                let value = self.one(args)?.into_int_value();
+                let out: BasicValueEnum<'ctx> = if *to == Type::RR64 {
+                    self.builder
+                        .build_signed_int_to_float(value, self.context.f64_type(), "widen")
+                        .map_err(CodegenError::from_builder)?
+                        .into()
+                } else {
+                    self.builder
+                        .build_int_s_extend(value, self.context.i64_type(), "widen")
+                        .map_err(CodegenError::from_builder)?
+                        .into()
+                };
+                Ok(Some(out))
             }
             Target::ToString { from } => {
                 let value = self.one(args)?;

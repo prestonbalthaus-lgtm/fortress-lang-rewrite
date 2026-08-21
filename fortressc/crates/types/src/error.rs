@@ -144,6 +144,41 @@ pub enum TypeError {
     InvalidAssignTarget {
         span: Span,
     },
+    /// `o.f = v` in statement position. `=` is an equality operator in
+    /// expression position, so without this the program COMPILES: the compare
+    /// is emitted, its result is discarded, and the field is printed unchanged.
+    /// `Specification/basic/expressions/blocks.tex:49-63` makes the program
+    /// invalid twice over -- a non-final item must have type `()`, and an
+    /// equality test in a block must be parenthesised -- so this is a refusal
+    /// and not a missing feature. Field mutation is not implemented either, so
+    /// the message must not send the reader to `:=`, which dead-ends on
+    /// `InvalidAssignTarget` and then on `MutableFieldUnsupported`.
+    FieldAssignmentUnsupported {
+        span: Span,
+        name: String,
+    },
+    /// `f(x = 2)` where `x` is a bound local. 1.0 reads that as a KEYWORD
+    /// ARGUMENT and reserves extra parentheses for the equality test; the
+    /// parser erases parentheses without a trace, so the two spellings are the
+    /// same tree and the compiler cannot tell them apart. Until this refusal it
+    /// silently chose the test and passed a Boolean -- a wrong argument, not a
+    /// failed compile. Keyword arguments are not implemented, so the honest
+    /// answer is to refuse the shape rather than to guess which one was meant.
+    ///
+    /// Only callees that COULD take a keyword argument are guarded: a user
+    /// function, a method and a constructor. `assert(count = 1000)` and
+    /// `println(x = 2)` are unambiguous equality tests -- no builtin has a
+    /// named parameter -- and they are legal, working Fortress today.
+    KeywordArgumentUnsupported {
+        span: Span,
+        name: String,
+    },
+    /// `widen` reaches ZZ32 -> ZZ64, ZZ32 -> RR64 and ZZ64 -> RR64, the three
+    /// `Type::is_widening_of` recognises. Anything else has no widening.
+    NotWidenable {
+        span: Span,
+        found: Type,
+    },
 
     // ------------------------------------------------------------------ M3c
     /// An `api` parses, so the corpus metric can move, but there is nothing to
@@ -371,6 +406,9 @@ impl TypeError {
             | Self::AssignToImmutable { span, .. }
             | Self::AssignToUndeclared { span, .. }
             | Self::InvalidAssignTarget { span }
+            | Self::FieldAssignmentUnsupported { span, .. }
+            | Self::KeywordArgumentUnsupported { span, .. }
+            | Self::NotWidenable { span, .. }
             | Self::ApiNotExecutable { span }
             | Self::MissingBody { span, .. }
             | Self::TraitCycle { span, .. }
@@ -521,6 +559,23 @@ impl core::fmt::Display for TypeError {
             Self::InvalidAssignTarget { .. } => {
                 write!(f, "only a variable or an array element can be assigned to")
             }
+            Self::FieldAssignmentUnsupported { name, .. } => write!(
+                f,
+                "`.{name} = ...` here is an equality test whose result is discarded, \
+                 not an assignment; field mutation is not implemented. Write \
+                 `ignore(...)` or `_ = ...` if the comparison is what you meant"
+            ),
+            Self::KeywordArgumentUnsupported { name, .. } => write!(
+                f,
+                "`{name} = ...` as an argument is a keyword argument, which is not \
+                 implemented; it was being passed as the Boolean result of an equality \
+                 test. Bind the value first, or compare inside `ignore(...)`"
+            ),
+            Self::NotWidenable { found, .. } => write!(
+                f,
+                "`widen` widens ZZ32 to ZZ64 or RR64 and ZZ64 to RR64; {} is not widened",
+                found.name()
+            ),
             Self::ApiNotExecutable { .. } => write!(
                 f,
                 "an `api` is a set of signatures with no bodies; there is nothing to compile"

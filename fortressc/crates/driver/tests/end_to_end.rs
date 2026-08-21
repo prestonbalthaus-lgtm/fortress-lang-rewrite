@@ -1363,3 +1363,75 @@ fn floating_division_by_zero_is_still_infinity() {
     );
     let _ = std::fs::remove_file(&binary);
 }
+
+/// `b.x = 7` in statement position is an equality test whose value is thrown
+/// away, so the field is printed unchanged. `blocks.tex:49-63` invalidates the
+/// program twice over; the parser cannot see it, because statement position
+/// exists only in the checker.
+#[test]
+fn a_field_assignment_in_statement_position_is_refused_rather_than_discarded() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture("badfieldassign.fss"))
+        .arg("--emit-ir")
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{message}");
+    assert!(
+        message.contains("equality test whose result is discarded"),
+        "{message}"
+    );
+    // The advice must not send the reader to `:=`, which dead-ends on
+    // InvalidAssignTarget and then on MutableFieldUnsupported.
+    assert!(!message.contains(":="), "{message}");
+}
+
+/// 1.0 reads `f(x = 2)` as a keyword argument and reserves the parenthesised
+/// form for the test; the parser erases parentheses, so the compiler cannot
+/// tell them apart and used to pass a Boolean silently.
+#[test]
+fn a_bare_name_equals_argument_is_refused_instead_of_passing_a_boolean() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture("badkeywordargument.fss"))
+        .arg("--emit-ir")
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{message}");
+    assert!(message.contains("keyword argument"), "{message}");
+}
+
+/// No builtin has a named parameter, so `assert(count = 1000)` is unambiguous
+/// -- and it is legal, working Fortress that a blanket guard would regress.
+#[test]
+fn an_equality_test_as_a_builtin_argument_is_still_legal() {
+    let binary = compile_fixture("kwbuiltin.fss", "kwbuiltin");
+    let out = run(&binary);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "true\ntrue\n");
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// `widen` used to hardcode ZZ32 -> ZZ64 at both ends while the advice that
+/// recommends it recognised three widenings, so `x: RR64 = widen(n)` repeated
+/// the same message one type up and no expression reached an RR64 from an
+/// integer at all.
+#[test]
+fn widen_reaches_every_widening_the_advice_recommends() {
+    let binary = compile_fixture("widenrr64.fss", "widenrr64");
+    let out = run(&binary);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "3\n3\n3\n");
+    let _ = std::fs::remove_file(&binary);
+
+    let ir = emit_ir_with("widenrr64.fss", &[]);
+    let ir = String::from_utf8_lossy(&ir.stdout);
+    assert!(
+        ir.contains("sitofp"),
+        "an integer to RR64 widening is an sitofp:\n{ir}"
+    );
+    assert!(
+        ir.contains("sext"),
+        "an integer widening is still a sext:\n{ir}"
+    );
+}
