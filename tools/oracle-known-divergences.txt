@@ -1,0 +1,16 @@
+# Cases where THIS COMPILER IS RIGHT and the recorded
+# expectation is not. Every line needs a written reason in
+# docs/superpowers/specs/2026-08-21-defect-register.md before
+# it goes in -- an unexplained line here is a hidden failure.
+#
+# DEV-11, string juxtaposition. The compiler path inserted a space
+# (CompilerBuiltin.fss:384 -> ||| -> simpleConcatenate.java:20); the
+# interpreter path did not (FortressLibrary.fss:4049). We follow the
+# interpreter, because 237 corpus sites write a literal ENDING IN A
+# SPACE against 93 that do not -- including tab-terminated ones -- so
+# the corpus is authored for plain concatenation and the smart rule
+# would double every separator in it.
+ProjectFortress/other_compiler_tests/GenMet0.fss
+ProjectFortress/other_compiler_tests/GenMet1.fss
+ProjectFortress/other_compiler_tests/GenMet2.fss
+ProjectFortress/other_compiler_tests/GenMet3.fss
