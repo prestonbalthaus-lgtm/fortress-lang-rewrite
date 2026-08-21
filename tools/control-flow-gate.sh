@@ -251,6 +251,7 @@ mutate_needs_the_built_compiler() {
 
 mutate() {
     mutate_needs_the_built_compiler
+    mkdir -p "$build"
     # Against HEAD, not against the index: a gate that rewinds to the index will
     # faithfully put a DEFECT back if anything staged during the run.
     if ! git -C "$repo" diff --quiet HEAD -- fortressc; then
@@ -283,7 +284,19 @@ PY
 
         # The fixture must stop being refused, or stop halting.
         if [[ $fixture == caseunmatched ]]; then
+            rm -f "$build/mut"
             "$fortressc" "$repo/fortressc/tests/$fixture.fss" -o "$build/mut" >/dev/null 2>&1
+            # A MISSING BINARY IS A BROKEN MUTATION, NOT AN ESCAPE. The first
+            # run of this table reported `the halt still exits 127`, which is
+            # `command not found` -- $build did not exist, nothing was built,
+            # and an infrastructure failure read as a result. Same class as
+            # trap 2 and it has to be its own outcome.
+            if [[ ! -x $build/mut ]]; then
+                printf 'BROKEN  the mutated compiler produced no binary\n'
+                broken=$((broken + 1))
+                git -C "$repo" checkout HEAD -- "fortressc/$file"
+                continue
+            fi
             "$build/mut" >/dev/null 2>&1; local rc=$?
             if [[ $rc -eq 0 ]]; then
                 printf 'refused  the gate would catch this: the halt exits %s\n' "$rc"
