@@ -1638,16 +1638,23 @@ fn a_function_value_whose_signature_is_not_the_arrow_is_refused() {
 /// spelling, so a captured `k` resolves to the field `k` exactly as it resolved
 /// to the enclosing local, with no environment struct and no fat pointer.
 ///
-/// Eight lines, and the last two are the ones that matter: `adder(100)` is a
-/// closure that OUTLIVES the call that made it, carrying its capture in a
-/// scanned field, and `nested(7)` is a lambda whose body builds another one.
+/// Thirteen lines. `adder(100)` is a closure that OUTLIVES the call that made
+/// it, carrying its capture in a scanned field; `nested(7)` is a lambda whose
+/// body builds another one; and the five 42s are the shapes the corpus actually
+/// writes -- an unwritten parameter type, a bare binder with no parentheses,
+/// ZERO parameters, a closure factory taking its arrow from a declaration's
+/// RETURN type, and a lambda taking it from a binding's annotation.
+///
+/// The census is what makes those five worth having: of 1064 `fn` uses, 540
+/// carry no annotation at all, 169 have no parameter, and 154 write the bare
+/// binder. Refusing them would have refused the majority shape.
 #[test]
 fn a_lambda_captures_its_enclosing_bindings_and_outlives_them() {
     let binary = compile_fixture("lambda.fss", "lambda");
     let out = run(&binary);
     assert_eq!(
         String::from_utf8_lossy(&out.stdout),
-        "6\n18\n42\n15\n115\nhi-tagged\n105\n12\n"
+        "6\n18\n42\n15\n115\nhi-tagged\n105\n12\n42\n42\n42\n42\n42\n"
     );
     assert_eq!(out.status.code(), Some(0));
     let _ = std::fs::remove_file(&binary);

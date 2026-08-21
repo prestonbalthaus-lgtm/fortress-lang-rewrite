@@ -22,6 +22,11 @@ adder(k: ZZ32): ZZ32 -> ZZ32 = fn (x: ZZ32): ZZ32 => x + k
    construction and `k` is one of ITS free names. *)
 nested(k: ZZ32): ZZ32 -> ZZ32 = fn (x: ZZ32): ZZ32 => apply1(fn (y: ZZ32): ZZ32 => y + k, x)
 
+(* Zero parameters: the domain is `()` and `apply` takes nothing at all. 169 of
+   the corpus's 1064 `fn` uses are this shape. *)
+force(f: () -> ZZ32): ZZ32 = f()
+later(k: ZZ32): () -> ZZ32 = fn () => k + 1
+
 run(): () = do
     println(apply1(fn (x: ZZ32): ZZ32 => x + 1, 5))
     println(twice(fn (x: ZZ32): ZZ32 => x 3, 2))
@@ -40,5 +45,19 @@ run(): () = do
 
     println(apply1(adder(100), 5))
     println(apply1(nested(7), 5))
+
+    (* The parameter type is not written either. The slot supplies both, which
+       is what makes the corpus's majority shape reachable: 540 of its 1064
+       `fn` uses carry no annotation at all. *)
+    println(apply1(fn (n) => n + 1, 41))
+    println(apply1(fn n => n + 1, 41))
+
+    println(force(fn (): ZZ32 => 42))
+    println(force(later(41)))
+
+    (* A written type on the binding is a slot too, and so is a declaration's
+       return type -- `later` above is the closure-factory shape. *)
+    h: ZZ32 -> ZZ32 = fn n => n 2
+    println(apply1(h, 21))
 end
 end

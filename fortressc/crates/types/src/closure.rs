@@ -121,6 +121,26 @@ struct ArrowTrait {
     to: TypeRef,
 }
 
+/// The `apply` parameter list for an arrow with this domain: none at all when
+/// the domain is `()`, and one otherwise.
+/// Whether a parameter type is the parser's placeholder for one that was not
+/// written. Spelled here rather than imported: `types` does not depend on
+/// `parser` and must not start.
+fn is_infer(t: &TypeRef) -> bool {
+    matches!(t, TypeRef::Named { name, .. } if name == "$infer")
+}
+
+fn apply_params(from: &TypeRef, name: &str, span: Span) -> Vec<Param> {
+    if matches!(from, TypeRef::Unit { .. }) {
+        return Vec::new();
+    }
+    vec![Param {
+        name: name.to_owned(),
+        ty: from.clone(),
+        span,
+    }]
+}
+
 fn sanitize(written: &str) -> String {
     written
         .chars()
@@ -190,8 +210,9 @@ impl Pass {
                     for p in &f.params {
                         scope.declare(&p.name, &p.ty);
                     }
+                    let returns = f.return_type.clone();
                     if let Some(body) = &mut f.body {
-                        self.rewrite_expr(body, &mut scope)?;
+                        self.rewrite_slotted(body, returns.as_ref(), &mut scope)?;
                     }
                 }
                 Decl::Trait(t) => {
@@ -222,11 +243,7 @@ impl Pass {
                     modifiers: Modifiers::default(),
                     name: APPLY.to_owned(),
                     static_params: Vec::new(),
-                    params: vec![Param {
-                        name: "x$0".to_owned(),
-                        ty: arrow.from.clone(),
-                        span: Span::new(0, 0),
-                    }],
+                    params: apply_params(&arrow.from, "x$0", Span::new(0, 0)),
                     return_type: Some(arrow.to.clone()),
                     // No body: an abstract method, which is what keeps it out
                     // of the dispatch table's winners and makes every concrete
@@ -270,8 +287,9 @@ impl Pass {
         for p in &method.params {
             scope.declare(&p.name, &p.ty);
         }
+        let returns = method.return_type.clone();
         if let Some(body) = &mut method.body {
-            self.rewrite_expr(body, &mut scope)?;
+            self.rewrite_slotted(body, returns.as_ref(), &mut scope)?;
         }
         Ok(())
     }
@@ -290,7 +308,7 @@ impl Pass {
                 // tuple turned `(ZZ32, ZZ32) -> ZZ32` from a diagnostic on
                 // master into a silent exit 0 -- the worst class this project
                 // recognises, introduced by the pass meant to add a feature.
-                if !self.liftable(from) || !self.liftable(to) {
+                if !self.liftable_domain(from) || !self.liftable(to) {
                     return;
                 }
                 let key = arrow_key(from, to);
@@ -328,6 +346,34 @@ impl Pass {
         }
     }
 
+    /// An expression whose type is WRITTEN somewhere -- a declaration's return
+    /// type, a binding's annotation -- and which may be a lambda that needs it.
+    ///
+    /// `make(k: ZZ32): () -> ZZ32 = fn () => k + 1` has no argument slot to
+    /// take the arrow from, and refusing it would refuse the shape the corpus
+    /// writes for a closure factory. Only the expression ITSELF is treated this
+    /// way: a lambda deeper inside the body has no claim on the declaration's
+    /// return type, and giving it one would type it by coincidence.
+    fn rewrite_slotted(
+        &mut self,
+        e: &mut Expr,
+        written: Option<&TypeRef>,
+        scope: &mut Scope,
+    ) -> Result<(), TypeError> {
+        if matches!(e, Expr::Lambda { .. }) {
+            let key = written.and_then(|t| match t {
+                TypeRef::Named { name, .. } if name.starts_with(TRAIT_PREFIX) => self
+                    .traits
+                    .iter()
+                    .find(|(_, a)| a.name == *name)
+                    .map(|(k, _)| k.clone()),
+                _ => None,
+            });
+            return self.lambda(e, key.as_ref(), scope);
+        }
+        self.rewrite_expr(e, scope)
+    }
+
     /// `fn (x: T): R => e`, lowered to a generated object whose CONSTRUCTOR
     /// PARAMETERS are the names the body captures.
     ///
@@ -362,30 +408,52 @@ impl Pass {
             return Ok(());
         };
         let span = *span;
-        let [param] = params.as_slice() else {
-            return Err(TypeError::LambdaUnsupported {
-                span,
-                form: "a lambda with a parameter list that is not exactly one parameter",
-            });
+        let mut param = match params.as_slice() {
+            [] => None,
+            [one] => Some(one.clone()),
+            _ => {
+                return Err(TypeError::LambdaUnsupported {
+                    span,
+                    form: "a lambda with more than one parameter",
+                })
+            }
         };
-        let mut param = param.clone();
-        self.rewrite_type(&mut param.ty);
+        if let Some(p) = param.as_mut() {
+            self.rewrite_type(&mut p.ty);
+        }
 
-        // The arrow, from the written return type or from the slot the lambda
-        // lands in. Those are the only two sources; there is no inference here.
-        let (from, to) = match (return_type.as_ref(), wanted) {
+        // What the slot asks for, when it asks for anything. It is the ONLY
+        // source for an unwritten parameter type and one of two for the return
+        // type. There is no inference beyond it.
+        let slot = wanted
+            .and_then(|key| self.traits.get(key))
+            .map(|a| (a.from.clone(), a.to.clone()));
+
+        let written_from = match param.as_ref() {
+            // No parameter list at all: the domain is `()` and `apply` takes
+            // nothing. 169 of the corpus's 1064 `fn` uses are this shape.
+            None => Some(TypeRef::Unit { span }),
+            Some(p) if !is_infer(&p.ty) => Some(p.ty.clone()),
+            Some(_) => None,
+        };
+        let from = match (written_from, slot.as_ref()) {
+            (Some(t), _) => t,
+            (None, Some((f, _))) => f.clone(),
+            (None, None) => {
+                return Err(TypeError::LambdaUnsupported {
+                    span,
+                    form: "a lambda whose parameter has no written type, in a position that \
+                           does not supply one",
+                })
+            }
+        };
+        let to = match (return_type.as_ref(), slot.as_ref()) {
             (Some(r), _) => {
                 let mut r = r.clone();
                 self.rewrite_type(&mut r);
-                (param.ty.clone(), r)
+                r
             }
-            (None, Some(key)) => {
-                let arrow = self.traits.get(key).ok_or(TypeError::LambdaUnsupported {
-                    span,
-                    form: "a lambda whose arrow is not known here",
-                })?;
-                (arrow.from.clone(), arrow.to.clone())
-            }
+            (None, Some((_, t))) => t.clone(),
             (None, None) => {
                 return Err(TypeError::LambdaUnsupported {
                     span,
@@ -393,7 +461,10 @@ impl Pass {
                 })
             }
         };
-        if !self.liftable(&from) || !self.liftable(&to) {
+        if let Some(p) = param.as_mut() {
+            p.ty = from.clone();
+        }
+        if !self.liftable_domain(&from) || !self.liftable(&to) {
             return Err(TypeError::LambdaUnsupported {
                 span,
                 form: "a lambda over a type this subset cannot store",
@@ -422,17 +493,16 @@ impl Pass {
         // counted as free names of this one.
         let mut lowered = (**body).clone();
         scope.push();
-        scope.declare(&param.name, &param.ty);
+        if let Some(p) = param.as_ref() {
+            scope.declare(&p.name, &p.ty);
+        }
         let walked = self.rewrite_expr(&mut lowered, scope);
         scope.pop();
         walked?;
 
         let mut free: BTreeSet<String> = BTreeSet::new();
-        free_names(
-            &lowered,
-            &mut vec![[param.name.clone()].into_iter().collect()],
-            &mut free,
-        );
+        let bound: BTreeSet<String> = param.iter().map(|p| p.name.clone()).collect();
+        free_names(&lowered, &mut vec![bound], &mut free);
         let mut captures: Vec<Param> = Vec::new();
         for name in free {
             if name == "self" {
@@ -468,11 +538,16 @@ impl Pass {
                 modifiers: Modifiers::default(),
                 name: APPLY.to_owned(),
                 static_params: Vec::new(),
-                params: vec![Param {
-                    name: param.name.clone(),
-                    ty: from,
-                    span,
-                }],
+                params: param
+                    .as_ref()
+                    .map(|p| {
+                        vec![Param {
+                            name: p.name.clone(),
+                            ty: from.clone(),
+                            span,
+                        }]
+                    })
+                    .unwrap_or_default(),
                 return_type: Some(to),
                 body: Some(lowered),
                 accessor: false,
@@ -521,13 +596,19 @@ impl Pass {
                 span,
                 name: name.to_owned(),
             })?;
+        let nullary = matches!(from, TypeRef::Unit { .. });
         let matching: Vec<&FnDecl> = candidates
             .iter()
             .filter(|f| {
-                f.params.len() == 1
-                    && f.params
-                        .first()
-                        .is_some_and(|p| p.ty.written() == from.written())
+                let domain = if nullary {
+                    f.params.is_empty()
+                } else {
+                    f.params.len() == 1
+                        && f.params
+                            .first()
+                            .is_some_and(|p| p.ty.written() == from.written())
+                };
+                domain
                     && f.return_type
                         .as_ref()
                         .is_some_and(|r| r.written() == to.written())
@@ -547,10 +628,14 @@ impl Pass {
                 name: name.to_owned(),
                 span,
             }),
-            args: vec![Expr::Var {
-                name: "x$0".to_owned(),
-                span,
-            }],
+            args: if nullary {
+                Vec::new()
+            } else {
+                vec![Expr::Var {
+                    name: "x$0".to_owned(),
+                    span,
+                }]
+            },
             span,
         };
         let object = ObjectDecl {
@@ -575,11 +660,7 @@ impl Pass {
                 // No `self` parameter: a `self` parameter marks a FUNCTIONAL
                 // method, which lifts into the top-level overload set and is a
                 // different namespace entirely. `apply` has to be dotted.
-                params: vec![Param {
-                    name: "x$0".to_owned(),
-                    ty: from,
-                    span,
-                }],
+                params: apply_params(&from, "x$0", span),
                 return_type: Some(to),
                 body: Some(body),
                 accessor: false,
@@ -794,7 +875,8 @@ impl Pass {
                     if let Some(t) = ty {
                         self.rewrite_type(t);
                     }
-                    self.rewrite_expr(value, scope)?;
+                    let written = ty.clone();
+                    self.rewrite_slotted(value, written.as_ref(), scope)?;
                     match ty {
                         Some(t) => scope.declare(name, t),
                         None => scope.declare_opaque(name),
@@ -809,6 +891,15 @@ impl Pass {
             }
         }
         Ok(())
+    }
+
+    /// The domain of an arrow may be `()`, where the rest of a type position
+    /// may not: a nullary closure's `apply` takes no parameter at all, so
+    /// there is nothing unstorable about it. 169 of the corpus's 1064 `fn` uses
+    /// are `fn () => e`. The CODOMAIN is still an ordinary type -- `apply` has
+    /// to return something.
+    fn liftable_domain(&self, t: &TypeRef) -> bool {
+        matches!(t, TypeRef::Unit { .. }) || self.liftable(t)
     }
 
     /// Whether an arrow over this type can become a trait.
@@ -826,7 +917,7 @@ impl Pass {
                 (self.known.contains(name) || name.starts_with(TRAIT_PREFIX))
                     && args.iter().all(|a| self.liftable(a))
             }
-            TypeRef::Arrow { from, to, .. } => self.liftable(from) && self.liftable(to),
+            TypeRef::Arrow { from, to, .. } => self.liftable_domain(from) && self.liftable(to),
             TypeRef::Tuple { .. } | TypeRef::Unit { .. } => false,
         }
     }

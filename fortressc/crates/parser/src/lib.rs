@@ -26,6 +26,11 @@ type Parsed<T> = Result<T, ParseError>;
 /// The BIG reduction operators this lowering recognises at all. `MAX` and
 /// `MIN` are here so that they are refused BY NAME rather than read as a
 /// subscript, which is what they are today.
+/// The type a lambda parameter carries when the source wrote none. It cannot
+/// be lexed, so no declared type can collide with it, and closure lowering is
+/// the only thing that ever resolves one.
+pub const INFER: &str = "$infer";
+
 const BIG_OPERATORS: [&str; 4] = ["SUM", "PROD", "MAX", "MIN"];
 
 /// One `i <- lo:hi` clause. `for` and a BIG reduction share the parser for it.
@@ -2093,33 +2098,41 @@ impl<'t, 'a> Parser<'t, 'a> {
         })
     }
 
-    /// `fn (x: T): R => e`, and `fn (x: T) => e`. The parenthesised,
-    /// TYPE-ANNOTATED parameter list only.
+    /// `fn (x: T): R => e`, and every shorter spelling the corpus writes:
+    /// `fn (x) => e`, `fn x => e`, `fn () => e`, `fn (): R => e`.
     ///
-    /// The corpus also writes `fn n => e` and `fn(a,b) => e` with no types at
-    /// all, and those are refused by name rather than guessed at: the types
-    /// would have to come from the arrow the lambda lands in, which is a
-    /// checker fact and this is the parser. The diagnostic says so.
+    /// AN UNWRITTEN PARAMETER TYPE IS RECORDED, NOT GUESSED. It becomes the
+    /// placeholder `$infer`, which cannot be lexed and so cannot collide with a
+    /// declared type; closure lowering fills it from the arrow of the slot the
+    /// lambda lands in, and refuses by name when there is no such slot. 540 of
+    /// the corpus's 1064 `fn` uses carry no annotation at all, so refusing them
+    /// in the parser would have refused the majority shape.
+    ///
+    /// More than one parameter is still refused: the arrow would be
+    /// `(A, B) -> C`, a tuple domain, which needs composite types.
     fn lambda_expr(&mut self) -> Parsed<Expr> {
         let start = self.span_here();
         self.pos += 1; // `fn`
         self.skip_newlines();
-        if !self.at(&Kind::LParen) {
-            return Err(ParseError::LambdaFormUnsupported {
-                span: Span::new(start.start, self.span_here().end),
-                form: "a parameter with no parentheses",
-            });
-        }
-        self.pos += 1;
-        // `params` requires `name: Type` for every parameter, which is exactly
-        // the subset this lowering can mint an object for.
-        let params = self
-            .params()
-            .map_err(|_| ParseError::LambdaFormUnsupported {
-                span: Span::new(start.start, self.span_here().end),
-                form: "a parameter without a written type",
-            })?;
-        self.expect(&Kind::RParen, "`)`")?;
+        let params = if self.at(&Kind::LParen) {
+            self.pos += 1;
+            self.skip_newlines();
+            let mut out = Vec::new();
+            while !self.at(&Kind::RParen) {
+                out.push(self.lambda_param()?);
+                self.skip_newlines();
+                if !self.at(&Kind::Comma) {
+                    break;
+                }
+                self.pos += 1;
+                self.skip_newlines();
+            }
+            self.expect(&Kind::RParen, "`)`")?;
+            out
+        } else {
+            // `fn x => e`, 154 corpus sites. One binder, no parentheses.
+            vec![self.lambda_param()?]
+        };
         let return_type = if self.at(&Kind::Colon) {
             self.pos += 1;
             Some(self.type_ref()?)
@@ -2137,6 +2150,26 @@ impl<'t, 'a> Parser<'t, 'a> {
             body: Box::new(body),
             span,
         })
+    }
+
+    /// One lambda parameter: `x: T`, or `x` with its type left to the slot.
+    fn lambda_param(&mut self) -> Parsed<Param> {
+        let (name, name_span) = self.identifier("a lambda parameter name")?;
+        if !self.at(&Kind::Colon) {
+            return Ok(Param {
+                name,
+                ty: TypeRef::Named {
+                    name: INFER.to_owned(),
+                    args: Vec::new(),
+                    span: name_span,
+                },
+                span: name_span,
+            });
+        }
+        self.pos += 1;
+        let ty = self.type_ref()?;
+        let span = Span::new(name_span.start, ty.span().end);
+        Ok(Param { name, ty, span })
     }
 
     /// `case subject of guard => e ... else => e end`.
