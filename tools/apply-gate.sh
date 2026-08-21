@@ -92,9 +92,15 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 #   API_FLOOR      .fsi files whose headers resolve and whose bounds discharge
 # Measured on the consolidated tree: 290 objects, 60 apis, 350 together.
 # SPIKE-OPEXPR, the operator DECLARATION half: 305 objects, 62 apis, 367
-# together. `||` as a guarded builtin is 9 of the 8 gained .fss (one file,
-# Overloading.fss, went the other way -- MAX_INSTANTIATIONS on `Indexed`,
-# because FortressLibrary.fsi now PARSES and resolution merges more of it).
+# together, and the two commits are separable -- the mutation table measured
+# each rather than the arithmetic being inferred:
+#   the parser work (subscripted assignment, postfix declarations)  NET +-1
+#      gained not_passing_yet/OverloadsA.fsi, and LOST
+#      SpecData/examples/advanced/Overloading.fss to MAX_INSTANTIATIONS on
+#      `Indexed` -- because FortressLibrary.fsi now PARSES and resolution
+#      merges more of it, not because anything got worse
+#   `||` as a guarded builtin                                       +9 .fss
+#      exactly the 9 that mutation Q5 loses when the builtin is removed
 # D7 ADOPTED, `nat`/`int`/`bool` OPEN: 297 objects, 61 apis, 358 together. The
 # eight are genericTest1/2, tparams0/1/2, Compiled1.av, Compiled6.af and
 # test_library/TestNative.fsi, and genericTest1 checks its own arithmetic --
