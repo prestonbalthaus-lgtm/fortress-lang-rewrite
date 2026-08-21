@@ -1,0 +1,27 @@
+component caseonce
+
+export Executable
+
+(* The subject is bound once and the arms compare against the binding. Inlining
+   it into every guard runs its side effects once per arm, which is the defect
+   M3f's chained comparison already paid for. Three arms, one `evaluated`. *)
+object Counter()
+    var n: ZZ32 = 0
+end
+
+noisy(k: Counter): ZZ32 = do
+    k.n := k.n + 1
+    println("evaluated")
+    9
+end
+
+run(): () = do
+    k = Counter()
+    println(case noisy(k) of
+        1 => "one"
+        2 => "two"
+        else => "many"
+    end)
+    println(k.n)
+end
+end

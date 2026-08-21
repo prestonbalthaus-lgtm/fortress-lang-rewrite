@@ -1,0 +1,14 @@
+component badcaseelse
+
+export Executable
+
+(* 1.0 throws `MatchFailure` when no arm matches. This subset has no
+   exceptions, so a `case` whose value is used needs the `else` arm to supply
+   one. In statement position it needs none. *)
+run(): () = do
+    x: ZZ32 = 1
+    println(case x of
+        1 => "one"
+    end)
+end
+end

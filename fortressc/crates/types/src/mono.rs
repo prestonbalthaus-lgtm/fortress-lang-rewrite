@@ -16,8 +16,8 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use fortress_ast::{
-    Assign, BlockItem, BoundObligation, Component, Decl, Expr, FieldDecl, FnDecl, Member,
-    MethodDecl, ObjectDecl, Param, Span, StaticParam, TraitDecl, TypeRef,
+    Assign, BlockItem, BoundObligation, CaseArm, Component, Decl, Expr, FieldDecl, FnDecl, Member,
+    MethodDecl, ObjectDecl, Param, Span, StaticParam, TraitDecl, TypeCaseArm, TypeRef,
 };
 
 use crate::error::TypeError;
@@ -847,6 +847,66 @@ impl<'a> Expander<'a> {
             },
             Expr::Atomic { body, span } => Expr::Atomic {
                 body: Box::new(self.expr(body, subst)?),
+                span: *span,
+            },
+
+            Expr::Case {
+                subject,
+                arms,
+                else_arm,
+                span,
+            } => Expr::Case {
+                subject: Box::new(self.expr(subject, subst)?),
+                arms: arms
+                    .iter()
+                    .map(|a| {
+                        Ok(CaseArm {
+                            guard: self.expr(&a.guard, subst)?,
+                            body: self.expr(&a.body, subst)?,
+                            span: a.span,
+                        })
+                    })
+                    .collect::<Result<_, TypeError>>()?,
+                else_arm: match else_arm {
+                    Some(e) => Some(Box::new(self.expr(e, subst)?)),
+                    None => None,
+                },
+                span: *span,
+            },
+            // The arm TYPE substitutes like any other written type, which is
+            // what lets `typecase x of T => ...` appear inside a generic body.
+            Expr::TypeCase {
+                subject,
+                arms,
+                else_arm,
+                span,
+            } => Expr::TypeCase {
+                subject: Box::new(self.expr(subject, subst)?),
+                arms: arms
+                    .iter()
+                    .map(|a| {
+                        Ok(TypeCaseArm {
+                            binder: a.binder.clone(),
+                            ty: self.ty(&a.ty, subst)?,
+                            body: self.expr(&a.body, subst)?,
+                            span: a.span,
+                        })
+                    })
+                    .collect::<Result<_, TypeError>>()?,
+                else_arm: Box::new(self.expr(else_arm, subst)?),
+                span: *span,
+            },
+            Expr::Label { name, body, span } => Expr::Label {
+                name: name.clone(),
+                body: Box::new(self.expr(body, subst)?),
+                span: *span,
+            },
+            Expr::Exit { name, value, span } => Expr::Exit {
+                name: name.clone(),
+                value: match value {
+                    Some(e) => Some(Box::new(self.expr(e, subst)?)),
+                    None => None,
+                },
                 span: *span,
             },
         })

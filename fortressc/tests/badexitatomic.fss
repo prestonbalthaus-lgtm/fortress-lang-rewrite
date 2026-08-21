@@ -1,0 +1,15 @@
+component badexitatomic
+
+export Executable
+
+(* atomic.tex:59-70's rollback rule, writes-retained arm. The branch would jump
+   past `fortress_atomic_leave` and leave one process-wide RECURSIVE mutex held
+   for the rest of the process. *)
+run(): () = do
+    label out
+        atomic do
+            exit out
+        end
+    end out
+end
+end

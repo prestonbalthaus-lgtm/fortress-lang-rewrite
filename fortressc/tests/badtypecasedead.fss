@@ -1,0 +1,18 @@
+component badtypecasedead
+
+export Executable
+
+(* First arm wins, so the trait arm above claims every tag `A` has and this arm
+   can never run. Dead code the reader believes in is worse than a refusal. *)
+trait S end
+object A() extends {S} end
+
+which(s: S): ZZ32 =
+    typecase s of
+        S => 1
+        A => 2
+        else => 3
+    end
+
+run(): () = println(which(A()))
+end

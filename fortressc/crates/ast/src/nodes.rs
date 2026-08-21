@@ -409,6 +409,68 @@ pub enum Expr {
         body: Box<Expr>,
         span: Span,
     },
+    /// `case subject of guard => e ... else => e end`. The subject is evaluated
+    /// ONCE -- the checker binds it before the chain -- because a guard chain
+    /// that re-evaluates it runs its side effects once per arm.
+    ///
+    /// The extremum form (`case most > of`) and the operator form
+    /// (`case z IN of`) are refused by name in the parser: both need an
+    /// operator table that does not exist.
+    Case {
+        subject: Box<Expr>,
+        arms: Vec<CaseArm>,
+        /// `else => e`. Required when the value is used, because there is no
+        /// value to produce when nothing matches; 1.0 throws `MatchFailure`
+        /// there and this subset has no exceptions.
+        else_arm: Option<Box<Expr>>,
+        span: Span,
+    },
+    /// `typecase subject of T => e ... else => e end`, and `x: T => e` to bind
+    /// the subject at the narrowed type.
+    TypeCase {
+        subject: Box<Expr>,
+        arms: Vec<TypeCaseArm>,
+        /// REQUIRED. A trait's concrete types are a compile-time fact, but
+        /// `comprises` is not enforced anywhere in this compiler, so an
+        /// exhaustiveness proof drawn from it would rest on an unchecked
+        /// clause.
+        else_arm: Box<Expr>,
+        span: Span,
+    },
+    /// `label L ... end L`. A forward jump within one function, so it needs no
+    /// unwinding: the exits are the incoming edges of one phi.
+    Label {
+        name: String,
+        body: Box<Expr>,
+        span: Span,
+    },
+    /// `exit L with e`, `exit L`, and `exit`, which names the innermost label.
+    Exit {
+        /// `None` is the innermost enclosing label.
+        name: Option<String>,
+        value: Option<Box<Expr>>,
+        span: Span,
+    },
+}
+
+/// One arm of a `case`. The guard is compared with the subject using `=`; the
+/// operator form that would let the comparison be anything else is out of the
+/// subset until there is an operator table to look it up in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CaseArm {
+    pub guard: Expr,
+    pub body: Expr,
+    pub span: Span,
+}
+
+/// One arm of a `typecase`. `binder` is the `x` of `x: T => e`, bound to the
+/// subject at type `T` for the body only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypeCaseArm {
+    pub binder: Option<String>,
+    pub ty: TypeRef,
+    pub body: Expr,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -469,6 +531,10 @@ impl Expr {
             | Self::Field { span, .. }
             | Self::For { span, .. }
             | Self::Atomic { span, .. }
+            | Self::Case { span, .. }
+            | Self::TypeCase { span, .. }
+            | Self::Label { span, .. }
+            | Self::Exit { span, .. }
             | Self::Instantiate { span, .. } => *span,
         }
     }

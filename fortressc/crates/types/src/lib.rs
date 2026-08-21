@@ -22,16 +22,16 @@ pub use error::TypeError;
 pub use types::{
     intern, ArithOp, AssignTarget, CompareOp, DispatchFn, DispatchNode, Elem, MpiOp, Target, Type,
     TypedBlockItem, TypedCapture, TypedComponent, TypedExpr, TypedExprKind, TypedField, TypedFn,
-    TypedObject, TypedParam, TypedReduction, ARRAY_ALLOC, ARRAY_LENGTH, ARRAY_SLOT, ASSERT_FAILED,
-    ATOMIC_ENTER, ATOMIC_LEAVE, DISPATCH_FAILED, ENV_ALLOC, FIRST_TAG, OBJECT_ALLOC, PARALLEL_FOR,
-    REDUCTION_ALLOC, REDUCTION_WORKERS,
+    TypedObject, TypedParam, TypedReduction, TypedTypeCaseArm, ARRAY_ALLOC, ARRAY_LENGTH,
+    ARRAY_SLOT, ASSERT_FAILED, ATOMIC_ENTER, ATOMIC_LEAVE, CASE_FAILED, DISPATCH_FAILED, ENV_ALLOC,
+    FIRST_TAG, OBJECT_ALLOC, PARALLEL_FOR, REDUCTION_ALLOC, REDUCTION_WORKERS,
 };
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use fortress_ast::{
-    Assign, BinOp, BlockItem, Component, Decl, Expr, FieldDecl, FnDecl, Member, MethodDecl,
-    ObjectDecl, Span, TypeRef, UnOp,
+    Assign, BinOp, BlockItem, CaseArm, Component, Decl, Expr, FieldDecl, FnDecl, Member,
+    MethodDecl, ObjectDecl, Span, TypeCaseArm, TypeRef, UnOp,
 };
 
 use registry::{close_traits, ObjectInfo, Registry, TraitInfo};
@@ -107,6 +107,22 @@ struct LoopCtx {
     /// alone cannot tell the two apart. A reference type only: copying a
     /// scalar out of a shared name copies its value.
     tainted: BTreeSet<String>,
+}
+
+/// One `label` open around the walk. The two depths are what an `exit` is
+/// checked against: crossing either of them is a branch the lowering cannot
+/// make, and each has its own diagnostic.
+struct LabelCtx {
+    name: String,
+    /// Fixed by the first `exit` carrying a value, or by the context the label
+    /// itself was checked in.
+    ty: Option<Type>,
+    /// `self.atomic_depth` where the label opened. An exit from deeper inside
+    /// an `atomic` would branch past `fortress_atomic_leave`.
+    atomic_depth: usize,
+    /// `self.loop_ctx.len()` where the label opened. Every `for` body is
+    /// outlined, so an exit from deeper inside one is a cross-function jump.
+    loop_depth: usize,
 }
 
 /// What the body did to one escaping name, collected across the whole walk.
@@ -194,6 +210,12 @@ struct Checker {
     object_init: bool,
     /// Numbers the outlined loop bodies so their symbols are unique.
     loops: usize,
+    /// Numbers the bindings `case` desugars its subject into. `$` cannot be
+    /// lexed, so no source name can collide with one.
+    cases: usize,
+    /// The labels open around the walk, innermost last. A bare `exit` names the
+    /// last of them.
+    labels: Vec<LabelCtx>,
     /// How deep inside `atomic` the walk is. A parallel body MAY assign to an
     /// escaping name inside one: the lock serialises the write, and the
     /// capture becomes a by-reference one so the write lands on real storage.
@@ -442,6 +464,8 @@ impl Checker {
             loop_ctx: Vec::new(),
             atomic_depth: 0,
             loops: 0,
+            cases: 0,
+            labels: Vec::new(),
         };
         let counts = overload_counts(component);
         checker.build_hierarchy(component)?;
@@ -1732,6 +1756,22 @@ impl Checker {
                 expected,
             ),
             Expr::Atomic { body, span } => self.atomic(body, *span, expected),
+            Expr::Case {
+                subject,
+                arms,
+                else_arm,
+                span,
+            } => self.case_expr(subject, arms, else_arm.as_deref(), *span, expected),
+            Expr::TypeCase {
+                subject,
+                arms,
+                else_arm,
+                span,
+            } => self.typecase_expr(subject, arms, else_arm, *span, expected),
+            Expr::Label { name, body, span } => self.label_expr(name, body, *span, expected),
+            Expr::Exit { name, value, span } => {
+                self.exit_expr(name.as_deref(), value.as_deref(), *span, expected)
+            }
             // Unreachable: expansion rewrites every instantiation to a plain
             // name before the checker is constructed.
             Expr::Instantiate { callee, span, .. } => Err(TypeError::NotGeneric {
@@ -2259,6 +2299,34 @@ impl Checker {
             }
             Expr::Instantiate { callee, .. } => self.reads_shared(callee, floor),
             Expr::Atomic { body, .. } => self.reads_shared(body, floor),
+            Expr::Case {
+                subject,
+                arms,
+                else_arm,
+                ..
+            } => {
+                self.reads_shared(subject, floor)
+                    || arms.iter().any(|a| {
+                        self.reads_shared(&a.guard, floor) || self.reads_shared(&a.body, floor)
+                    })
+                    || else_arm
+                        .as_deref()
+                        .is_some_and(|e| self.reads_shared(e, floor))
+            }
+            Expr::TypeCase {
+                subject,
+                arms,
+                else_arm,
+                ..
+            } => {
+                self.reads_shared(subject, floor)
+                    || arms.iter().any(|a| self.reads_shared(&a.body, floor))
+                    || self.reads_shared(else_arm, floor)
+            }
+            Expr::Label { body, .. } => self.reads_shared(body, floor),
+            Expr::Exit { value, .. } => value
+                .as_deref()
+                .is_some_and(|e| self.reads_shared(e, floor)),
         }
     }
 
@@ -3908,6 +3976,372 @@ impl Checker {
                 args: vec![left, right],
             },
             ty: Type::Boolean,
+            span,
+        })
+    }
+
+    /// `case` is a DESUGARING and not a node: the subject is bound once and the
+    /// arms become an `if`/`elif` chain over `subject = guard`. Building the
+    /// chain out of AST rather than typed nodes is what makes every comparison
+    /// rule -- which types `=` is defined on, what it means on an object --
+    /// exactly the rules `infix` already enforces, with the diagnostics it
+    /// already writes.
+    ///
+    /// THE SUBJECT IS EVALUATED ONCE. `case f(x) of ...` with the subject
+    /// inlined into every guard runs `f` once per arm, which is the defect
+    /// M3f's chained comparison already paid for once.
+    fn case_expr(
+        &mut self,
+        subject: &Expr,
+        arms: &[CaseArm],
+        else_arm: Option<&Expr>,
+        span: Span,
+        expected: Option<Type>,
+    ) -> Checked<TypedExpr> {
+        if arms.is_empty() {
+            return Err(TypeError::CaseHasNoArms { span });
+        }
+        let name = format!("$case{}", self.cases);
+        self.cases = self.cases.saturating_add(1);
+        let subject_typed = self.expr(subject, None)?;
+        let subject_ty = subject_typed.ty;
+        let subject_ref = Expr::Var {
+            name: name.clone(),
+            span: subject.span(),
+        };
+
+        self.scopes.push(HashMap::new());
+        self.declare(name.clone(), subject_ty, false);
+        let built = self.case_chain(&subject_ref, arms, else_arm, span, expected);
+        self.scopes.pop();
+        let (chain, ty) = built?;
+
+        Ok(TypedExpr {
+            kind: TypedExprKind::Block {
+                items: vec![TypedBlockItem::Binding {
+                    name,
+                    ty: subject_ty,
+                    value: subject_typed,
+                    mutable: false,
+                    span: subject.span(),
+                }],
+                tail: Some(Box::new(chain)),
+            },
+            ty,
+            span,
+        })
+    }
+
+    /// The arms, folded into `if`/`elif` from the bottom up. Each guard is
+    /// compared through `infix`, so which types `=` is defined on -- and what
+    /// it means on an object -- are exactly the rules that were already there,
+    /// with the diagnostics that were already written.
+    fn case_chain(
+        &mut self,
+        subject_ref: &Expr,
+        arms: &[CaseArm],
+        else_arm: Option<&Expr>,
+        span: Span,
+        expected: Option<Type>,
+    ) -> Checked<(TypedExpr, Type)> {
+        let mut conditions = Vec::with_capacity(arms.len());
+        let mut bodies = Vec::with_capacity(arms.len());
+        let mut result = expected;
+        for arm in arms {
+            let test = Expr::Infix {
+                op: BinOp::Eq,
+                fixity: fortress_ast::Fixity::Loose,
+                lhs: Box::new(subject_ref.clone()),
+                rhs: Box::new(arm.guard.clone()),
+                span: arm.guard.span(),
+            };
+            conditions.push(self.expr(&test, Some(Type::Boolean))?);
+            let body = self.expr(&arm.body, result)?;
+            result = result.or(Some(body.ty));
+            bodies.push(body);
+        }
+        let otherwise = match else_arm {
+            Some(e) => Some(self.expr(e, result)?),
+            None => None,
+        };
+        let ty = result.unwrap_or(Type::Void);
+        for body in bodies.iter().chain(otherwise.as_ref()) {
+            if body.ty != ty {
+                return Err(TypeError::BranchTypeMismatch {
+                    span: body.span,
+                    then_type: ty,
+                    else_type: body.ty,
+                });
+            }
+        }
+
+        // THE FALLTHROUGH. 1.0 throws MatchFailure when nothing matches
+        // (case-expr.tex); this subset has no exceptions, so a `case` used for
+        // its effect HALTS with a diagnostic rather than doing nothing -- the
+        // same answer `assert` and the dispatch tree give. A `case` whose VALUE
+        // is used cannot halt into a value, so that one is refused instead.
+        let mut chain = match otherwise {
+            Some(e) => e,
+            None if ty == Type::Void => TypedExpr {
+                kind: TypedExprKind::Apply {
+                    target: Target::CaseFailed,
+                    args: Vec::new(),
+                },
+                ty: Type::Void,
+                span,
+            },
+            None => return Err(TypeError::CaseNeedsElse { span }),
+        };
+        for (cond, body) in conditions.into_iter().zip(bodies).rev() {
+            chain = TypedExpr {
+                kind: TypedExprKind::If {
+                    cond: Box::new(cond),
+                    then_branch: Box::new(body),
+                    else_branch: Some(Box::new(chain)),
+                },
+                ty,
+                span,
+            };
+        }
+        Ok((chain, ty))
+    }
+
+    /// `typecase`, and it is a real node rather than a desugaring: there is no
+    /// expression in this language that reads a tag, and inventing one to
+    /// desugar through would be a second way to do what M3c's dispatch tree
+    /// already does.
+    ///
+    /// FIRST ARM WINS. A tag claimed by an earlier arm is removed from every
+    /// later one, so the switch has one entry per tag; an arm left with no tag
+    /// at all is refused, because it is dead code the reader believes in.
+    fn typecase_expr(
+        &mut self,
+        subject: &Expr,
+        arms: &[TypeCaseArm],
+        else_arm: &Expr,
+        span: Span,
+        expected: Option<Type>,
+    ) -> Checked<TypedExpr> {
+        let subject = self.expr(subject, None)?;
+        if !subject.ty.is_reference() {
+            return Err(TypeError::TypeCaseSubjectNotReference {
+                span: subject.span,
+                found: subject.ty,
+            });
+        }
+
+        let mut claimed: BTreeSet<u32> = BTreeSet::new();
+        let mut typed_arms: Vec<TypedTypeCaseArm> = Vec::new();
+        let mut result: Option<Type> = expected;
+        for arm in arms {
+            let ty = self.registry.resolve(&arm.ty)?;
+            if !self.registry.is_subtype(ty, subject.ty) {
+                return Err(TypeError::TypeCaseArmUnrelated {
+                    span: arm.span,
+                    subject: subject.ty,
+                    arm: ty,
+                });
+            }
+            let tags: Vec<u32> = self
+                .concrete_tags(ty)
+                .into_iter()
+                .filter(|tag| !claimed.contains(tag))
+                .collect();
+            if tags.is_empty() {
+                return Err(TypeError::TypeCaseArmDead {
+                    span: arm.span,
+                    arm: ty,
+                });
+            }
+            claimed.extend(tags.iter().copied());
+
+            self.scopes.push(HashMap::new());
+            if let Some(binder) = &arm.binder {
+                self.declare(binder.clone(), ty, false);
+            }
+            let body = self.expr(&arm.body, result);
+            self.scopes.pop();
+            let body = body?;
+            let body_ty = body.ty;
+            typed_arms.push(TypedTypeCaseArm {
+                tags,
+                binder: arm.binder.clone(),
+                ty,
+                body,
+            });
+            result = result.or(Some(body_ty));
+        }
+
+        let else_branch = self.expr(else_arm, result)?;
+        let ty = result.unwrap_or(else_branch.ty);
+        if else_branch.ty != ty {
+            return Err(TypeError::BranchTypeMismatch {
+                span,
+                then_type: ty,
+                else_type: else_branch.ty,
+            });
+        }
+        for arm in &typed_arms {
+            if arm.body.ty != ty {
+                return Err(TypeError::BranchTypeMismatch {
+                    span: arm.body.span,
+                    then_type: ty,
+                    else_type: arm.body.ty,
+                });
+            }
+        }
+        Ok(TypedExpr {
+            kind: TypedExprKind::TypeCase {
+                subject: Box::new(subject),
+                arms: typed_arms,
+                else_branch: Box::new(else_branch),
+            },
+            ty,
+            span,
+        })
+    }
+
+    /// Every concrete tag a value of this type can carry. A trait is the closed
+    /// set below it -- whole program, so the set is complete -- and an object is
+    /// itself.
+    fn concrete_tags(&self, ty: Type) -> Vec<u32> {
+        match ty {
+            Type::Object(name) => self.registry.tag_of(name).into_iter().collect(),
+            Type::Trait(name) => self
+                .registry
+                .concretes_below(name)
+                .into_iter()
+                .filter_map(|concrete| self.registry.tag_of(concrete))
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// `label L ... end L`. The label's type is fixed by the FIRST `exit` that
+    /// carries a value, and everything else -- later exits, the body's own
+    /// fallthrough -- is checked against it. It cannot be taken from the body
+    /// instead: the body has not been walked yet when the first exit is.
+    fn label_expr(
+        &mut self,
+        name: &str,
+        body: &Expr,
+        span: Span,
+        expected: Option<Type>,
+    ) -> Checked<TypedExpr> {
+        if self.labels.iter().any(|l| l.name == name) {
+            return Err(TypeError::LabelAlreadyOpen {
+                span,
+                name: name.to_owned(),
+            });
+        }
+        self.labels.push(LabelCtx {
+            name: name.to_owned(),
+            ty: expected,
+            atomic_depth: self.atomic_depth,
+            loop_depth: self.loop_ctx.len(),
+        });
+        let body = self.expr(body, expected);
+        let ctx = self.labels.pop();
+        let body = body?;
+        let ty = ctx.and_then(|c| c.ty).unwrap_or(body.ty);
+        // A label whose exits carry a value and whose body can also fall out of
+        // the bottom needs a value on that edge too. 1.0 has no answer for it
+        // either; refusing beats inventing a zero and printing it.
+        if body.ty != ty {
+            return Err(TypeError::LabelFallsThrough {
+                span,
+                name: name.to_owned(),
+                expected: ty,
+                found: body.ty,
+            });
+        }
+        Ok(TypedExpr {
+            kind: TypedExprKind::Label {
+                name: name.to_owned(),
+                body: Box::new(body),
+            },
+            ty,
+            span,
+        })
+    }
+
+    /// `exit L with e`, and the two crossings that have to be refused.
+    ///
+    /// AN `atomic` BOUNDARY: the branch would skip `fortress_atomic_leave` and
+    /// leave one process-wide RECURSIVE mutex held for the rest of the process.
+    /// `atomic.tex:59-70`'s rollback rule has two arms and this is the one
+    /// `label`/`exit` re-opens; until there is an answer, the crossing is a
+    /// diagnostic rather than a deadlock.
+    ///
+    /// A LOOP BOUNDARY: every `for` body is OUTLINED into its own function --
+    /// `seq(...)` included, because one lowering serves both -- so a branch out
+    /// of it is a jump between functions, which is exactly the unwinding this
+    /// construct was chosen for not needing.
+    fn exit_expr(
+        &mut self,
+        name: Option<&str>,
+        value: Option<&Expr>,
+        span: Span,
+        expected: Option<Type>,
+    ) -> Checked<TypedExpr> {
+        let Some(index) = (match name {
+            Some(wanted) => self.labels.iter().rposition(|l| l.name == wanted),
+            None => self.labels.len().checked_sub(1),
+        }) else {
+            return Err(TypeError::UnknownLabel {
+                span,
+                name: name.unwrap_or("").to_owned(),
+            });
+        };
+        let (label, atomic_depth, loop_depth, declared) = {
+            let ctx = self.labels.get(index).ok_or(TypeError::UnknownLabel {
+                span,
+                name: name.unwrap_or("").to_owned(),
+            })?;
+            (ctx.name.clone(), ctx.atomic_depth, ctx.loop_depth, ctx.ty)
+        };
+        if self.atomic_depth > atomic_depth {
+            return Err(TypeError::ExitCrossesAtomic { span, name: label });
+        }
+        if self.loop_ctx.len() > loop_depth {
+            return Err(TypeError::ExitCrossesLoop { span, name: label });
+        }
+
+        let value = match value {
+            Some(e) => Some(Box::new(self.expr(e, declared)?)),
+            None => None,
+        };
+        let carried = value.as_ref().map_or(Type::Void, |v| v.ty);
+        if let Some(want) = declared {
+            if carried != want {
+                return Err(TypeError::ExitTypeMismatch {
+                    span,
+                    name: label,
+                    expected: want,
+                    found: carried,
+                });
+            }
+        } else if let Some(ctx) = self.labels.get_mut(index) {
+            ctx.ty = Some(carried);
+        }
+        Ok(TypedExpr {
+            kind: TypedExprKind::Exit { name: label, value },
+            // BOTTOM, spelled with the context instead of with a type. Control
+            // never comes back from an `exit`, so it fits wherever it is
+            // written: as the tail of a function body it is that function's
+            // return type, and in statement position -- inside `if c then exit
+            // L with i end`, which is the shape the corpus writes -- it is
+            // Void, so the `if` needs no `else`.
+            //
+            // A `Never` variant on `Type` would say this properly. It would
+            // also touch every exhaustive match in the workspace, which is
+            // SPIKE-COMPOSITE-TYPE's decision and not this one's. The cost of
+            // spelling it this way: `if c then exit L with 1 else 2 end` in a
+            // position with NO expected type refuses, because the `then` side
+            // takes Void from its context and the `else` side is then checked
+            // against it. Give the expression a type -- a declared return type,
+            // an annotated binding -- and it goes through.
+            ty: expected.unwrap_or(Type::Void),
             span,
         })
     }

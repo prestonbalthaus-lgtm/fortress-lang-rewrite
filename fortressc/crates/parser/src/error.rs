@@ -39,6 +39,13 @@ pub enum ParseError {
         first: &'static str,
         second: &'static str,
     },
+    /// `case most > of` and `case z IN of`. Both replace `=` as the comparison
+    /// the arms are matched with, and both need an operator table to look the
+    /// replacement up in.
+    CaseFormUnsupported {
+        span: Span,
+        form: &'static str,
+    },
 }
 
 impl ParseError {
@@ -50,7 +57,8 @@ impl ParseError {
             | Self::ReservedWord { span, .. }
             | Self::StaticParameterKindUnsupported { span, .. }
             | Self::LocalFunctionDeclarationUnsupported { span }
-            | Self::ChainedOperatorsDiffer { span, .. } => Some(*span),
+            | Self::ChainedOperatorsDiffer { span, .. }
+            | Self::CaseFormUnsupported { span, .. } => Some(*span),
             Self::UnexpectedEndOfInput { .. } => None,
         }
     }
@@ -105,6 +113,12 @@ impl core::fmt::Display for ParseError {
                 f,
                 "{}..{}: a chain mixes `{first}` with `{second}`; \
                  chained ordering operators must have the same sense",
+                span.start, span.end
+            ),
+            Self::CaseFormUnsupported { span, form } => write!(
+                f,
+                "{}..{}: {form} replaces the `=` a case arm is matched with, \
+                 and there is no operator table to look the replacement up in",
                 span.start, span.end
             ),
         }

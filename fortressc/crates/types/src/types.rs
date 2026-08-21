@@ -268,6 +268,11 @@ impl MpiOp {
 /// cannot disagree about it.
 pub const ASSERT_FAILED: &str = "fortress_assert_failed";
 
+/// The halt a `case` with no matching arm and no `else` reaches. 1.0 throws
+/// MatchFailure there; this subset has no exceptions, and falling through
+/// silently is the one option that is worse than either.
+pub const CASE_FAILED: &str = "fortress_case_failed";
+
 /// The parallel loop entry point and the environment allocator. The
 /// environment is SCANNED: a capture may be a String or an Array, and the
 /// collector has to see through the environment to it while a worker holds it.
@@ -338,6 +343,10 @@ pub enum Target {
     /// The halt a failed `assert` reaches. It takes the message and does not
     /// return, so nothing downstream needs a value from it.
     AssertFailed,
+    /// The halt a `case` falls out of the bottom into. No arguments: the
+    /// diagnostic is the same wherever it is reached from, and a span would
+    /// have to be lowered as a string constant per site.
+    CaseFailed,
     /// A function declared in this component. `name` is already the mangled
     /// symbol: an overload set of one keeps its bare name, so nothing about
     /// pre-M3c generated code changes.
@@ -381,6 +390,7 @@ impl Target {
             Self::Println { ty } => format!("println_{}", ty.symbol()),
             Self::Print { ty } => format!("print_{}", ty.symbol()),
             Self::AssertFailed => ASSERT_FAILED.to_owned(),
+            Self::CaseFailed => CASE_FAILED.to_owned(),
             Self::UserFn { name } => name.clone(),
             Self::Dispatch { symbol } | Self::ObjectNew { symbol } => symbol.clone(),
             Self::Mpi(op) => op.symbol().to_owned(),
@@ -565,6 +575,48 @@ pub enum TypedExprKind {
     Singleton {
         name: &'static str,
     },
+    /// `typecase`. The subject is evaluated once and switched on its TAG, which
+    /// is the same 32-bit load at offset 0 that M3c's dispatch tree does -- a
+    /// trait has no run-time representation, so an arm naming one is the set of
+    /// concrete tags below it, computed here and not at run time.
+    ///
+    /// Arms are matched FIRST ONE WINS: a tag claimed by an earlier arm is not
+    /// offered to a later one, so the switch has one entry per tag and needs no
+    /// ordering at run time.
+    TypeCase {
+        subject: Box<TypedExpr>,
+        arms: Vec<TypedTypeCaseArm>,
+        /// Always present. `comprises` is not enforced anywhere in this
+        /// compiler, so exhaustiveness cannot be proved from it.
+        else_branch: Box<TypedExpr>,
+    },
+    /// `label L ... end L`. One block, one phi over the exits and the
+    /// fallthrough. No unwinding: every edge is a forward jump inside one
+    /// function, which is why `exit` out of an outlined loop body is refused by
+    /// the checker instead.
+    Label {
+        name: String,
+        body: Box<TypedExpr>,
+    },
+    /// `exit L with e`. A branch to the label's merge block. It produces no
+    /// value of its own -- control does not come back -- so codegen hands the
+    /// enclosing expression a zero of the right type from a block nothing can
+    /// reach.
+    Exit {
+        name: String,
+        value: Option<Box<TypedExpr>>,
+    },
+}
+
+/// One arm of a [`TypedExprKind::TypeCase`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypedTypeCaseArm {
+    /// Every concrete tag this arm claims, in declaration order.
+    pub tags: Vec<u32>,
+    /// `x` of `x: T => e`, bound to the subject at the narrowed type.
+    pub binder: Option<String>,
+    pub ty: Type,
+    pub body: TypedExpr,
 }
 
 #[derive(Debug, Clone, PartialEq)]

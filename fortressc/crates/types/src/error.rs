@@ -295,6 +295,77 @@ pub enum TypeError {
         /// path that reaches mutable storage.
         path: String,
     },
+    // ------------------------------------------------ control flow extras
+    /// `case x of end`. Nothing to compare against and nothing to produce.
+    CaseHasNoArms {
+        span: Span,
+    },
+    /// A `case` whose value is used and whose arms may all miss. 1.0 throws
+    /// `MatchFailure` there; this subset has no exceptions, so the `else` arm
+    /// is what supplies the value instead.
+    CaseNeedsElse {
+        span: Span,
+    },
+    /// `typecase` on a scalar. A tag is a fact about an object block, and a
+    /// `ZZ32` does not have one.
+    TypeCaseSubjectNotReference {
+        span: Span,
+        found: Type,
+    },
+    /// An arm naming a type no value of the subject's type can have.
+    TypeCaseArmUnrelated {
+        span: Span,
+        subject: Type,
+        arm: Type,
+    },
+    /// An arm every one of whose tags an earlier arm already claimed. First
+    /// arm wins, so this one can never run -- and dead code the reader
+    /// believes in is worse than a refusal.
+    TypeCaseArmDead {
+        span: Span,
+        arm: Type,
+    },
+    /// Two labels of the same name, one inside the other: `exit` would name
+    /// the inner one and the outer one would be unreachable.
+    LabelAlreadyOpen {
+        span: Span,
+        name: String,
+    },
+    UnknownLabel {
+        span: Span,
+        name: String,
+    },
+    /// `exit L with 1` where an earlier exit carried something else.
+    ExitTypeMismatch {
+        span: Span,
+        name: String,
+        expected: Type,
+        found: Type,
+    },
+    /// A label whose exits carry a value and whose body can also run off the
+    /// bottom. There is no value on that edge, and inventing a zero for it is
+    /// the silent-wrong-answer class this compiler refuses to join.
+    LabelFallsThrough {
+        span: Span,
+        name: String,
+        expected: Type,
+        found: Type,
+    },
+    /// An `exit` out of an `atomic` region. The branch would skip
+    /// `fortress_atomic_leave` and leave one process-wide recursive mutex held
+    /// for the rest of the process -- `atomic.tex:59-70`'s rollback rule, whose
+    /// writes-retained arm this construct re-opens.
+    ExitCrossesAtomic {
+        span: Span,
+        name: String,
+    },
+    /// An `exit` out of a `for` body. Every loop body is OUTLINED into its own
+    /// function, `seq(...)` included, so this is a jump between functions --
+    /// which is the unwinding `label` was chosen for not needing.
+    ExitCrossesLoop {
+        span: Span,
+        name: String,
+    },
     /// `x op= e` for an operator with no identity the compiler knows. `||=`,
     /// `UNIONCAT=` and the rest need `Monoid[\\T,op\\]` and a user-declared
     /// identity element.
@@ -408,6 +479,17 @@ impl TypeError {
             | Self::ParallelEscape { span, .. }
             | Self::ParallelIndexNotBinder { span, .. }
             | Self::ParallelSharedArrayArgument { span, .. }
+            | Self::CaseHasNoArms { span }
+            | Self::CaseNeedsElse { span }
+            | Self::TypeCaseSubjectNotReference { span, .. }
+            | Self::TypeCaseArmUnrelated { span, .. }
+            | Self::TypeCaseArmDead { span, .. }
+            | Self::LabelAlreadyOpen { span, .. }
+            | Self::UnknownLabel { span, .. }
+            | Self::ExitTypeMismatch { span, .. }
+            | Self::LabelFallsThrough { span, .. }
+            | Self::ExitCrossesAtomic { span, .. }
+            | Self::ExitCrossesLoop { span, .. }
             | Self::ParallelFieldEscape { span, .. }
             | Self::ParallelSharedObjectArgument { span, .. }
             | Self::CompoundOperatorUnsupported { span, .. }
@@ -672,6 +754,79 @@ impl core::fmt::Display for TypeError {
                  to a call puts any assignment to it out of reach of the \
                  loop's own rules, which are lexical. Wrap the call in \
                  `atomic`, or write `for ... <- seq(...)`"
+            ),
+            Self::CaseHasNoArms { .. } => write!(
+                f,
+                "a `case` needs at least one arm; write `guard => expression`"
+            ),
+            Self::CaseNeedsElse { .. } => write!(
+                f,
+                "this `case` produces a value, so it needs an `else => ...` arm: \
+                 there is nothing to return when no guard matches"
+            ),
+            Self::TypeCaseSubjectNotReference { found, .. } => write!(
+                f,
+                "`typecase` asks what concrete type a value has, and `{}` \
+                 carries no type tag; only an object or a trait does",
+                found.name()
+            ),
+            Self::TypeCaseArmUnrelated { subject, arm, .. } => write!(
+                f,
+                "no `{}` can be a `{}`, so this arm can never run",
+                subject.name(),
+                arm.name()
+            ),
+            Self::TypeCaseArmDead { arm, .. } => write!(
+                f,
+                "an earlier arm already claims every concrete type under `{}`; \
+                 arms are matched in order and this one can never run",
+                arm.name()
+            ),
+            Self::LabelAlreadyOpen { name, .. } => write!(
+                f,
+                "`{name}` is already an open label here, and `exit {name}` \
+                 would name the inner one"
+            ),
+            Self::UnknownLabel { name, .. } => {
+                write!(f, "`{name}` is not an open label at this point")
+            }
+            Self::ExitTypeMismatch {
+                name,
+                expected,
+                found,
+                ..
+            } => write!(
+                f,
+                "`exit {name}` carries {}, but an earlier exit from `{name}` \
+                 carried {}",
+                found.name(),
+                expected.name()
+            ),
+            Self::LabelFallsThrough {
+                name,
+                expected,
+                found,
+                ..
+            } => write!(
+                f,
+                "`{name}` exits with {}, so its body may not also run off the \
+                 bottom with {}: end the body with an `exit {name} with ...` \
+                 or with a value of the same type",
+                expected.name(),
+                found.name()
+            ),
+            Self::ExitCrossesAtomic { name, .. } => write!(
+                f,
+                "`exit {name}` leaves an `atomic` region, and the branch would \
+                 skip the unlock: one process-wide recursive mutex would stay \
+                 held. Move the `exit` outside the `atomic`"
+            ),
+            Self::ExitCrossesLoop { name, .. } => write!(
+                f,
+                "`exit {name}` leaves a `for` body, and every loop body is a \
+                 function of its own -- `seq(...)` included -- so this is a \
+                 jump between functions. Use a `while` loop, or put the label \
+                 inside the body"
             ),
             Self::CompoundOperatorUnsupported { op, .. } => write!(
                 f,

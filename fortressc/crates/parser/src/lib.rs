@@ -15,9 +15,9 @@ mod error;
 pub use error::ParseError;
 
 use fortress_ast::{
-    Assign, BinOp, Binding, BlockItem, Component, Decl, Expr, FieldDecl, Fixity, FnDecl,
+    Assign, BinOp, Binding, BlockItem, CaseArm, Component, Decl, Expr, FieldDecl, Fixity, FnDecl,
     ImportDecl, Member, MethodDecl, Modifiers, ObjectDecl, Param, Span, StaticParam, TraitDecl,
-    TypeRef, UnOp,
+    TypeCaseArm, TypeRef, UnOp,
 };
 use fortress_lexer::{Kind, Token};
 
@@ -1213,6 +1213,13 @@ impl<'t, 'a> Parser<'t, 'a> {
         matches!(self.peek_kind(), Some(Kind::Ident(name)) if *name == word)
     }
 
+    /// One of the 66 words the lexer keeps out of the identifier namespace,
+    /// matched by spelling. `of` and `with` are punctuation of a construct
+    /// rather than expressions, so they never earn a token of their own.
+    fn at_reserved(&self, word: &str) -> bool {
+        matches!(self.peek_kind(), Some(Kind::Reserved(found)) if *found == word)
+    }
+
     /// An infix word operator, which the juxtaposition run must stop at. `NOT`
     /// is deliberately not one: it is prefix, it DOES start an operand, and
     /// `unary` consumes it there.
@@ -1733,6 +1740,14 @@ impl<'t, 'a> Parser<'t, 'a> {
             // identifier namespace, so it is intercepted here rather than
             // given a keyword token -- again, no lexer change.
             Kind::Reserved("atomic") => self.atomic_expr(),
+            // The same trade `for` and `atomic` take: intercepted here rather
+            // than given a keyword token, so no file in the corpus lexes
+            // differently. `of`, `with`, `most`, `largest` and `smallest` stay
+            // Reserved and are matched by word below.
+            Kind::Reserved("case") => self.case_expr(),
+            Kind::Reserved("typecase") => self.typecase_expr(),
+            Kind::Reserved("label") => self.label_expr(),
+            Kind::Reserved("exit") => self.exit_expr(),
             Kind::Reserved(word) => Err(ParseError::ReservedWord {
                 span,
                 word: (*word).to_owned(),
@@ -1950,6 +1965,205 @@ impl<'t, 'a> Parser<'t, 'a> {
             value,
             span,
         }))
+    }
+
+    /// The body of one arm. ONE block element, not a block: arms are separated
+    /// by newlines and the next arm starts with an ordinary expression, so a
+    /// run terminated by `end` would swallow every following arm. An assignment
+    /// is not an expression, which is why this is `block_item` and not `expr` --
+    /// `LessThan => t := tt.left` is what the corpus writes. Several statements
+    /// need `do ... end`, which this reaches through `block_item` anyway.
+    fn arm_body(&mut self) -> Parsed<Expr> {
+        let start = self.span_here();
+        let item = self.block_item()?;
+        let end = self.previous_span();
+        Ok(match item {
+            BlockItem::Expr(e) => e,
+            other => Expr::Block {
+                items: vec![other],
+                span: Span::new(start.start, end.end),
+            },
+        })
+    }
+
+    /// `case subject of guard => e ... else => e end`.
+    ///
+    /// TWO FORMS ARE REFUSED BY NAME rather than mis-parsed. `case most > of`
+    /// is the extremum form and `case z IN of` puts an operator between the
+    /// subject and `of`; both replace the `=` the arms are matched with. The
+    /// extremum word is checked before the subject is parsed, because `most`
+    /// would otherwise be read as a name.
+    fn case_expr(&mut self) -> Parsed<Expr> {
+        let start = self.span_here();
+        self.pos += 1; // `case`
+        self.skip_newlines();
+        if let Some(Kind::Reserved(word @ ("most" | "largest" | "smallest"))) = self.peek_kind() {
+            let form = match *word {
+                "most" => "the extremum form `case most`",
+                "largest" => "the extremum form `case largest`",
+                _ => "the extremum form `case smallest`",
+            };
+            return Err(ParseError::CaseFormUnsupported {
+                span: self.span_here(),
+                form,
+            });
+        }
+        let subject = self.expr()?;
+        self.skip_newlines();
+        if !self.at_reserved("of") {
+            return Err(ParseError::CaseFormUnsupported {
+                span: self.span_here(),
+                form: "an operator between the subject and `of`",
+            });
+        }
+        self.pos += 1;
+
+        let mut arms = Vec::new();
+        let mut else_arm = None;
+        self.skip_newlines();
+        while !self.at(&Kind::KwEnd) && !self.at_eof() {
+            if self.at(&Kind::KwElse) {
+                self.pos += 1;
+                self.expect(&Kind::FatArrow, "`=>`")?;
+                self.skip_newlines();
+                else_arm = Some(Box::new(self.block_body(&[Kind::KwEnd])?));
+                break;
+            }
+            let arm_start = self.span_here();
+            let guard = self.expr()?;
+            self.expect(&Kind::FatArrow, "`=>`")?;
+            self.skip_newlines();
+            let body = self.arm_body()?;
+            let end = self.previous_span();
+            arms.push(CaseArm {
+                guard,
+                body,
+                span: Span::new(arm_start.start, end.end),
+            });
+            self.skip_newlines();
+        }
+        let end = self.expect(&Kind::KwEnd, "`end`")?.span;
+        Ok(Expr::Case {
+            subject: Box::new(subject),
+            arms,
+            else_arm,
+            span: Span::new(start.start, end.end),
+        })
+    }
+
+    /// `typecase subject of T => e ... else => e end`, with `x: T => e` for the
+    /// binder form. The two are told apart by the `:` after an identifier,
+    /// which is the only thing that can follow a binder.
+    fn typecase_expr(&mut self) -> Parsed<Expr> {
+        let start = self.span_here();
+        self.pos += 1; // `typecase`
+        self.skip_newlines();
+        let subject = self.expr()?;
+        self.skip_newlines();
+        if !self.at_reserved("of") {
+            return Err(self.error("`of` after the typecase subject"));
+        }
+        self.pos += 1;
+
+        let mut arms = Vec::new();
+        let mut else_arm = None;
+        self.skip_newlines();
+        while !self.at(&Kind::KwEnd) && !self.at_eof() {
+            if self.at(&Kind::KwElse) {
+                self.pos += 1;
+                self.expect(&Kind::FatArrow, "`=>`")?;
+                self.skip_newlines();
+                else_arm = Some(Box::new(self.block_body(&[Kind::KwEnd])?));
+                break;
+            }
+            let arm_start = self.span_here();
+            let binder = if matches!(self.peek_kind(), Some(Kind::Ident(_)))
+                && matches!(self.peek_ahead(1), Some(Kind::Colon))
+            {
+                let (name, _) = self.identifier("a typecase binder")?;
+                self.pos += 1; // `:`
+                self.skip_newlines();
+                Some(name)
+            } else {
+                None
+            };
+            let ty = self.type_ref()?;
+            self.expect(&Kind::FatArrow, "`=>`")?;
+            self.skip_newlines();
+            let body = self.arm_body()?;
+            let end = self.previous_span();
+            arms.push(TypeCaseArm {
+                binder,
+                ty,
+                body,
+                span: Span::new(arm_start.start, end.end),
+            });
+            self.skip_newlines();
+        }
+        let end = self.expect(&Kind::KwEnd, "`end`")?.span;
+        let Some(else_arm) = else_arm else {
+            return Err(ParseError::UnexpectedToken {
+                span: Span::new(start.start, end.end),
+                expected: "an `else` arm; a typecase needs one because `comprises` \
+                           is not enforced and cannot prove the arms exhaustive",
+                found: "a typecase without one".to_owned(),
+            });
+        };
+        Ok(Expr::TypeCase {
+            subject: Box::new(subject),
+            arms,
+            else_arm,
+            span: Span::new(start.start, end.end),
+        })
+    }
+
+    /// `label L ... end L`. The trailing name is what the corpus writes and it
+    /// has to agree with the opening one, or the reader is looking at a
+    /// different block from the one the compiler is.
+    fn label_expr(&mut self) -> Parsed<Expr> {
+        let start = self.span_here();
+        self.pos += 1; // `label`
+        let (name, _) = self.identifier("a label name")?;
+        let body = self.block_body(&[Kind::KwEnd])?;
+        let end = self.expect(&Kind::KwEnd, "`end`")?.span;
+        let end = match self.peek_kind() {
+            Some(Kind::Ident(trailing)) if *trailing == name => {
+                let span = self.span_here();
+                self.pos += 1;
+                span
+            }
+            Some(Kind::Ident(_)) => return Err(self.error("the same label name after `end`")),
+            _ => end,
+        };
+        Ok(Expr::Label {
+            name,
+            body: Box::new(body),
+            span: Span::new(start.start, end.end),
+        })
+    }
+
+    /// `exit L with e`, `exit L`, and a bare `exit`, which names the innermost
+    /// enclosing label.
+    fn exit_expr(&mut self) -> Parsed<Expr> {
+        let start = self.span_here();
+        self.pos += 1; // `exit`
+        let name = match self.peek_kind() {
+            Some(Kind::Ident(_)) => Some(self.identifier("a label name")?.0),
+            _ => None,
+        };
+        let value = if self.at_reserved("with") {
+            self.pos += 1;
+            self.skip_newlines();
+            Some(Box::new(self.expr()?))
+        } else {
+            None
+        };
+        let end = self.previous_span();
+        Ok(Expr::Exit {
+            name,
+            value,
+            span: Span::new(start.start, end.end),
+        })
     }
 
     /// `atomic <expr>`, for the operand positions `block_item` never reaches.

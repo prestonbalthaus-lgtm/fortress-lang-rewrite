@@ -1344,7 +1344,7 @@ fn a_pointer_stored_into_a_mutable_field_survives_a_collection() {
     let out = run(&binary);
     assert_eq!(
         String::from_utf8_lossy(&out.stdout),
-        "kept-across-collection\n"
+        "kept-across-collection-7\n"
     );
     assert_eq!(out.status.code(), Some(0));
     let _ = std::fs::remove_file(&binary);
@@ -1418,5 +1418,112 @@ fn an_atomic_field_write_counts_exactly_at_every_worker_count() {
         );
         assert_eq!(out.status.code(), Some(0));
     }
+    let _ = std::fs::remove_file(&binary);
+}
+
+// -------------------------------------------------- control flow extras
+
+/// SPIKE-CONTROL-FLOW-EXTRAS, all three in one program.
+///
+/// `case` desugars to an if/elif chain over `subject = guard`, so every rule
+/// about which types `=` is defined on is the rule `infix` already enforces.
+/// `typecase` is a switch on the 32-bit tag at offset 0 -- the same load
+/// `dispatch_node` does, because a trait has no run-time representation and an
+/// arm naming one is the set of concrete tags below it. `label`/`exit` is one
+/// merge block with a phi over its incoming edges: a forward jump inside one
+/// function, which is why none of this needs unwinding.
+///
+/// The `area` lines are the tag arithmetic: 2*2*3 = 12 for a Circle, 5*5 = 25
+/// for a Square, and 0 from the `else` for the Dot no arm claims.
+#[test]
+fn case_typecase_and_label_all_produce_the_right_values() {
+    let binary = compile_fixture("controlflow.fss", "controlflow");
+    let out = run(&binary);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "circle 3\nsquare 4\nsomething else\n12\n25\n0\none\ntwo\nmany\n11\n-1\n100\n-1\n"
+    );
+    assert_eq!(out.status.code(), Some(0));
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// The subject of a `case` is evaluated ONCE. Inlining it into every guard runs
+/// its side effects once per arm, which is the defect M3f's chained comparison
+/// already paid for -- three arms here, and exactly one `evaluated`.
+#[test]
+fn a_case_subject_is_evaluated_once_however_many_arms_it_has() {
+    let binary = compile_fixture("caseonce.fss", "caseonce");
+    let out = run(&binary);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "evaluated\nmany\n1\n");
+    assert_eq!(out.status.code(), Some(0));
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// THE ATOMIC-ROLLBACK OBLIGATION, and it is the deliverable rather than the
+/// garnish. `atomic.tex:59-70` has two arms and this construct re-opens the
+/// writes-RETAINED one. Until there is an answer, an `exit` crossing the
+/// boundary is a diagnostic: the branch would skip `fortress_atomic_leave` and
+/// leave one process-wide recursive mutex held for the rest of the process.
+#[test]
+fn an_exit_out_of_an_atomic_region_is_refused_by_name() {
+    let message = refusal("badexitatomic.fss");
+    assert!(message.contains("leaves an `atomic` region"), "{message}");
+    assert!(message.contains("skip the unlock"), "{message}");
+}
+
+/// Every `for` body is OUTLINED into its own function -- `seq(...)` included,
+/// because one lowering serves both -- so an `exit` out of one is a jump
+/// between functions. That is exactly the unwinding this construct was chosen
+/// for not needing, so it is refused instead of lowered.
+#[test]
+fn an_exit_out_of_a_loop_body_is_refused_by_name() {
+    let message = refusal("badexitloop.fss");
+    assert!(message.contains("leaves a `for` body"), "{message}");
+}
+
+/// Arms are matched in order, so a trait arm above an object arm claims every
+/// tag the object has. The later arm can never run.
+#[test]
+fn a_typecase_arm_an_earlier_arm_already_claims_is_refused() {
+    let message = refusal("badtypecasedead.fss");
+    assert!(message.contains("can never run"), "{message}");
+}
+
+/// A label whose exits carry a value and whose body can also run off the bottom
+/// has no value on that edge. Inventing a zero for it would be the silent
+/// wrong answer this compiler refuses to produce.
+#[test]
+fn a_label_that_exits_with_a_value_may_not_also_fall_through() {
+    let message = refusal("badlabelfall.fss");
+    assert!(message.contains("run off the bottom"), "{message}");
+}
+
+/// 1.0 throws `MatchFailure` when no arm matches; this subset has no
+/// exceptions, so the `else` arm is what supplies the value instead. In
+/// statement position a `case` needs none, which is why the rule is about the
+/// value being used rather than about the arms.
+#[test]
+fn a_case_whose_value_is_used_needs_an_else_arm() {
+    let message = refusal("badcaseelse.fss");
+    assert!(message.contains("needs an `else => ...` arm"), "{message}");
+}
+
+/// The `case` fallthrough. 1.0 throws MatchFailure when no arm matches; this
+/// subset has no exceptions, so a `case` used for its effect HALTS with a
+/// diagnostic and exit 1 -- the answer `assert` and the dispatch tree already
+/// give. Doing nothing instead would have been the silent-wrong-behaviour class
+/// this compiler refuses to join, and it is what made
+/// `ProjectFortress/tests/XXXcaseTest.fss` -- a must-FAIL test -- run to exit 0.
+#[test]
+fn a_case_that_matches_nothing_halts_rather_than_falling_through() {
+    let binary = compile_fixture("caseunmatched.fss", "caseunmatched");
+    let out = run(&binary);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "before\n");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("no case arm matched"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.status.code(), Some(1));
     let _ = std::fs::remove_file(&binary);
 }
