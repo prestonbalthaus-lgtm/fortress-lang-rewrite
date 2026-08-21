@@ -367,7 +367,13 @@ end
 *)
 simplestRationalBetween(a:QQ, b:QQ): QQ
 
-trait QQ extends { RR64, StandardPartialOrder[\QQ\] } comprises { ... }
+(* v1 SOURCE CORRECTION: the open `comprises { ... }` is removed. traits.tex:236-241
+   forbids an api declaring a trait that EXTENDS one of its own open-comprises traits,
+   and `trait AnyIntegral extends { QQ }` at :406 in this same file does exactly that.
+   Removing the clause RETRACTS a claim rather than asserting a closed set: an
+   unwritten comprises says nothing about the subtypes, an open one says "not all of
+   them are listed" AND carries the rule being broken. *)
+trait QQ extends { RR64, StandardPartialOrder[\QQ\] }
     getter isNaN(): Boolean
     getter isInfinite(): Boolean
     getter isNumber(): Boolean

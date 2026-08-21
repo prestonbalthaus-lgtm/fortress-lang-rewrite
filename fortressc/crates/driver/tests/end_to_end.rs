@@ -2181,8 +2181,14 @@ fn a_postfix_operator_declaration_parses() {
 
 /// AND THE ROOT ITSELF, by path. This is the one assertion that says the
 /// milestone happened: the file the whole bootstrap depends on is READ.
-/// It does not CHECK -- the shipped library extends its own open-`comprises`
-/// trait -- and `resolve()` needs an api to parse, not to check.
+/// It does not CHECK, and the wall has MOVED TWICE, which is why this asserts
+/// the parse and names the current wall rather than pinning a line number:
+///   :406  the library's own open-`comprises` defect  -- patched in source
+///   :758  `__cond[\E,R\]` vs `__cond[\E\]`, a GENUINE 1.0 uniformity
+///         violation, the same class `Library/QuickSort.fsi` is refused for and
+///         which DEV-6 records as enforced and permanent
+/// `resolve()` needs an api to PARSE, not to check, so the phase-3 value does
+/// not depend on either.
 #[test]
 fn the_bootstrap_root_parses_in_full() {
     let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
@@ -2198,8 +2204,8 @@ fn the_bootstrap_root_parses_in_full() {
         "FortressLibrary.fsi must not fail to PARSE: {message}"
     );
     assert!(
-        message.contains("`comprises` clause is open"),
-        "the remaining blocker should be the library's own comprises defect: {message}"
+        message.contains("differ in their static parameters"),
+        "the remaining blocker should be the library's own uniformity violation: {message}"
     );
 }
 

@@ -18,7 +18,9 @@ end
 
 trait IntMap[\Val\]
     extends { Generator[\(ZZ64, Val)\], Equality[\IntMap[\Val\]\] }
-    comprises { ... }
+    (* v1 SOURCE CORRECTION: open `comprises` removed, same rule and same reason as
+       Library/FortressLibrary.fsi -- `trait NonEmptyIntMap extends IntMap` at :63 in
+       this same file is the declaration traits.tex:236-241 forbids. *)
     abstract getter isEmpty(): Boolean
     abstract getter asDebugString(): String
     abstract getter asString(): String
