@@ -896,9 +896,7 @@ impl Checker {
 
     fn run(mut self, component: &Component) -> Checked<TypedComponent> {
         if component.is_api {
-            return Err(TypeError::ApiNotExecutable {
-                span: component.span,
-            });
+            return self.check_api(component);
         }
         for decl in &component.decls {
             let Decl::Function(f) = decl else { continue };
@@ -991,6 +989,73 @@ impl Checker {
             functions,
             dispatches: self.dispatches.into_values().collect(),
             uses_mpi: self.uses_mpi,
+            is_api: false,
+        })
+    }
+
+    /// SIGNATURES ONLY -- `SPIKE-API-CHECK-MODE`.
+    ///
+    /// This replaced an unconditional refusal that was the FIRST STATEMENT of
+    /// `run`, before `discharge_bounds` and before any body: a stub sitting
+    /// exactly where phase 3 goes. `source-code.tex:313-320` makes an api a set
+    /// of top-level declarations without bodies, so "there is nothing to
+    /// compile" was true about CODEGEN and wrong about CHECKING. Everything an
+    /// api can get wrong is in its headers.
+    ///
+    /// MOST OF THE WORK IS ALREADY DONE BY THE TIME THIS RUNS, and that is the
+    /// point rather than a shortcut. `Checker::new` builds the registry, which
+    /// resolves every `extends`, `comprises` and `excludes` name, closes the
+    /// trait graph, and computes a `Signature` -- parameter types and return
+    /// type, RESOLVED -- for every declaration and every member. That is why an
+    /// api has always been able to fail with `unknown type` before reaching
+    /// here. What was missing after it is the bound discharge and the
+    /// no-bodies rule.
+    ///
+    /// It does NOT check bodies, resolve inferred returns, build dispatch
+    /// tables or emit anything: an api has no bodies to check, no returns to
+    /// infer from them, and no code.
+    fn check_api(mut self, component: &Component) -> Checked<TypedComponent> {
+        self.discharge_bounds(component)?;
+
+        // `source-code.tex:313-320`: an api holds declarations, and a
+        // declaration with a body is a definition. The old diagnostic said this
+        // about the whole file; it belongs on the one declaration that broke it.
+        for decl in &component.decls {
+            let Decl::Function(f) = decl else { continue };
+            if f.body.is_some() {
+                return Err(TypeError::ApiDeclarationHasBody {
+                    span: f.span,
+                    name: f.name.clone(),
+                });
+            }
+        }
+        for decl in &component.decls {
+            let (owner, members) = match decl {
+                Decl::Trait(t) => (&t.name, &t.members),
+                Decl::Object(o) => (&o.name, &o.members),
+                Decl::Function(_) => continue,
+            };
+            for member in members {
+                let Member::Method(m) = member else { continue };
+                // An ABSTRACT method in an api is ordinary; a method with a
+                // body is a definition wherever it is written.
+                if m.body.is_some() {
+                    return Err(TypeError::ApiDeclarationHasBody {
+                        span: m.span,
+                        name: format!("{owner}.{}", m.name),
+                    });
+                }
+            }
+        }
+
+        Ok(TypedComponent {
+            name: component.name.clone(),
+            exports: component.exports.clone(),
+            objects: Vec::new(),
+            functions: Vec::new(),
+            dispatches: Vec::new(),
+            uses_mpi: false,
+            is_api: true,
         })
     }
 

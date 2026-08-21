@@ -192,8 +192,16 @@ pub enum TypeError {
     // ------------------------------------------------------------------ M3c
     /// An `api` parses, so the corpus metric can move, but there is nothing to
     /// emit for a file of signatures.
-    ApiNotExecutable {
+    /// An `api` declaration that carries a body. `source-code.tex:313-320`
+    /// makes an api a set of DECLARATIONS; a declaration with a body is a
+    /// definition, and definitions live in the component.
+    ///
+    /// This replaces `ApiNotExecutable`, which said the same thing about the
+    /// whole FILE and said it before anything was checked. An api is checkable;
+    /// what it is not is emittable.
+    ApiDeclarationHasBody {
         span: Span,
+        name: String,
     },
     MissingBody {
         span: Span,
@@ -538,7 +546,7 @@ impl TypeError {
             | Self::FieldAssignmentUnsupported { span, .. }
             | Self::KeywordArgumentUnsupported { span, .. }
             | Self::NotWidenable { span, .. }
-            | Self::ApiNotExecutable { span }
+            | Self::ApiDeclarationHasBody { span, .. }
             | Self::MissingBody { span, .. }
             | Self::TraitCycle { span, .. }
             | Self::NotATrait { span, .. }
@@ -745,9 +753,10 @@ impl core::fmt::Display for TypeError {
                 "`widen` widens ZZ32 to ZZ64 or RR64 and ZZ64 to RR64; {} is not widened",
                 found.name()
             ),
-            Self::ApiNotExecutable { .. } => write!(
+            Self::ApiDeclarationHasBody { name, .. } => write!(
                 f,
-                "an `api` is a set of signatures with no bodies; there is nothing to compile"
+                "`{name}` has a body, and an `api` is a set of declarations; \
+                 the definition belongs in the component"
             ),
             Self::MissingBody { name, .. } => {
                 write!(f, "`{name}` has no body; write `{name}(...) = ...`")

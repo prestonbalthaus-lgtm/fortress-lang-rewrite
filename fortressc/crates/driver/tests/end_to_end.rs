@@ -2049,9 +2049,10 @@ fn a_type_declared_in_an_imported_api_is_in_scope() {
 fn the_source_path_order_decides_which_of_a_duplicated_api_is_meant() {
     let out = resolve_output("ProjectFortress/LibraryBuiltin/System.fsi");
     let message = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        message.contains("an `api` is a set of signatures"),
-        "the LibraryBuiltin api reaches the terminus:\n{message}"
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "the LibraryBuiltin api checks clean:\n{message}"
     );
     // `Library/System.fsi` names `ImmutableArray`, which nothing declares.
     let other = resolve_output("Library/System.fsi");

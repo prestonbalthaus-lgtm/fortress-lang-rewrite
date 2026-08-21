@@ -254,12 +254,22 @@ fn compile(options: &Options) -> Result<(), Failure> {
         ))
     })?;
 
-    eprintln!(
-        "fortressc: lexed {} tokens, parsed and typechecked `{}` with {} function(s)",
-        tokens.len(),
-        typed.name,
-        typed.functions.len()
-    );
+    if typed.is_api {
+        eprintln!(
+            "fortressc: lexed {} tokens, checked the api `{}`: {} declaration(s), \
+             headers resolved and bounds discharged",
+            tokens.len(),
+            typed.name,
+            component.decls.len()
+        );
+    } else {
+        eprintln!(
+            "fortressc: lexed {} tokens, parsed and typechecked `{}` with {} function(s)",
+            tokens.len(),
+            typed.name,
+            typed.functions.len()
+        );
+    }
     if let Some(r) = resolved.as_ref() {
         eprintln!(
             "fortressc: resolved {} api(s){}{}",
@@ -275,6 +285,13 @@ fn compile(options: &Options) -> Result<(), Failure> {
                 format!("; found but unreadable: {}", r.unreadable.join(", "))
             }
         );
+    }
+
+    // AN API IS CHECKED AND NOT EMITTED. Signatures have no code, so there is
+    // no object, no IR and no link -- and exit 0 is the right answer, because
+    // nothing about the file was wrong.
+    if typed.is_api {
+        return Ok(());
     }
 
     if options.emit_ir {
