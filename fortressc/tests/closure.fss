@@ -1,0 +1,43 @@
+component closure
+
+export Executable
+
+(* SPIKE-CLOSURE-REPRESENTATION, branch (b). A named function in a slot that
+   wants an arrow becomes a generated object with an `apply` method, and the
+   call on it is a dotted method call -- so it enters M3c's whole-program
+   dispatch rather than needing a representation of its own.
+
+   TWO IMPLEMENTORS OF THE SAME ARROW ON PURPOSE. One collapses to a direct
+   call and memoises no table at all, which would answer nothing: the spike's
+   question is whether the dispatch REGISTRY survives a tag per closure site,
+   and only a real switch answers it. `closureone.fss` is the one-implementor
+   half. *)
+
+inc(x: ZZ32): ZZ32 = x + 1
+dbl(x: ZZ32): ZZ32 = x 2
+shout(s: String): String = s "!"
+
+twice(f: ZZ32 -> ZZ32, x: ZZ32): ZZ32 = f(f(x))
+
+(* An arrow-typed parameter handed straight on. After the type rewrite it is an
+   ordinary trait value, so this needs no rewriting of its own. *)
+thrice(f: ZZ32 -> ZZ32, x: ZZ32): ZZ32 = f(twice(f, x))
+
+(* An arrow as a RETURN type, so the value outlives the call that made it. *)
+id0(f: ZZ32 -> ZZ32): ZZ32 -> ZZ32 = f
+pick(n: ZZ32): ZZ32 -> ZZ32 = if n = 0 then id0(inc) else id0(dbl) end
+
+(* A second arrow type in the same program: a distinct trait, a distinct tag. *)
+apply2(f: String -> String, s: String): String = f(s)
+
+run(): () = do
+    println(twice(inc, 5))
+    println(twice(dbl, 5))
+    println(thrice(inc, 5))
+    println(pick(0)(7))
+    println(pick(1)(7))
+    g: ZZ32 -> ZZ32 = id0(dbl)
+    println(g(9))
+    println(apply2(shout, "hi"))
+end
+end

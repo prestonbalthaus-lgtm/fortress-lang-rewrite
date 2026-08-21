@@ -1181,10 +1181,32 @@ fn a_tuple_type_is_refused_with_a_diagnostic() {
 }
 
 #[test]
-fn an_arrow_type_is_refused_with_a_diagnostic() {
-    match type_error("component t\nf(): ZZ32 -> String = 1\nend\n") {
-        TypeError::TypeNotImplemented { form, .. } => assert_eq!(form, "an arrow type"),
-        other => panic!("expected TypeNotImplemented, got {other:?}"),
+fn an_arrow_over_liftable_types_becomes_a_trait_and_the_rest_stay_refused() {
+    // SPIKE-CLOSURE-REPRESENTATION lifts an arrow whose sides are types this
+    // subset can store: `ZZ32 -> String` is a trait now, so a literal in that
+    // slot is an ordinary type error rather than "an arrow type".
+    let e = body_error("f(): ZZ32 -> String = 1");
+    assert!(
+        matches!(
+            e,
+            TypeError::Mismatch { .. } | TypeError::LiteralNotApplicable { .. }
+        ),
+        "got {e}"
+    );
+
+    // The three that are NOT liftable keep the diagnostic they had, because
+    // `apply` would need a parameter this subset cannot store -- or, for an
+    // undeclared name, because an abstract member's parameter types are
+    // resolved by nothing and it would compile in silence.
+    for source in [
+        "f(g: (ZZ32, ZZ32) -> ZZ32): ZZ32 = 1",
+        "f(g: () -> ZZ32): ZZ32 = 1",
+        "f(g: Foo -> ZZ32): ZZ32 = 1",
+    ] {
+        match body_error(source) {
+            TypeError::TypeNotImplemented { form, .. } => assert_eq!(form, "an arrow type"),
+            other => panic!("expected TypeNotImplemented for `{source}`, got {other:?}"),
+        }
     }
 }
 

@@ -1,0 +1,14 @@
+component closureone
+
+export Executable
+
+(* The other half of the branch answer. With ONE implementor of the arrow the
+   dispatch table collapses to a direct call and no switch is emitted at all --
+   the row collapse M3c already does. A spike measured only on this shape would
+   report success without ever building the thing under test. *)
+inc(x: ZZ32): ZZ32 = x + 1
+
+twice(f: ZZ32 -> ZZ32, x: ZZ32): ZZ32 = f(f(x))
+
+run(): () = println(twice(inc, 5))
+end

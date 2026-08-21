@@ -295,6 +295,15 @@ pub enum TypeError {
         /// path that reaches mutable storage.
         path: String,
     },
+    /// A function name in a slot that wants an arrow, where the overload set
+    /// has no declaration with that exact signature, or more than one.
+    FunctionValueUnresolved {
+        span: Span,
+        name: String,
+        arrow: String,
+        found: usize,
+    },
+
     // ------------------------------------------------ control flow extras
     /// `case x of end`. Nothing to compare against and nothing to produce.
     CaseHasNoArms {
@@ -479,6 +488,7 @@ impl TypeError {
             | Self::ParallelEscape { span, .. }
             | Self::ParallelIndexNotBinder { span, .. }
             | Self::ParallelSharedArrayArgument { span, .. }
+            | Self::FunctionValueUnresolved { span, .. }
             | Self::CaseHasNoArms { span }
             | Self::CaseNeedsElse { span }
             | Self::TypeCaseSubjectNotReference { span, .. }
@@ -754,6 +764,14 @@ impl core::fmt::Display for TypeError {
                  to a call puts any assignment to it out of reach of the \
                  loop's own rules, which are lexical. Wrap the call in \
                  `atomic`, or write `for ... <- seq(...)`"
+            ),
+            Self::FunctionValueUnresolved {
+                name, arrow, found, ..
+            } => write!(
+                f,
+                "`{name}` is used as a value of type `{arrow}`, and {} \
+                 declaration of `{name}` has that signature",
+                if *found == 0 { "no" } else { "more than one" }
             ),
             Self::CaseHasNoArms { .. } => write!(
                 f,

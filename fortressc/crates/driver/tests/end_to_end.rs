@@ -54,6 +54,18 @@ fn refusal(name: &str) -> String {
     message
 }
 
+/// The IR the compiler emits for a fixture, as text. `--emit-ir` writes to
+/// stdout and never links.
+fn emitted_ir(name: &str) -> String {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture(name))
+        .arg("--emit-ir")
+        .output()
+        .expect("could not run fortressc");
+    assert!(out.status.success(), "fortressc --emit-ir failed");
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
 fn run(binary: &PathBuf) -> Output {
     Command::new(binary)
         .output()
@@ -1550,6 +1562,70 @@ fn a_shared_object_may_not_be_a_method_argument_in_a_parallel_body() {
     let message = refusal("badsharedmethodarg.fss");
     assert!(
         message.contains("reaches mutable storage through `b.n`"),
+        "{message}"
+    );
+}
+
+// ------------------------------------------------ closure representation
+
+/// SPIKE-CLOSURE-REPRESENTATION, branch (b): a named function used as a value
+/// is lowered to a generated object with an `apply` method, and the call on it
+/// is a dotted method call -- so it enters M3c's whole-program dispatch instead
+/// of needing a representation of its own. Branch (a), a fat pointer, would
+/// cost `Type` its `Copy` and touch every pass; it is only worth pricing if
+/// this fails.
+///
+/// Seven lines, and each is a different way an arrow value travels: through a
+/// parameter, through a parameter handed straight on, out of a RETURN type,
+/// into a local binding, and through a second arrow type in the same program.
+#[test]
+fn a_named_function_travels_as_a_value_through_every_shape() {
+    let binary = compile_fixture("closure.fss", "closure");
+    let out = run(&binary);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "7\n20\n8\n8\n14\n18\nhi!\n"
+    );
+    assert_eq!(out.status.code(), Some(0));
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// THE BRANCH ANSWER, and it needs both halves or it answers nothing. With TWO
+/// implementors of one arrow the registry builds a real table and codegen emits
+/// a `switch` on the tag; with ONE it collapses to a direct call and memoises
+/// no table at all. A spike measured only on the one-implementor shape would
+/// report success without ever building the thing under test -- this project's
+/// own `inferreddispatch` fixture exists for the same reason.
+#[test]
+fn two_closures_of_one_arrow_build_a_real_dispatch_table_and_one_does_not() {
+    let two = emitted_ir("closure.fss");
+    assert!(
+        two.contains("switch i32"),
+        "two implementors must reach a tag switch"
+    );
+    assert!(
+        two.contains("apply$dispatch$Arrow$ZZ32$ZZ32"),
+        "the dispatch function is named after the arrow trait"
+    );
+    let one = emitted_ir("closureone.fss");
+    assert!(
+        !one.contains("switch i32"),
+        "one implementor collapses to a direct call"
+    );
+    assert!(
+        one.contains("inc$fn$Arrow$ZZ32$ZZ32$m$apply"),
+        "and it still goes through the generated object's method"
+    );
+}
+
+/// The signature is checked where the object is minted, because nothing
+/// downstream will: after the pass the generated object is an ordinary
+/// implementor and its `apply` body is an ordinary call to the function.
+#[test]
+fn a_function_value_whose_signature_is_not_the_arrow_is_refused() {
+    let message = refusal("badclosuresig.fss");
+    assert!(
+        message.contains("is used as a value of type `ZZ32 -> ZZ32`"),
         "{message}"
     );
 }

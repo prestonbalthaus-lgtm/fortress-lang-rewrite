@@ -11,6 +11,7 @@
 //! Everything leaves here resolved to one concrete [`Target`], so codegen never
 //! asks a type question.
 
+mod closure;
 mod error;
 mod mono;
 mod registry;
@@ -51,6 +52,11 @@ type Checked<T> = Result<T, TypeError>;
 /// to be closed before that happens.
 pub fn check(component: &Component) -> Checked<TypedComponent> {
     let ground = mono::expand(component)?;
+    // Closure lowering sits BETWEEN the two for the same reason expansion sits
+    // before the checker: it appends object declarations, and tags freeze in
+    // `Checker::new`. It runs after expansion so it never meets a static
+    // parameter -- everything it sees is already ground.
+    let ground = closure::lower(&ground)?;
     Checker::new(&ground)?.run(&ground)
 }
 
