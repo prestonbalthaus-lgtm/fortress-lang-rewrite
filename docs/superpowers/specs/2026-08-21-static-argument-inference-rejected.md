@@ -7,6 +7,19 @@ that taking it was right rather than merely convenient.**
 Status: **decided.** Measured on master `abbbdc7a3` (the step-1 merge), 285
 corpus files compiling, with a sha256-pinned driver.
 
+**AND THIS IS THE SECOND TIME, WITH THE SAME METHOD AND THE SAME ANSWER.**
+`docs/superpowers/specs/2026-08-19-m3g-static-argument-inference-design.md` is
+titled *"static-argument inference, measured and declined"* and its status line
+reads *"not built, deliberately. The measurement that was supposed to scope it
+falsified it instead."* It ran the identical experiment on 2026-08-19 at the M3f
+baseline — 24 files first-blocked, static arguments hand-written into each — and
+declined. This document re-ran it at a baseline 98 files later (187 → 285
+compiling) without knowledge of that result, and reached the same conclusion from
+a different corpus state. **Two independent measurements, two baselines, one
+answer.** The re-run was still worth doing: the *reasons* are sharper now
+(§2 (b) and (c) are new), and a decision that has been confirmed twice on moving
+ground is a different thing from one taken once.
+
 The spike was authorised with an explicit escape: *"If it relies heavily on deep
 inference or worsens diagnostics for little gain, formally reject the spike and
 document the rejection."* Both halves of that condition are met, and the

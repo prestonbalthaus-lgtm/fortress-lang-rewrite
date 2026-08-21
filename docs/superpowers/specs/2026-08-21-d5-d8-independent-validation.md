@@ -162,6 +162,22 @@ pipeline. Running the legacy `fortress compile` over the 20 would settle it.
 
 ---
 
+## The Object/Any seed's retirement trigger is NOT yet met — measured, not assumed
+
+`d0e264c81` seeds `Object`/`Any` in `Checker::new` and says the seed dies when
+import resolution can supply them from `LibraryBuiltin/AnyType.fss` and
+`CompilerBuiltin.fsi`. Group 2 has since built api-first import resolution
+(`crates/driver/src/resolve.rs`) and **turned it ON BY DEFAULT** — worth knowing,
+because `04-state.md` still records it as opt-in and off, which was true of an
+earlier tip and is not true of `e4dc5406b`.
+
+It does **not** retire the seed. Measured with Group 2's own binary: a program
+writing `trait Shape extends Object end` still answers `unknown type \`Object\``
+there, and `Compiled9.DiamondOverriding.fss` and `tests/extendObject.fss` are
+still refused on that branch while they compile here. **The two changes are
+complementary, not competing**, and both are needed at merge. Re-test the trigger
+when `CompilerBuiltin.fsi` itself parses; it does not today.
+
 ## Three corrections to the recorded documents
 
 1. **`02-stack.md` and `ROADMAP.md:141`: there is no Hindley-Milner engine, and
