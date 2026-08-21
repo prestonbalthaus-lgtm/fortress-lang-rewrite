@@ -1,0 +1,26 @@
+component alsoatomicfront
+
+export Executable
+
+(* THE `atomic` RULE, TESTED WITHOUT DEPENDING ON A SCHEDULE.
+   `DoFront ::= [at Expr] [atomic] do [BlockElems]` puts the modifier inside a
+   front, so `atomic do A also do B end` makes only A atomic. Serialised
+   execution cannot tell the two readings apart -- both print the same thing --
+   so the distinguisher is a COMPILE-TIME one: an `exit` crossing an `atomic`
+   boundary is refused, and B is not inside one.
+
+   The first draft of the `also` work wrapped the whole group and this file
+   would not have compiled. Its sibling badalsoatomicexit.fss is the other half:
+   the same `exit` inside an `also atomic do` front, which must still refuse. *)
+
+run(): () = do
+    label out
+        atomic do
+            println(1)
+        also do
+            exit out
+        end
+    end out
+    println(2)
+end
+end

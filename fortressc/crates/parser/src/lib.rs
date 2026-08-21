@@ -1848,8 +1848,6 @@ impl<'t, 'a> Parser<'t, 'a> {
             // identifier namespace, so it is intercepted here rather than
             // given a keyword token -- again, no lexer change.
             Kind::Reserved("atomic") => self.atomic_expr(),
-            // `atomic do ... also do ... end`: the modifier covers the FIRST
-            // block only, so the group is parsed here rather than wrapped.
             // The same trade `for` and `atomic` take: intercepted here rather
             // than given a keyword token, so no file in the corpus lexes
             // differently. `of`, `with`, `most`, `largest` and `smallest` stay
@@ -2092,6 +2090,11 @@ impl<'t, 'a> Parser<'t, 'a> {
             let start = self.span_here();
             self.pos += 1;
             self.skip_newlines();
+            // As in `atomic_expr`: the modifier belongs to the first DoFront,
+            // not to the group.
+            if self.at(&Kind::KwDo) {
+                return Ok(BlockItem::Expr(self.do_group(true)?));
+            }
             let inner = self.block_item()?;
             let end = self.previous_span();
             let span = Span::new(start.start, end.end);
@@ -2427,6 +2430,14 @@ impl<'t, 'a> Parser<'t, 'a> {
         let start = self.span_here();
         self.pos += 1;
         self.skip_newlines();
+        // `atomic do A also do B end`: the modifier is part of a DoFront, so it
+        // covers A alone. Wrapping what the group parses to would make the
+        // whole group atomic, which is a DIFFERENT program -- and one that
+        // serialised execution cannot tell apart, because both readings print
+        // the same thing. `do_group` takes the flag instead.
+        if self.at(&Kind::KwDo) {
+            return self.do_group(true);
+        }
         let body = self.expr()?;
         let span = Span::new(start.start, body.span().end);
         Ok(Expr::Atomic {

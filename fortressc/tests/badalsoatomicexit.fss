@@ -1,0 +1,16 @@
+component badalsoatomicexit
+
+export Executable
+
+(* The other half of the rule: this `exit` IS inside an atomic front, and the
+   branch would jump past `fortress_atomic_leave`. Refused. *)
+run(): () = do
+    label out
+        do
+            println(1)
+        also atomic do
+            exit out
+        end
+    end out
+end
+end

@@ -1758,3 +1758,25 @@ fn a_block_of_an_also_group_must_have_type_void() {
         "{message}"
     );
 }
+
+/// The `atomic` rule, tested WITHOUT depending on a schedule.
+///
+/// `DoFront ::= [at Expr] [atomic] do [BlockElems]` puts the modifier inside a
+/// front, so `atomic do A also do B end` makes only A atomic. Serialised
+/// execution cannot tell that reading from whole-group-atomic apart -- both
+/// print the same thing -- so the distinguisher is a COMPILE-TIME one: an
+/// `exit` crossing an `atomic` boundary is refused, and B is not inside one.
+///
+/// The first draft wrapped the whole group. It parsed, it ran, it printed the
+/// right numbers, and it was a different program; this pair is what says which.
+#[test]
+fn atomic_binds_to_one_also_front_and_not_to_the_group() {
+    let binary = compile_fixture("alsoatomicfront.fss", "alsoatomicfront");
+    let out = run(&binary);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "1\n2\n");
+    assert_eq!(out.status.code(), Some(0));
+    let _ = std::fs::remove_file(&binary);
+
+    let message = refusal("badalsoatomicexit.fss");
+    assert!(message.contains("leaves an `atomic` region"), "{message}");
+}
