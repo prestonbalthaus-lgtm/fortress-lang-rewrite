@@ -36,6 +36,20 @@ pub enum ParseError {
         span: Span,
         name: String,
     },
+    /// `Specification/advanced/subscripting.tex:53-54`: "A result type may
+    /// appear after the second value parameter list, but it must be `()`."
+    /// `XXX5az.test` records the legacy refusing exactly this.
+    SubscriptedAssignmentReturnType {
+        span: Span,
+        written: String,
+    },
+    /// Same section, :47-49: the second value parameter list "must contain
+    /// exactly one non-keyword value parameter" -- it is the value being
+    /// stored, and there is only ever one of those.
+    SubscriptedAssignmentValueArity {
+        span: Span,
+        found: usize,
+    },
     /// An integer literal in static-argument position that does not fit `i64`.
     /// Arbitrary-precision `ZZ` is its own spike -- it needs a heap
     /// representation and runtime shims -- so this is a diagnostic and not a
@@ -167,6 +181,8 @@ impl ParseError {
             | Self::ReservedWord { span, .. }
             | Self::StaticParameterKindUnsupported { span, .. }
             | Self::StaticValueParameterBound { span, .. }
+            | Self::SubscriptedAssignmentReturnType { span, .. }
+            | Self::SubscriptedAssignmentValueArity { span, .. }
             | Self::StaticExpressionOutOfRange { span, .. }
             | Self::LocalFunctionDeclarationUnsupported { span }
             | Self::WhereClauseFormUnsupported { span, .. }
@@ -213,6 +229,16 @@ impl core::fmt::Display for ParseError {
                 f,
                 "`{name}` is a value static parameter and carries a bound; there is no \
                  constraint solver, and no corpus file writes one"
+            ),
+            Self::SubscriptedAssignmentReturnType { written, .. } => write!(
+                f,
+                "a subscripted assignment operator declares `{written}` as its result \
+                 type; if a result type is given it must be `()`"
+            ),
+            Self::SubscriptedAssignmentValueArity { found, .. } => write!(
+                f,
+                "a subscripted assignment operator takes exactly one value parameter \
+                 after `:=`, and this one takes {found}"
             ),
             Self::StaticExpressionOutOfRange { digits, .. } => write!(
                 f,

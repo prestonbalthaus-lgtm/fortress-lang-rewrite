@@ -150,11 +150,27 @@ pub fn check(
         .collect();
     if !open.is_empty() {
         for (name, r) in &rows {
+            // THE EXTENDER MUST BE ONE THIS FILE WROTE. A component that
+            // imports an api gets that api's traits merged into it, and
+            // reporting the api's own ill-formedness against every importer is
+            // the foreign-span problem one level up: the offence is not in this
+            // file, nobody editing this file can fix it, and the api is refused
+            // on its own when it is compiled.
+            //
+            // MEASURED, not feared: making `Library/FortressLibrary.fsi` parse
+            // in full took `SpecData/examples/advanced/Overloading.fss` from
+            // compiling to refused, pointing its caret at the component header,
+            // because `trait AnyIntegral extends { QQ }` arrived through
+            // resolution. That number grows with every api the parser learns to
+            // read.
+            if !r.own {
+                continue;
+            }
             for sup in r.extends {
                 let Some(sup_name) = head(sup) else { continue };
                 if open.contains(&sup_name) {
                     return Err(TypeError::ExtendsOpenComprises {
-                        span: r.at(fallback),
+                        span: r.span,
                         trait_name: sup_name.to_owned(),
                         extender: (*name).to_owned(),
                     });

@@ -1579,8 +1579,57 @@ impl<'t, 'a> Parser<'t, 'a> {
             name.push_str(&join(&open));
             name.push('_');
             name.push_str(&join(&close));
+            // SUBSCRIPT ASSIGNMENT: `opr[i:I]:=(v:E): ()`. The subscript GET
+            // stops at the closing bracket and reads a return type; the SET
+            // continues with `:=` and a second parameter list, which is the
+            // value being stored. `Library/FortressLibrary.fsi:1237` is the
+            // declaration the bootstrap root died on, and 32 sites over 14
+            // files write this form.
+            //
+            // THE NAME CARRIES THE `:=`. `[_]` and `[_]:=` are two different
+            // members of the same object -- `a[i]` reads and `a[i] := v`
+            // writes -- so giving them one name would collide them in the
+            // method tables and make an object that declares both refuse as a
+            // duplicate.
+            let mut subscript_assign = false;
+            if self.at(&Kind::ColonEq) {
+                subscript_assign = true;
+                self.pos += 1;
+                name.push_str(":=");
+                self.skip_newlines();
+                let open_paren =
+                    self.expect(&Kind::LParen, "`(` for the value of a subscript assignment")?;
+                let value = self.params()?;
+                let close_paren = self.expect(&Kind::RParen, "`)`")?;
+                // subscripting.tex:47-49 -- the second list "must contain
+                // exactly one non-keyword value parameter". It is the value
+                // being stored and there is only ever one of those.
+                if value.len() != 1 {
+                    return Err(ParseError::SubscriptedAssignmentValueArity {
+                        span: Span::new(open_paren.span.start, close_paren.span.end),
+                        found: value.len(),
+                    });
+                }
+                params.extend(value);
+            }
             let mut end = self.previous_span();
             let return_type = self.optional_return_type()?;
+            // subscripting.tex:53-54 -- "A result type may appear after the
+            // second value parameter list, but it must be `()`." A setter
+            // returns nothing, and the legacy records this refusal by name in
+            // XXX5az.test. Written OUT rather than silently coerced, because a
+            // declaration that says it returns a `ZZ32` and does not is the
+            // silent-wrong-answer class.
+            if subscript_assign {
+                if let Some(ty) = return_type.as_ref() {
+                    if !matches!(ty, TypeRef::Unit { .. }) {
+                        return Err(ParseError::SubscriptedAssignmentReturnType {
+                            span: ty.span(),
+                            written: ty.written(),
+                        });
+                    }
+                }
+            }
             if let Some(ty) = return_type.as_ref() {
                 end = ty.span();
             }
@@ -1612,9 +1661,31 @@ impl<'t, 'a> Parser<'t, 'a> {
         mut static_params: Vec<StaticParam>,
     ) -> Parsed<OprSignature> {
         self.skip_newlines();
-        self.expect(&Kind::LParen, "`(`")?;
-        params.extend(self.params()?);
-        let mut end = self.expect(&Kind::RParen, "`)`")?.span;
+        // A POSTFIX DECLARATION HAS NO TRAILING PARAMETER LIST, because its
+        // leading operand is its only one: `opr (x:I)#[\I extends
+        // AnyIntegral\] : LeftRange[\I\]` is `x#`, the range that starts at
+        // `x`. `Library/FortressLibrary.fsi:2171` is the declaration the
+        // bootstrap root died on after subscript assignment landed.
+        //
+        // THE GUARD IS THE LEADING OPERAND AND NOT THE MISSING `(`. An INFIX
+        // declaration written with a leading operand always has the trailing
+        // list too, so requiring `params` to be non-empty is what stops a
+        // malformed infix from being silently re-read as a postfix rather than
+        // reported. With no leading operand this still demands the `(` and
+        // says so.
+        //
+        // This is the DECLARATION only. A postfix operator in EXPRESSION
+        // position is still refused by name -- `OperatorShape::Postfix` --
+        // because that needs the operator table, which is a different piece of
+        // work; what this buys is that the library's own api can be READ.
+        let mut end;
+        if params.is_empty() || self.at(&Kind::LParen) {
+            self.expect(&Kind::LParen, "`(`")?;
+            params.extend(self.params()?);
+            end = self.expect(&Kind::RParen, "`)`")?.span;
+        } else {
+            end = self.previous_span();
+        }
         let return_type = self.optional_return_type()?;
         if let Some(ty) = return_type.as_ref() {
             end = ty.span();

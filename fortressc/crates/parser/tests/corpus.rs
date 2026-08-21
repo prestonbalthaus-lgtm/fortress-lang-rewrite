@@ -97,6 +97,12 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
                     } => {
                         format!("`{kind}` static parameter")
                     }
+                    fortress_parser::ParseError::SubscriptedAssignmentReturnType { .. } => {
+                        "subscripted assignment result type".to_owned()
+                    }
+                    fortress_parser::ParseError::SubscriptedAssignmentValueArity { .. } => {
+                        "subscripted assignment value arity".to_owned()
+                    }
                     fortress_parser::ParseError::StaticValueParameterBound { .. } => {
                         "bound on a value static parameter".to_owned()
                     }
