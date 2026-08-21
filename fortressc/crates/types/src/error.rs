@@ -312,8 +312,12 @@ pub enum TypeError {
         span: Span,
         name: String,
     },
-    /// A `getter`/`setter` member read as a field. It parses; it is not read.
-    AccessorUnsupported {
+    /// `o.g()` where `g` is a getter. A GETTER IS READ, NEVER CALLED --
+    /// `Compiled6.y.fss` has `println O.z` on one line and `println O.z()` on
+    /// the next, and 1.0 refuses the second with "No such method O.z". The two
+    /// spellings are the whole reason a getter is not simply a nullary method
+    /// to the source, even though it is exactly that underneath.
+    AccessorCalled {
         span: Span,
         name: String,
     },
@@ -668,7 +672,7 @@ impl TypeError {
             | Self::ParallelSharedObjectArgument { span, .. }
             | Self::CompoundOperatorUnsupported { span, .. }
             | Self::ParallelFormUnsupported { span, .. }
-            | Self::AccessorUnsupported { span, .. }
+            | Self::AccessorCalled { span, .. }
             | Self::GenericFunctionalMethodUnsupported { span, .. }
             | Self::ValueBindingUnsupported { span, .. }
             | Self::StaticArgumentsRequired { span, .. }
@@ -932,10 +936,10 @@ impl core::fmt::Display for TypeError {
                  static argument on one cannot be resolved before the \
                  receiver has a type"
             ),
-            Self::AccessorUnsupported { name, .. } => write!(
+            Self::AccessorCalled { name, .. } => write!(
                 f,
-                "`{name}` is a getter or setter; accessors parse but are not \
-                 implemented, and `{name}` is read rather than called"
+                "`{name}` is a getter and is READ as `.{name}`, not called as \
+                 `.{name}()`"
             ),
             Self::FieldIsImmutable { name, .. } => write!(
                 f,

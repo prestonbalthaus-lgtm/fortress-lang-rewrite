@@ -91,6 +91,9 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 #   OBJECT_FLOOR   .fss files that compile end to end AND EMIT AN OBJECT
 #   API_FLOOR      .fsi files whose headers resolve and whose bounds discharge
 # Measured on the consolidated tree: 290 objects, 60 apis, 350 together.
+# GETTERS: 328 objects, 62 apis, 390 together. A getter is a nullary dotted
+# method underneath and a field read on the surface; thirteen .fss gained and
+# TWO lost, both must-fail tests the merge now refuses for the reason 1.0 gives.
 # ACCESSORS + the named-import fix: 318 objects, 62 apis, 380 together. The
 # `asString` builtin is 12 of the 13 gained .fss; the resolver reading its
 # import list is the other one.
@@ -117,7 +120,7 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # applied to the real population instead of to the one file that was known when
 # the rule was written. When that list shrinks, this floor rises with it, and
 # the two move in the same commit.
-OBJECT_FLOOR=280
+OBJECT_FLOOR=290
 API_FLOOR=62
 
 passed=0

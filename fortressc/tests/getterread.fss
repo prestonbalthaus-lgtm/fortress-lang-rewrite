@@ -1,0 +1,28 @@
+component getterread
+export Executable
+
+trait Shape
+  getter name(): String
+end
+
+object Circle(r: ZZ32) extends Shape
+  getter name(): String = "circle"
+  getter twice(): ZZ32 = r + r
+end
+
+object Square(s: ZZ32) extends Shape
+  getter name(): String = "square"
+end
+
+(* A getter is dispatched like any other dotted member: through the trait, on
+   the RUN-TIME type. *)
+which(x: Shape): String = x.name
+
+run():() = do
+  c = Circle(4)
+  println(c.name)
+  println(c.twice)
+  println(which(c))
+  println(which(Square(2)))
+end
+end

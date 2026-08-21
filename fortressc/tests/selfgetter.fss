@@ -1,8 +1,9 @@
 component selfgetter
 export Executable
 
-(* The getter half still only parses: `size` is read as `x.size`, not called,
-   and accessors are not implemented.
+(* The getter half is IMPLEMENTED now: `size` is read as `x.size` and dispatched
+   as a nullary dotted method. `x.size()` is refused -- a getter is read, never
+   called.
 
    The `self` half is no longer only parsed. `area(self, k: ZZ32)` is a
    FUNCTIONAL method, lifted into the top-level overload set of `area` with the

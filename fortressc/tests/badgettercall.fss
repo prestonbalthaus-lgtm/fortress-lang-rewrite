@@ -1,0 +1,9 @@
+component badgettercall
+export Executable
+object O
+  getter z(): ZZ32 = 3
+end
+(* A GETTER IS READ, NEVER CALLED. `Compiled6.y.fss` writes `O.z` and `O.z()`
+   on consecutive lines and 1.0 refuses only the second. *)
+run():() = println(O.z())
+end

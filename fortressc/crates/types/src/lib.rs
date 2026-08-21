@@ -681,10 +681,13 @@ impl Checker {
                 if m.accessor {
                     self.accessors.insert(m.name.clone());
                 }
-                if m.accessor
-                    || m.params.iter().any(|p| p.name == "self")
-                    || !m.static_params.is_empty()
-                {
+                // A GETTER IS A NULLARY DOTTED METHOD. `getter g(): T` declares
+                // no `self` parameter and takes no arguments, so its signature
+                // is exactly `[receiver]` -- which is what a dotted method with
+                // an empty parameter list already builds. It used to be skipped
+                // here, which is why `o.g` could only ever be
+                // `AccessorUnsupported`.
+                if m.params.iter().any(|p| p.name == "self") || !m.static_params.is_empty() {
                     continue;
                 }
                 *counts.entry((owner, m.name.as_str())).or_default() += 1;
@@ -703,10 +706,7 @@ impl Checker {
             };
             for (index, member) in members.iter().enumerate() {
                 let Member::Method(m) = member else { continue };
-                if m.accessor
-                    || m.params.iter().any(|p| p.name == "self")
-                    || !m.static_params.is_empty()
-                {
+                if m.params.iter().any(|p| p.name == "self") || !m.static_params.is_empty() {
                     continue;
                 }
                 // An abstract declaration on a generic trait can mention that
@@ -970,10 +970,14 @@ impl Checker {
             };
             for (index, member) in members.iter().enumerate() {
                 let Member::Method(m) = member else { continue };
-                if m.accessor
-                    || m.params.iter().any(|p| p.name == "self")
-                    || !m.static_params.is_empty()
-                {
+                // ACCESSORS ARE LIFTED HERE TOO, and leaving them out was an
+                // internal error rather than a missing feature: the signature
+                // side registered `Baz$m$g` and this side never emitted its
+                // body, so ELEVEN corpus files went to EXIT 70 with
+                // `unknown function Baz$m$g`. The full-driver sweep caught it;
+                // a compile-count check would have read 382 and called it a
+                // gain.
+                if m.params.iter().any(|p| p.name == "self") || !m.static_params.is_empty() {
                     continue;
                 }
                 if m.body.is_none() || !self.method_slots.contains_key(&(owner, index)) {
@@ -2102,6 +2106,13 @@ impl Checker {
         })
     }
 
+    /// Whether this type has a FIELD of that name. A constructor parameter is
+    /// a field, and a getter of the same name may be declared on a sibling
+    /// type, so the two namespaces have to be asked in that order.
+    fn has_field(&self, ty: Type, name: &str) -> bool {
+        matches!(ty, Type::Object(o) if self.registry.field(o, name).is_some())
+    }
+
     fn field(
         &mut self,
         base: &Expr,
@@ -2139,16 +2150,18 @@ impl Checker {
                 span,
             });
         }
-        // A getter is read exactly like a field, so a program reaching here for
-        // an accessor's name is not asking for a field that does not exist --
-        // it is asking for a getter, which parses and is not implemented.
-        // Saying "has no field" would send it to the wrong bucket, the way the
-        // static-argument catch-all did in M3g.
-        if self.accessors.contains(name) {
-            return Err(TypeError::AccessorUnsupported {
-                span,
-                name: name.to_owned(),
-            });
+        // A GETTER IS READ EXACTLY LIKE A FIELD AND CALLED LIKE A METHOD.
+        // `o.g` where the receiver's type declares `getter g()` is a nullary
+        // dotted call, and `dispatch_method` is the machinery that already
+        // decides which one -- inheritance, overriding and the
+        // exactly-one-winner check come with it rather than being rebuilt here.
+        //
+        // The FIELD lookup below wins if the name is both, which is the reading
+        // `object Baz(g: Bar)` needs: a constructor parameter is a field, and
+        // `library_tests/Getter1.fss` declares a getter of the same name on a
+        // sibling type.
+        if self.accessors.contains(name) && !self.has_field(base.ty, name) {
+            return self.dispatch_method(base, name, &[], span, span, expected);
         }
         let unknown = || TypeError::UnknownField {
             span,
@@ -3551,6 +3564,17 @@ impl Checker {
             span: dot_span,
         } = callee
         {
+            // A GETTER IS READ, NEVER CALLED. It IS a nullary dotted method
+            // underneath, so without this `o.g()` would find it and 1.0 refuses
+            // that by name -- `Compiled6.y.fss` writes `println O.z` and
+            // `println O.z()` on consecutive lines and expects the second to
+            // fail. Caught by the gate when the merge made both work.
+            if self.accessors.contains(name) {
+                return Err(TypeError::AccessorCalled {
+                    span,
+                    name: name.clone(),
+                });
+            }
             self.refuse_keyword_argument(args)?;
             // The RECEIVER is an argument too, and the one this compiler used
             // to be able to trust: before a field store existed, a method

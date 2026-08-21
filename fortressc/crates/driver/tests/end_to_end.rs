@@ -2142,6 +2142,46 @@ fn the_api_with_that_defect_is_still_refused_on_its_own() {
     );
 }
 
+// ------------------------------------------------------------- getters
+//
+// A GETTER IS A NULLARY DOTTED METHOD UNDERNEATH and a FIELD READ on the
+// surface, and both halves have to be true at once. It used to be neither:
+// `AccessorUnsupported` refused every `o.g`.
+
+/// Read like a field, dispatched like a method -- through the trait, on the
+/// RUN-TIME type.
+#[test]
+fn a_getter_is_read_like_a_field_and_dispatched_like_a_method() {
+    let binary = compile_fixture("getterread.fss", "getterread");
+    let out = run(&binary);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "circle\n8\ncircle\nsquare\n"
+    );
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// AND NEVER CALLED. Without this the nullary method underneath answers `o.g()`
+/// too, and `Compiled6.y.fss` -- which writes `O.z` and `O.z()` on consecutive
+/// lines and expects only the second to fail -- became a new must-fail
+/// ACCEPTANCE. The gate caught it; the fixture is what keeps it caught.
+#[test]
+fn a_getter_may_not_be_called_with_parentheses() {
+    let message = refusal("badgettercall.fss");
+    assert!(message.contains("is READ as `.z`, not called"), "{message}");
+}
+
+/// `Getter/setter declarations should not be overloaded with method
+/// declarations` (Compiled6.l.fss). THE COLLISION IS THE SETTER AGAINST THE
+/// METHOD and not the getter: `getter x()` is nullary and `x(y)` takes one, so
+/// those two merely overload. The first version of this fixture omitted the
+/// setter, compiled, and asserted nothing.
+#[test]
+fn a_setter_and_a_method_of_the_same_shape_collide() {
+    let message = refusal("badgetteroverload.fss");
+    assert!(message.contains("`x` is defined twice"), "{message}");
+}
+
 // -------------------------------------------------------- `asString`, and `%g`
 //
 // `FortressLibrary.fsi` declares `asString` as a getter on every numeric trait.

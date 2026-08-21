@@ -1,0 +1,16 @@
+component badgetteroverload
+export Executable
+object O
+  getter x(): ZZ32 = 3
+  setter x(y: ZZ32): () = ()
+  x(y: ZZ32): () = ()
+end
+(* 1.0: "Getter/setter declarations should not be overloaded with method
+   declarations." Compiled6.l.fss, and the collision is the SETTER against the
+   method, not the getter: `getter x()` is nullary and `x(y)` takes one, so
+   those two merely overload. The setter and the method are both `x` of one
+   argument, and an accessor is an ordinary dotted member here -- so they are
+   the same declaration twice, which is the same verdict by a different route
+   from the one the legacy names. *)
+run():() = ()
+end
