@@ -57,11 +57,23 @@ ProjectFortress/compiler_tests/NYI.Compiled5.n.fss
 # ONE OF THE SEVEN IS STILL HERE AND IT IS THE LINE BELOW.
 #
 #   Compiled1.al  "Item at this location must be an expression, not an
-#                  operator." There is no unbuilt feature to name in a
-#                  refusal -- `^` IS implemented and the program runs -- and the
-#                  rule the legacy applies is the operator-expression grammar,
-#                  which is SPIKE-OPEXPR and is not built. Refusing it on any
-#                  narrower ground would be inventing a rule to make a number
-#                  move. Defect register DEF-7.
+#                  operator", at 15:48, which is the `^` in `f(a)^b`.
+#                  RE-VERIFIED AGAINST THE OPERATOR GRAMMAR after SPIKE-OPEXPR's
+#                  declaration half landed: it still compiles and it computes
+#                  the RIGHT ANSWER -- `dbl(3)^2` is 81.
+#                  The only spec rule that could refuse it is the
+#                  superscripted-postfix rule, lexical-structure.tex:1204-1213,
+#                  and that rule EXCLUDES this case by its own wording: `^T` is
+#                  a postfix operator "provided that it is not immediately
+#                  followed by a word character", and `^b` is not a simple
+#                  operator preceded by `^` either.
+#                  THE BROAD READING THAT WOULD REFUSE IT COSTS 383 SITES ACROSS
+#                  103 FILES, six of them inside the compiling set, and they are
+#                  overwhelmingly `^2` and `^3`. So the spec supports US and not
+#                  the legacy here.
+#                  It stays in THIS file and not in the divergence list because
+#                  the gate cannot hold an acceptance there -- `verdict` refuses
+#                  to reclassify a case whose detail is "ACCEPTED a program",
+#                  deliberately. Defect register DEV-12.
 # ---------------------------------------------------------------------------
 ProjectFortress/compiler_tests/Compiled1.al.fss
