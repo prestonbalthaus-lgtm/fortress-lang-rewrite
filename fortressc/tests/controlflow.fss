@@ -1,0 +1,82 @@
+component controlflow
+
+export Executable
+
+(* SPIKE-CONTROL-FLOW-EXTRAS: the three constructs in one program.
+   `case` is a desugaring to if/elif over `subject = guard`; `typecase` is a
+   switch on the 32-bit tag M3c dispatch already reads; `label`/`exit` is one
+   merge block and a phi over its incoming edges. None of the three needs
+   unwinding, and none of them adds a runtime call. *)
+
+trait Shape end
+object Circle(r: ZZ32) extends {Shape} end
+object Square(s: ZZ32) extends {Shape} end
+object Dot() extends {Shape} end
+
+describe(x: Shape): String =
+    typecase x of
+        c: Circle => "circle " c.r
+        s: Square => "square " s.s
+        else => "something else"
+    end
+
+(* A trait arm claims every concrete type below it. `Dot` is the only one left
+   for `else` once `Circle` and `Square` are claimed above. *)
+area(x: Shape): ZZ32 =
+    typecase x of
+        c: Circle => c.r c.r 3
+        s: Square => s.s s.s
+        else => 0
+    end
+
+grade(n: ZZ32): String =
+    case n of
+        1 => "one"
+        2 => "two"
+        else => "many"
+    end
+
+(* `exit` in statement position takes Void from its context, so the `if` needs
+   no `else`; the tail `exit` takes the function's declared return type. *)
+firstOver(limit: ZZ32): ZZ32 =
+    label found
+        i: ZZ32 := 0
+        while i < 100 do
+            if i > limit then
+                exit found with i
+            end
+            i := i + 1
+        end
+        exit found with -1
+    end found
+
+(* An exit that jumps past an enclosing label. The inner one is left through
+   its own fallthrough on every iteration that does not match. *)
+findNested(n: ZZ32): ZZ32 = label outer
+    i: ZZ32 := 0
+    while i < 10 do
+        j = label inner
+            if i = n then exit outer with 100 end
+            i
+        end inner
+        i := j + 1
+    end
+    exit outer with -1
+end outer
+
+run(): () = do
+    println(describe(Circle(3)))
+    println(describe(Square(4)))
+    println(describe(Dot()))
+    println(area(Circle(2)))
+    println(area(Square(5)))
+    println(area(Dot()))
+    println(grade(1))
+    println(grade(2))
+    println(grade(7))
+    println(firstOver(10))
+    println(firstOver(500))
+    println(findNested(3))
+    println(findNested(50))
+end
+end

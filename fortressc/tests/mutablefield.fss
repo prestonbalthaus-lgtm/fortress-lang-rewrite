@@ -1,0 +1,42 @@
+component mutablefield
+
+export Executable
+
+(* A mutable field is storage. The store is direct: the specification calls the
+   setter here, and there is no setter machinery to call. *)
+object Counter(start: ZZ32)
+    var n: ZZ32 = 0
+    var tag: String = "counter"
+    bump(): () = do
+        n := n + 1
+    end
+    rename(to: String): () = do
+        tag := to
+    end
+    total(): ZZ32 = start + n
+end
+
+object Holder(seed: Counter)
+    var inner: Counter = seed
+end
+
+run(): () = do
+    c = Counter(10)
+    c.n := 5
+    c.n += 2
+    c.bump()
+    println(c.n)
+    println(c.total())
+    c.rename("renamed")
+    println(c.tag)
+
+    (* A reference stored into a scanned block, and then read back through it.
+       The collector sees the field, so the object it names stays live. *)
+    h = Holder(Counter(100))
+    println(h.inner.n)
+    h.inner := c
+    h.inner.n := 41
+    println(h.inner.n)
+    println(h.inner.total())
+end
+end

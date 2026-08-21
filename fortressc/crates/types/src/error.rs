@@ -243,7 +243,9 @@ pub enum TypeError {
         span: Span,
         name: String,
     },
-    MutableFieldUnsupported {
+    /// `o.f := e` where `f` was not declared `var`. The binding rule is the
+    /// same one a local has: only `var` is storage.
+    FieldIsImmutable {
         span: Span,
         name: String,
     },
@@ -317,6 +319,123 @@ pub enum TypeError {
     /// function print 567137, 775186, 895320 on consecutive runs and 4000000
     /// under FORTRESS_WORKERS=1.
     ParallelSharedArrayArgument {
+        span: Span,
+        name: String,
+    },
+    /// `o.f := e` inside a parallel loop body where `o` is shared between
+    /// iterations. The array rule above is `a[binder]`, an index this
+    /// iteration provably owns; a field has no index, so there is no
+    /// equivalent carve-out and the write is refused outright.
+    ParallelFieldEscape {
+        span: Span,
+        name: String,
+        /// The receiver is loop-LOCAL and still shared, because it was bound
+        /// from something outside the loop. Naming the wrong one of these two
+        /// mechanisms sends the reader to the wrong fix.
+        aliased: bool,
+    },
+    /// A loop-captured object that can REACH mutable storage, handed to a call
+    /// from inside a parallel body. The same hole as the array argument, one
+    /// indirection further out: the callee's `o.f := v` is checked against an
+    /// empty loop context. Reachability is computed over the registry, so an
+    /// object holding an object holding an array is refused too.
+    ParallelSharedObjectArgument {
+        span: Span,
+        name: String,
+        /// What the reachability walk found, for the diagnostic: the field
+        /// path that reaches mutable storage.
+        path: String,
+    },
+    /// A `fn` form outside the subset this lowering can mint an object for.
+    LambdaUnsupported {
+        span: Span,
+        form: &'static str,
+    },
+    /// A lambda closing over a name whose type is not written, or over `self`.
+    /// A capture becomes a constructor parameter and a constructor parameter
+    /// needs a written type; `self` would be shadowed by the generated
+    /// object's own receiver.
+    LambdaCaptureUntyped {
+        span: Span,
+        name: String,
+    },
+    /// A function name in a slot that wants an arrow, where the overload set
+    /// has no declaration with that exact signature, or more than one.
+    FunctionValueUnresolved {
+        span: Span,
+        name: String,
+        arrow: String,
+        found: usize,
+    },
+
+    // ------------------------------------------------ control flow extras
+    /// `case x of end`. Nothing to compare against and nothing to produce.
+    CaseHasNoArms {
+        span: Span,
+    },
+    /// A `case` whose value is used and whose arms may all miss. 1.0 throws
+    /// `MatchFailure` there; this subset has no exceptions, so the `else` arm
+    /// is what supplies the value instead.
+    CaseNeedsElse {
+        span: Span,
+    },
+    /// `typecase` on a scalar. A tag is a fact about an object block, and a
+    /// `ZZ32` does not have one.
+    TypeCaseSubjectNotReference {
+        span: Span,
+        found: Type,
+    },
+    /// An arm naming a type no value of the subject's type can have.
+    TypeCaseArmUnrelated {
+        span: Span,
+        subject: Type,
+        arm: Type,
+    },
+    /// An arm every one of whose tags an earlier arm already claimed. First
+    /// arm wins, so this one can never run -- and dead code the reader
+    /// believes in is worse than a refusal.
+    TypeCaseArmDead {
+        span: Span,
+        arm: Type,
+    },
+    /// Two labels of the same name, one inside the other: `exit` would name
+    /// the inner one and the outer one would be unreachable.
+    LabelAlreadyOpen {
+        span: Span,
+        name: String,
+    },
+    UnknownLabel {
+        span: Span,
+        name: String,
+    },
+    /// `exit L with 1` where an earlier exit carried something else.
+    ExitTypeMismatch {
+        span: Span,
+        name: String,
+        expected: Type,
+        found: Type,
+    },
+    /// A label whose exits carry a value and whose body can also run off the
+    /// bottom. There is no value on that edge, and inventing a zero for it is
+    /// the silent-wrong-answer class this compiler refuses to join.
+    LabelFallsThrough {
+        span: Span,
+        name: String,
+        expected: Type,
+        found: Type,
+    },
+    /// An `exit` out of an `atomic` region. The branch would skip
+    /// `fortress_atomic_leave` and leave one process-wide recursive mutex held
+    /// for the rest of the process -- `atomic.tex:59-70`'s rollback rule, whose
+    /// writes-retained arm this construct re-opens.
+    ExitCrossesAtomic {
+        span: Span,
+        name: String,
+    },
+    /// An `exit` out of a `for` body. Every loop body is OUTLINED into its own
+    /// function, `seq(...)` included, so this is a jump between functions --
+    /// which is the unwinding `label` was chosen for not needing.
+    ExitCrossesLoop {
         span: Span,
         name: String,
     },
@@ -425,7 +544,7 @@ impl TypeError {
             | Self::NotATrait { span, .. }
             | Self::UnknownField { span, .. }
             | Self::DottedMethodUnsupported { span, .. }
-            | Self::MutableFieldUnsupported { span, .. }
+            | Self::FieldIsImmutable { span, .. }
             | Self::FieldNeedsInitializer { span, .. }
             | Self::SingletonNotConstructible { span, .. }
             | Self::SingletonInitializerRestricted { span, .. }
@@ -438,6 +557,22 @@ impl TypeError {
             | Self::ParallelEscape { span, .. }
             | Self::ParallelIndexNotBinder { span, .. }
             | Self::ParallelSharedArrayArgument { span, .. }
+            | Self::LambdaUnsupported { span, .. }
+            | Self::LambdaCaptureUntyped { span, .. }
+            | Self::FunctionValueUnresolved { span, .. }
+            | Self::CaseHasNoArms { span }
+            | Self::CaseNeedsElse { span }
+            | Self::TypeCaseSubjectNotReference { span, .. }
+            | Self::TypeCaseArmUnrelated { span, .. }
+            | Self::TypeCaseArmDead { span, .. }
+            | Self::LabelAlreadyOpen { span, .. }
+            | Self::UnknownLabel { span, .. }
+            | Self::ExitTypeMismatch { span, .. }
+            | Self::LabelFallsThrough { span, .. }
+            | Self::ExitCrossesAtomic { span, .. }
+            | Self::ExitCrossesLoop { span, .. }
+            | Self::ParallelFieldEscape { span, .. }
+            | Self::ParallelSharedObjectArgument { span, .. }
             | Self::CompoundOperatorUnsupported { span, .. }
             | Self::ParallelFormUnsupported { span, .. }
             | Self::AccessorUnsupported { span, .. }
@@ -648,9 +783,10 @@ impl core::fmt::Display for TypeError {
                 "`{name}` is a getter or setter; accessors parse but are not \
                  implemented, and `{name}` is read rather than called"
             ),
-            Self::MutableFieldUnsupported { name, .. } => {
-                write!(f, "`var {name}`: mutable fields are not implemented")
-            }
+            Self::FieldIsImmutable { name, .. } => write!(
+                f,
+                "field `{name}` is immutable; declare it `var {name}: T = ...` to assign to it"
+            ),
             Self::FieldNeedsInitializer { name, .. } => write!(
                 f,
                 "field `{name}` is not a constructor parameter, so it needs `= ...`"
@@ -709,6 +845,131 @@ impl core::fmt::Display for TypeError {
                  shares, and passing it to a call puts any assignment to it \
                  out of reach of the loop's own rules, which are lexical. \
                  Wrap the call in `atomic`, or write `for ... <- seq(...)`"
+            ),
+            Self::ParallelFieldEscape {
+                name,
+                aliased: false,
+                ..
+            } => write!(
+                f,
+                "`{name}` is declared outside this loop, and a parallel loop \
+                 body may not assign to a field of it; a field has no index, \
+                 so there is no `a[i]` rule to make two iterations disjoint. \
+                 Wrap the assignment in `atomic`, or write `for ... <- seq(...)`"
+            ),
+            Self::ParallelFieldEscape {
+                name,
+                aliased: true,
+                ..
+            } => write!(
+                f,
+                "`{name}` is declared inside this loop but bound from storage \
+                 outside it, so every iteration writes the same object. \
+                 Wrap the assignment in `atomic`, or write `for ... <- seq(...)`"
+            ),
+            Self::ParallelSharedObjectArgument { name, path, .. } => write!(
+                f,
+                "`{name}` is shared between iterations of this parallel loop \
+                 and reaches mutable storage through `{path}`, so passing it \
+                 to a call puts any assignment to it out of reach of the \
+                 loop's own rules, which are lexical. Wrap the call in \
+                 `atomic`, or write `for ... <- seq(...)`"
+            ),
+            Self::LambdaUnsupported { form, .. } => {
+                write!(f, "{form} is not implemented")
+            }
+            Self::LambdaCaptureUntyped { name, .. } if name == "self" => write!(
+                f,
+                "a `fn` may not close over `self`: the generated object binds \
+                 `self` to the closure itself, and the capture would be \
+                 shadowed rather than refused. Pass it as a parameter"
+            ),
+            Self::LambdaCaptureUntyped { name, .. } => write!(
+                f,
+                "`{name}` has no written type, so a `fn` closing over it has \
+                 nothing to declare its constructor parameter with. Annotate \
+                 it -- `{name}: T = ...`"
+            ),
+            Self::FunctionValueUnresolved {
+                name, arrow, found, ..
+            } => write!(
+                f,
+                "`{name}` is used as a value of type `{arrow}`, and {} \
+                 declaration of `{name}` has that signature",
+                if *found == 0 { "no" } else { "more than one" }
+            ),
+            Self::CaseHasNoArms { .. } => write!(
+                f,
+                "a `case` needs at least one arm; write `guard => expression`"
+            ),
+            Self::CaseNeedsElse { .. } => write!(
+                f,
+                "this `case` produces a value, so it needs an `else => ...` arm: \
+                 there is nothing to return when no guard matches"
+            ),
+            Self::TypeCaseSubjectNotReference { found, .. } => write!(
+                f,
+                "`typecase` asks what concrete type a value has, and `{}` \
+                 carries no type tag; only an object or a trait does",
+                found.name()
+            ),
+            Self::TypeCaseArmUnrelated { subject, arm, .. } => write!(
+                f,
+                "no `{}` can be a `{}`, so this arm can never run",
+                subject.name(),
+                arm.name()
+            ),
+            Self::TypeCaseArmDead { arm, .. } => write!(
+                f,
+                "an earlier arm already claims every concrete type under `{}`; \
+                 arms are matched in order and this one can never run",
+                arm.name()
+            ),
+            Self::LabelAlreadyOpen { name, .. } => write!(
+                f,
+                "`{name}` is already an open label here, and `exit {name}` \
+                 would name the inner one"
+            ),
+            Self::UnknownLabel { name, .. } => {
+                write!(f, "`{name}` is not an open label at this point")
+            }
+            Self::ExitTypeMismatch {
+                name,
+                expected,
+                found,
+                ..
+            } => write!(
+                f,
+                "`exit {name}` carries {}, but an earlier exit from `{name}` \
+                 carried {}",
+                found.name(),
+                expected.name()
+            ),
+            Self::LabelFallsThrough {
+                name,
+                expected,
+                found,
+                ..
+            } => write!(
+                f,
+                "`{name}` exits with {}, so its body may not also run off the \
+                 bottom with {}: end the body with an `exit {name} with ...` \
+                 or with a value of the same type",
+                expected.name(),
+                found.name()
+            ),
+            Self::ExitCrossesAtomic { name, .. } => write!(
+                f,
+                "`exit {name}` leaves an `atomic` region, and the branch would \
+                 skip the unlock: one process-wide recursive mutex would stay \
+                 held. Move the `exit` outside the `atomic`"
+            ),
+            Self::ExitCrossesLoop { name, .. } => write!(
+                f,
+                "`exit {name}` leaves a `for` body, and every loop body is a \
+                 function of its own -- `seq(...)` included -- so this is a \
+                 jump between functions. Use a `while` loop, or put the label \
+                 inside the body"
             ),
             Self::CompoundOperatorUnsupported { op, .. } => write!(
                 f,

@@ -15,13 +15,27 @@ mod error;
 pub use error::ParseError;
 
 use fortress_ast::{
-    Assign, BinOp, Binding, BlockItem, Component, Decl, Expr, FieldDecl, Fixity, FnDecl,
+    Assign, BinOp, Binding, BlockItem, CaseArm, Component, Decl, Expr, FieldDecl, Fixity, FnDecl,
     ImportDecl, Member, MethodDecl, Modifiers, ObjectDecl, Param, Span, StaticParam, TraitDecl,
-    TypeRef, UnOp,
+    TypeCaseArm, TypeRef, UnOp,
 };
 use fortress_lexer::{Kind, Token};
 
 type Parsed<T> = Result<T, ParseError>;
+
+/// The BIG reduction operators this lowering recognises at all. `MAX` and
+/// `MIN` are here so that they are refused BY NAME rather than read as a
+/// subscript, which is what they are today.
+const BIG_OPERATORS: [&str; 4] = ["SUM", "PROD", "MAX", "MIN"];
+
+/// One `i <- lo:hi` clause. `for` and a BIG reduction share the parser for it.
+struct Generator {
+    binder: String,
+    lo: Expr,
+    hi: Expr,
+    inclusive: bool,
+    sequential: bool,
+}
 
 /// A parenthesised type is the type itself, but its span covers the
 /// parentheses, so a diagnostic points at what was written.
@@ -1293,6 +1307,13 @@ impl<'t, 'a> Parser<'t, 'a> {
         matches!(self.peek_kind(), Some(Kind::Ident(name)) if *name == word)
     }
 
+    /// One of the 66 words the lexer keeps out of the identifier namespace,
+    /// matched by spelling. `of` and `with` are punctuation of a construct
+    /// rather than expressions, so they never earn a token of their own.
+    fn at_reserved(&self, word: &str) -> bool {
+        matches!(self.peek_kind(), Some(Kind::Reserved(found)) if *found == word)
+    }
+
     /// An infix word operator, which the juxtaposition run must stop at. `NOT`
     /// is deliberately not one: it is prefix, it DOES start an operand, and
     /// `unary` consumes it there.
@@ -1524,16 +1545,76 @@ impl<'t, 'a> Parser<'t, 'a> {
         }
     }
 
-    /// `for i <- generator do body end`.
+    /// Whether a BIG reduction starts `offset` tokens ahead: one of the four
+    /// operator names, then a `[` GLUED to it.
     ///
-    /// `<-` is NOT a token and does not need to be: it is `Lt` glued to
-    /// `Minus`, decided by span adjacency exactly as `->` already is in
-    /// `type_ref`. Adding a token would change how every file in the corpus
-    /// lexes, for nothing.
-    fn for_expr(&mut self) -> Parsed<Expr> {
+    /// The glue is what separates `SUM[i <- 1:10]` from `SUM [i]`, which is a
+    /// juxtaposition, exactly as `f(x)` is separated from `f (x)`. And `[\` is
+    /// its own token, so `SUM[\Number\]` -- the static-argument form, 58 corpus
+    /// sites -- cannot be mistaken for one of these.
+    fn big_reduction_here(&self, offset: usize) -> bool {
+        let named = matches!(
+            self.peek_ahead(offset),
+            Some(Kind::Ident(name)) if BIG_OPERATORS.contains(name)
+        );
+        named
+            && matches!(self.peek_ahead(offset + 1), Some(Kind::LBracket))
+            && self.glued_left(self.pos + offset + 1)
+    }
+
+    /// `SUM[i <- lo:hi] e`, and `PROD` likewise.
+    ///
+    /// `MAX` and `MIN` are recognised and REFUSED by name. Their identity is
+    /// the type's own extremum rather than a zero bit pattern, and the merge
+    /// would need an operator the accumulator does not carry; guessing zero
+    /// there would make `MAX` over negative numbers quietly wrong, which is the
+    /// class this compiler refuses to join.
+    fn big_reduction(&mut self) -> Parsed<Expr> {
         let start = self.span_here();
-        self.pos += 1; // `for`
+        if self.at(&Kind::Reserved("BIG")) {
+            self.pos += 1;
+        }
+        let (name, name_span) = self.identifier("a reduction operator")?;
+        let op = match name.as_str() {
+            "SUM" => BinOp::Add,
+            "PROD" => BinOp::Mul,
+            other => {
+                return Err(ParseError::BigReductionUnsupported {
+                    span: name_span,
+                    name: other.to_owned(),
+                })
+            }
+        };
+        self.expect(&Kind::LBracket, "`[`")?;
         self.skip_newlines();
+        let Generator {
+            binder,
+            lo,
+            hi,
+            inclusive,
+            sequential,
+        } = self.generator_clause()?;
+        self.skip_newlines();
+        self.expect(&Kind::RBracket, "`]` to close the generator")?;
+        self.skip_newlines();
+        let body = self.expr()?;
+        let span = Span::new(start.start, body.span().end);
+        Ok(Expr::BigReduction {
+            op,
+            binder,
+            lo: Box::new(lo),
+            hi: Box::new(hi),
+            inclusive,
+            sequential,
+            body: Box::new(body),
+            span,
+        })
+    }
+
+    /// `i <- lo:hi`, `i <- lo#n`, and either wrapped in `seq(...)`. ONE
+    /// implementation, because `for` and a BIG reduction accept exactly the
+    /// same generator and a second copy is a second place for them to drift.
+    fn generator_clause(&mut self) -> Parsed<Generator> {
         let (binder, _) = self.identifier("a loop variable")?;
         self.skip_newlines();
         if !self.at_left_arrow() {
@@ -1567,6 +1648,32 @@ impl<'t, 'a> Parser<'t, 'a> {
         if sequential {
             self.expect(&Kind::RParen, "`)` to close `seq(`")?;
         }
+        Ok(Generator {
+            binder,
+            lo,
+            hi,
+            inclusive,
+            sequential,
+        })
+    }
+
+    /// `for i <- generator do body end`.
+    ///
+    /// `<-` is NOT a token and does not need to be: it is `Lt` glued to
+    /// `Minus`, decided by span adjacency exactly as `->` already is in
+    /// `type_ref`. Adding a token would change how every file in the corpus
+    /// lexes, for nothing.
+    fn for_expr(&mut self) -> Parsed<Expr> {
+        let start = self.span_here();
+        self.pos += 1; // `for`
+        self.skip_newlines();
+        let Generator {
+            binder,
+            lo,
+            hi,
+            inclusive,
+            sequential,
+        } = self.generator_clause()?;
         self.skip_newlines();
         self.expect(&Kind::KwDo, "`do`")?;
         let body = self.block_body(&[Kind::KwEnd])?;
@@ -1758,6 +1865,9 @@ impl<'t, 'a> Parser<'t, 'a> {
                 self.pos += 1;
                 Ok(Expr::BoolLit { value: false, span })
             }
+            // Before the plain name arm: `SUM[i <- 1:10] e` is a reduction and
+            // `SUM[i]` is a subscript, and only the guard tells them apart.
+            Kind::Ident(_) if self.big_reduction_here(0) => self.big_reduction(),
             Kind::Ident(name) => {
                 let name = (*name).to_owned();
                 self.pos += 1;
@@ -1813,6 +1923,18 @@ impl<'t, 'a> Parser<'t, 'a> {
             // identifier namespace, so it is intercepted here rather than
             // given a keyword token -- again, no lexer change.
             Kind::Reserved("atomic") => self.atomic_expr(),
+            // The same trade `for` and `atomic` take: intercepted here rather
+            // than given a keyword token, so no file in the corpus lexes
+            // differently. `of`, `with`, `most`, `largest` and `smallest` stay
+            // Reserved and are matched by word below.
+            Kind::Reserved("case") => self.case_expr(),
+            Kind::Reserved("typecase") => self.typecase_expr(),
+            Kind::Reserved("label") => self.label_expr(),
+            Kind::Reserved("exit") => self.exit_expr(),
+            Kind::Reserved("fn") => self.lambda_expr(),
+            // `BIG SUM[i <- 1:10] e`. `BIG` is a reserved word and optional in
+            // the corpus, which writes both spellings.
+            Kind::Reserved("BIG") if self.big_reduction_here(1) => self.big_reduction(),
             Kind::Reserved(word) => Err(ParseError::ReservedWord {
                 span,
                 word: (*word).to_owned(),
@@ -2046,6 +2168,251 @@ impl<'t, 'a> Parser<'t, 'a> {
             value,
             span,
         }))
+    }
+
+    /// The body of one arm. ONE block element, not a block: arms are separated
+    /// by newlines and the next arm starts with an ordinary expression, so a
+    /// run terminated by `end` would swallow every following arm. An assignment
+    /// is not an expression, which is why this is `block_item` and not `expr` --
+    /// `LessThan => t := tt.left` is what the corpus writes. Several statements
+    /// need `do ... end`, which this reaches through `block_item` anyway.
+    fn arm_body(&mut self) -> Parsed<Expr> {
+        let start = self.span_here();
+        let item = self.block_item()?;
+        let end = self.previous_span();
+        Ok(match item {
+            BlockItem::Expr(e) => e,
+            other => Expr::Block {
+                items: vec![other],
+                span: Span::new(start.start, end.end),
+            },
+        })
+    }
+
+    /// `fn (x: T): R => e`, and `fn (x: T) => e`. The parenthesised,
+    /// TYPE-ANNOTATED parameter list only.
+    ///
+    /// The corpus also writes `fn n => e` and `fn(a,b) => e` with no types at
+    /// all, and those are refused by name rather than guessed at: the types
+    /// would have to come from the arrow the lambda lands in, which is a
+    /// checker fact and this is the parser. The diagnostic says so.
+    fn lambda_expr(&mut self) -> Parsed<Expr> {
+        let start = self.span_here();
+        self.pos += 1; // `fn`
+        self.skip_newlines();
+        if !self.at(&Kind::LParen) {
+            return Err(ParseError::LambdaFormUnsupported {
+                span: Span::new(start.start, self.span_here().end),
+                form: "a parameter with no parentheses",
+            });
+        }
+        self.pos += 1;
+        // `params` requires `name: Type` for every parameter, which is exactly
+        // the subset this lowering can mint an object for.
+        let params = self
+            .params()
+            .map_err(|_| ParseError::LambdaFormUnsupported {
+                span: Span::new(start.start, self.span_here().end),
+                form: "a parameter without a written type",
+            })?;
+        self.expect(&Kind::RParen, "`)`")?;
+        let return_type = if self.at(&Kind::Colon) {
+            self.pos += 1;
+            Some(self.type_ref()?)
+        } else {
+            None
+        };
+        self.skip_newlines();
+        self.expect(&Kind::FatArrow, "`=>`")?;
+        self.skip_newlines();
+        let body = self.expr()?;
+        let span = Span::new(start.start, body.span().end);
+        Ok(Expr::Lambda {
+            params,
+            return_type,
+            body: Box::new(body),
+            span,
+        })
+    }
+
+    /// `case subject of guard => e ... else => e end`.
+    ///
+    /// TWO FORMS ARE REFUSED BY NAME rather than mis-parsed. `case most > of`
+    /// is the extremum form and `case z IN of` puts an operator between the
+    /// subject and `of`; both replace the `=` the arms are matched with. The
+    /// extremum word is checked before the subject is parsed, because `most`
+    /// would otherwise be read as a name.
+    fn case_expr(&mut self) -> Parsed<Expr> {
+        let start = self.span_here();
+        self.pos += 1; // `case`
+        self.skip_newlines();
+        if let Some(Kind::Reserved(word @ ("most" | "largest" | "smallest"))) = self.peek_kind() {
+            let form = match *word {
+                "most" => "the extremum form `case most`",
+                "largest" => "the extremum form `case largest`",
+                _ => "the extremum form `case smallest`",
+            };
+            return Err(ParseError::CaseFormUnsupported {
+                span: self.span_here(),
+                form,
+            });
+        }
+        let subject = self.expr()?;
+        self.skip_newlines();
+        if !self.at_reserved("of") {
+            return Err(ParseError::CaseFormUnsupported {
+                span: self.span_here(),
+                form: "an operator between the subject and `of`",
+            });
+        }
+        self.pos += 1;
+
+        let mut arms = Vec::new();
+        let mut else_arm = None;
+        self.skip_newlines();
+        while !self.at(&Kind::KwEnd) && !self.at_eof() {
+            if self.at(&Kind::KwElse) {
+                self.pos += 1;
+                self.expect(&Kind::FatArrow, "`=>`")?;
+                self.skip_newlines();
+                else_arm = Some(Box::new(self.block_body(&[Kind::KwEnd])?));
+                break;
+            }
+            let arm_start = self.span_here();
+            let guard = self.expr()?;
+            self.expect(&Kind::FatArrow, "`=>`")?;
+            self.skip_newlines();
+            let body = self.arm_body()?;
+            let end = self.previous_span();
+            arms.push(CaseArm {
+                guard,
+                body,
+                span: Span::new(arm_start.start, end.end),
+            });
+            self.skip_newlines();
+        }
+        let end = self.expect(&Kind::KwEnd, "`end`")?.span;
+        Ok(Expr::Case {
+            subject: Box::new(subject),
+            arms,
+            else_arm,
+            span: Span::new(start.start, end.end),
+        })
+    }
+
+    /// `typecase subject of T => e ... else => e end`, with `x: T => e` for the
+    /// binder form. The two are told apart by the `:` after an identifier,
+    /// which is the only thing that can follow a binder.
+    fn typecase_expr(&mut self) -> Parsed<Expr> {
+        let start = self.span_here();
+        self.pos += 1; // `typecase`
+        self.skip_newlines();
+        let subject = self.expr()?;
+        self.skip_newlines();
+        if !self.at_reserved("of") {
+            return Err(self.error("`of` after the typecase subject"));
+        }
+        self.pos += 1;
+
+        let mut arms = Vec::new();
+        let mut else_arm = None;
+        self.skip_newlines();
+        while !self.at(&Kind::KwEnd) && !self.at_eof() {
+            if self.at(&Kind::KwElse) {
+                self.pos += 1;
+                self.expect(&Kind::FatArrow, "`=>`")?;
+                self.skip_newlines();
+                else_arm = Some(Box::new(self.block_body(&[Kind::KwEnd])?));
+                break;
+            }
+            let arm_start = self.span_here();
+            let binder = if matches!(self.peek_kind(), Some(Kind::Ident(_)))
+                && matches!(self.peek_ahead(1), Some(Kind::Colon))
+            {
+                let (name, _) = self.identifier("a typecase binder")?;
+                self.pos += 1; // `:`
+                self.skip_newlines();
+                Some(name)
+            } else {
+                None
+            };
+            let ty = self.type_ref()?;
+            self.expect(&Kind::FatArrow, "`=>`")?;
+            self.skip_newlines();
+            let body = self.arm_body()?;
+            let end = self.previous_span();
+            arms.push(TypeCaseArm {
+                binder,
+                ty,
+                body,
+                span: Span::new(arm_start.start, end.end),
+            });
+            self.skip_newlines();
+        }
+        let end = self.expect(&Kind::KwEnd, "`end`")?.span;
+        let Some(else_arm) = else_arm else {
+            return Err(ParseError::UnexpectedToken {
+                span: Span::new(start.start, end.end),
+                expected: "an `else` arm; a typecase needs one because `comprises` \
+                           is not enforced and cannot prove the arms exhaustive",
+                found: "a typecase without one".to_owned(),
+            });
+        };
+        Ok(Expr::TypeCase {
+            subject: Box::new(subject),
+            arms,
+            else_arm,
+            span: Span::new(start.start, end.end),
+        })
+    }
+
+    /// `label L ... end L`. The trailing name is what the corpus writes and it
+    /// has to agree with the opening one, or the reader is looking at a
+    /// different block from the one the compiler is.
+    fn label_expr(&mut self) -> Parsed<Expr> {
+        let start = self.span_here();
+        self.pos += 1; // `label`
+        let (name, _) = self.identifier("a label name")?;
+        let body = self.block_body(&[Kind::KwEnd])?;
+        let end = self.expect(&Kind::KwEnd, "`end`")?.span;
+        let end = match self.peek_kind() {
+            Some(Kind::Ident(trailing)) if *trailing == name => {
+                let span = self.span_here();
+                self.pos += 1;
+                span
+            }
+            Some(Kind::Ident(_)) => return Err(self.error("the same label name after `end`")),
+            _ => end,
+        };
+        Ok(Expr::Label {
+            name,
+            body: Box::new(body),
+            span: Span::new(start.start, end.end),
+        })
+    }
+
+    /// `exit L with e`, `exit L`, and a bare `exit`, which names the innermost
+    /// enclosing label.
+    fn exit_expr(&mut self) -> Parsed<Expr> {
+        let start = self.span_here();
+        self.pos += 1; // `exit`
+        let name = match self.peek_kind() {
+            Some(Kind::Ident(_)) => Some(self.identifier("a label name")?.0),
+            _ => None,
+        };
+        let value = if self.at_reserved("with") {
+            self.pos += 1;
+            self.skip_newlines();
+            Some(Box::new(self.expr()?))
+        } else {
+            None
+        };
+        let end = self.previous_span();
+        Ok(Expr::Exit {
+            name,
+            value,
+            span: Span::new(start.start, end.end),
+        })
     }
 
     /// `atomic <expr>`, for the operand positions `block_item` never reaches.

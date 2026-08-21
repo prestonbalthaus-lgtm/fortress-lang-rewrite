@@ -567,6 +567,20 @@ void fortress_assert_failed(const char *message) {
     fortress_abnormal_exit();
 }
 
+/*
+ * No arm of a `case` matched and the source wrote no `else`. 1.0 throws
+ * MatchFailure here (case-expr.tex); this subset has no exceptions, so it
+ * halts the way every other cannot-continue does -- a diagnostic and exit 1,
+ * never a silent fall through. `fortress_abnormal_exit` is _exit and not exit
+ * for the reason atomic-gate mutation 2 measured: the atexit handler joins a
+ * pool whose worker may be parked on a mutex this thread holds.
+ */
+void fortress_case_failed(void) {
+    fflush(stdout);
+    fputs("fortress: no case arm matched and there is no `else`\n", stderr);
+    fortress_abnormal_exit();
+}
+
 char *to_string_zz32(int v) {
     int n = snprintf(NULL, 0, "%d", v);
     char *out = fortress_alloc((size_t)n + 1);

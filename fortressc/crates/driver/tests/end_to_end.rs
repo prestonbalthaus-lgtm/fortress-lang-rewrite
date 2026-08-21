@@ -38,6 +38,34 @@ fn compile_fixture(name: &str, tag: &str) -> PathBuf {
     out
 }
 
+/// The stderr of a compile that must be refused. Exit 1 and nothing else: 70
+/// is an internal error and 101 is a panic, and both mean the compiler broke
+/// rather than reported.
+fn refusal(name: &str) -> String {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture(name))
+        .arg("--emit-obj")
+        .arg("-o")
+        .arg("/dev/null")
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(out.status.code(), Some(1), "{message}");
+    message
+}
+
+/// The IR the compiler emits for a fixture, as text. `--emit-ir` writes to
+/// stdout and never links.
+fn emitted_ir(name: &str) -> String {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture(name))
+        .arg("--emit-ir")
+        .output()
+        .expect("could not run fortressc");
+    assert!(out.status.success(), "fortressc --emit-ir failed");
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
 fn run(binary: &PathBuf) -> Output {
     Command::new(binary)
         .output()
@@ -1563,4 +1591,393 @@ fn a_generic_header_whose_names_resolve_still_compiles() {
     assert_eq!(out.status.code(), Some(0));
     assert_eq!(String::from_utf8_lossy(&out.stdout), "1\n");
     let _ = std::fs::remove_file(&binary);
+}
+
+// ------------------------------------------------------- mutable fields
+
+/// A mutable field is storage, and the store is DIRECT.
+/// `Specification/basic/expressions/bindings.tex:60-61` says assigning a field
+/// calls the corresponding setter; there is no setter machinery in this
+/// compiler -- accessors are skipped at every member walk -- so calling one
+/// would mean inventing it. The deviation is named on `AssignTarget::Field`.
+///
+/// Three spellings in one program, because they take three different paths:
+/// `c.n := 5` is the dotted target, `c.n += 2` is the compound form that has to
+/// evaluate the receiver ONCE for the load and the store alike, and `n := n + 1`
+/// inside a method is the bare name that resolves to a field of `self`.
+#[test]
+fn a_mutable_field_is_written_by_all_three_spellings() {
+    let binary = compile_fixture("mutablefield.fss", "mutablefield");
+    let out = run(&binary);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "8\n18\nrenamed\n0\n41\n51\n"
+    );
+    assert_eq!(out.status.code(), Some(0));
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// The collector, and this is the first storage in the language a WRITE can put
+/// a pointer into after the block was allocated. An object goes through
+/// `fortress_alloc_scanned`, so the field is scanned and what it names survives
+/// unrelated allocation. Atomic memory is NOT scanned -- `runtime/tests/
+/// array_trace.c` measured that -- so getting an object onto the atomic path
+/// would free the string this field is still holding.
+#[test]
+fn a_pointer_stored_into_a_mutable_field_survives_a_collection() {
+    let binary = compile_fixture("gcfield.fss", "gcfield");
+    let out = run(&binary);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "kept-across-collection-7\n"
+    );
+    assert_eq!(out.status.code(), Some(0));
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// A field is not an assignment target unless it was declared `var`, the same
+/// rule a local binding has.
+#[test]
+fn an_immutable_field_is_not_an_assignment_target() {
+    let message = refusal("badimmutablefield.fss");
+    assert!(message.contains("field `w` is immutable"), "{message}");
+}
+
+/// The M5 soundness argument was "`f(h)` where `h` is an object holding an
+/// array would pass; no field store exists in the language yet, so nothing can
+/// exploit it today". A field store exists now, so these three are what keeps
+/// it true. An array has the `a[binder]` carve-out because an index can name
+/// the slot one iteration owns; a field has no index and no carve-out.
+#[test]
+fn a_parallel_body_may_not_write_a_field_of_anything_it_shares() {
+    let message = refusal("badparallelfield.fss");
+    assert!(
+        message.contains("is declared outside this loop"),
+        "{message}"
+    );
+    assert!(message.contains("a field has no index"), "{message}");
+}
+
+/// The aliasing case, and it needs its own diagnostic: `c` is loop-LOCAL, so
+/// the depth comparison that is the whole of M4's race freedom calls it
+/// private. It was bound from something outside the loop, which is what makes
+/// it shared. A message naming the wrong mechanism sends the reader to the
+/// wrong fix -- the class of defect this project has paid for twice.
+#[test]
+fn a_loop_local_bound_from_shared_storage_is_still_shared() {
+    let message = refusal("badaliasedfield.fss");
+    assert!(
+        message.contains("declared inside this loop but bound from storage outside it"),
+        "{message}"
+    );
+}
+
+/// The array refusal one indirection out. Reachability is computed over the
+/// registry, so an object holding an object holding an array is refused too,
+/// and the diagnostic names the path it found.
+#[test]
+fn an_object_that_reaches_mutable_storage_may_not_be_handed_to_a_call() {
+    let message = refusal("badsharedobject.fss");
+    assert!(
+        message.contains("reaches mutable storage through `b.n`"),
+        "{message}"
+    );
+}
+
+/// What the three refusals leave available, and it is exact rather than
+/// approximately right: `atomic` serialises the write, so the count is the same
+/// at every worker count. Both halves matter -- the second loop writes the
+/// field from a CALLEE, which is the path the reachability refusal covers.
+#[test]
+fn an_atomic_field_write_counts_exactly_at_every_worker_count() {
+    let binary = compile_fixture("atomicfield.fss", "atomicfield");
+    for workers in ["1", "2", "8", "16"] {
+        let out = Command::new(&binary)
+            .env("FORTRESS_WORKERS", workers)
+            .output()
+            .expect("could not run the produced binary");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "100000\n200000\n",
+            "at FORTRESS_WORKERS={workers}"
+        );
+        assert_eq!(out.status.code(), Some(0));
+    }
+    let _ = std::fs::remove_file(&binary);
+}
+
+// -------------------------------------------------- control flow extras
+
+/// SPIKE-CONTROL-FLOW-EXTRAS, all three in one program.
+///
+/// `case` desugars to an if/elif chain over `subject = guard`, so every rule
+/// about which types `=` is defined on is the rule `infix` already enforces.
+/// `typecase` is a switch on the 32-bit tag at offset 0 -- the same load
+/// `dispatch_node` does, because a trait has no run-time representation and an
+/// arm naming one is the set of concrete tags below it. `label`/`exit` is one
+/// merge block with a phi over its incoming edges: a forward jump inside one
+/// function, which is why none of this needs unwinding.
+///
+/// The `area` lines are the tag arithmetic: 2*2*3 = 12 for a Circle, 5*5 = 25
+/// for a Square, and 0 from the `else` for the Dot no arm claims.
+#[test]
+fn case_typecase_and_label_all_produce_the_right_values() {
+    let binary = compile_fixture("controlflow.fss", "controlflow");
+    let out = run(&binary);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "circle 3\nsquare 4\nsomething else\n12\n25\n0\none\ntwo\nmany\n11\n-1\n100\n-1\n"
+    );
+    assert_eq!(out.status.code(), Some(0));
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// The subject of a `case` is evaluated ONCE. Inlining it into every guard runs
+/// its side effects once per arm, which is the defect M3f's chained comparison
+/// already paid for -- three arms here, and exactly one `evaluated`.
+#[test]
+fn a_case_subject_is_evaluated_once_however_many_arms_it_has() {
+    let binary = compile_fixture("caseonce.fss", "caseonce");
+    let out = run(&binary);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "evaluated\nmany\n1\n");
+    assert_eq!(out.status.code(), Some(0));
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// THE ATOMIC-ROLLBACK OBLIGATION, and it is the deliverable rather than the
+/// garnish. `atomic.tex:59-70` has two arms and this construct re-opens the
+/// writes-RETAINED one. Until there is an answer, an `exit` crossing the
+/// boundary is a diagnostic: the branch would skip `fortress_atomic_leave` and
+/// leave one process-wide recursive mutex held for the rest of the process.
+#[test]
+fn an_exit_out_of_an_atomic_region_is_refused_by_name() {
+    let message = refusal("badexitatomic.fss");
+    assert!(message.contains("leaves an `atomic` region"), "{message}");
+    assert!(message.contains("skip the unlock"), "{message}");
+}
+
+/// Every `for` body is OUTLINED into its own function -- `seq(...)` included,
+/// because one lowering serves both -- so an `exit` out of one is a jump
+/// between functions. That is exactly the unwinding this construct was chosen
+/// for not needing, so it is refused instead of lowered.
+#[test]
+fn an_exit_out_of_a_loop_body_is_refused_by_name() {
+    let message = refusal("badexitloop.fss");
+    assert!(message.contains("leaves a `for` body"), "{message}");
+}
+
+/// Arms are matched in order, so a trait arm above an object arm claims every
+/// tag the object has. The later arm can never run.
+#[test]
+fn a_typecase_arm_an_earlier_arm_already_claims_is_refused() {
+    let message = refusal("badtypecasedead.fss");
+    assert!(message.contains("can never run"), "{message}");
+}
+
+/// A label whose exits carry a value and whose body can also run off the bottom
+/// has no value on that edge. Inventing a zero for it would be the silent
+/// wrong answer this compiler refuses to produce.
+#[test]
+fn a_label_that_exits_with_a_value_may_not_also_fall_through() {
+    let message = refusal("badlabelfall.fss");
+    assert!(message.contains("run off the bottom"), "{message}");
+}
+
+/// 1.0 throws `MatchFailure` when no arm matches; this subset has no
+/// exceptions, so the `else` arm is what supplies the value instead. In
+/// statement position a `case` needs none, which is why the rule is about the
+/// value being used rather than about the arms.
+#[test]
+fn a_case_whose_value_is_used_needs_an_else_arm() {
+    let message = refusal("badcaseelse.fss");
+    assert!(message.contains("needs an `else => ...` arm"), "{message}");
+}
+
+/// The `case` fallthrough. 1.0 throws MatchFailure when no arm matches; this
+/// subset has no exceptions, so a `case` used for its effect HALTS with a
+/// diagnostic and exit 1 -- the answer `assert` and the dispatch tree already
+/// give. Doing nothing instead would have been the silent-wrong-behaviour class
+/// this compiler refuses to join, and it is what made
+/// `ProjectFortress/tests/XXXcaseTest.fss` -- a must-FAIL test -- run to exit 0.
+#[test]
+fn a_case_that_matches_nothing_halts_rather_than_falling_through() {
+    let binary = compile_fixture("caseunmatched.fss", "caseunmatched");
+    let out = run(&binary);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "before\n");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("no case arm matched"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.status.code(), Some(1));
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// The hole the first draft of the reachability pass left: it guarded the
+/// arguments of a FUNCTIONAL call and nothing else. A dotted call routes
+/// through `method_call`, and its receiver reaches the receiver's storage by
+/// construction -- that is what a receiver is. Before field mutation no method
+/// could write anything it owned, so receivers were safe by construction and
+/// the guard was not missing, it was unnecessary. It is necessary now.
+#[test]
+fn a_shared_receiver_may_not_take_a_method_call_in_a_parallel_body() {
+    let message = refusal("badsharedmethod.fss");
+    assert!(
+        message.contains("reaches mutable storage through `b.n`"),
+        "{message}"
+    );
+}
+
+/// And the argument half of the same path: `u.hit(b)` never reached the
+/// argument guard either, because that guard sits on the functional branch.
+#[test]
+fn a_shared_object_may_not_be_a_method_argument_in_a_parallel_body() {
+    let message = refusal("badsharedmethodarg.fss");
+    assert!(
+        message.contains("reaches mutable storage through `b.n`"),
+        "{message}"
+    );
+}
+
+// ------------------------------------------------ closure representation
+
+/// SPIKE-CLOSURE-REPRESENTATION, branch (b): a named function used as a value
+/// is lowered to a generated object with an `apply` method, and the call on it
+/// is a dotted method call -- so it enters M3c's whole-program dispatch instead
+/// of needing a representation of its own. Branch (a), a fat pointer, would
+/// cost `Type` its `Copy` and touch every pass; it is only worth pricing if
+/// this fails.
+///
+/// Seven lines, and each is a different way an arrow value travels: through a
+/// parameter, through a parameter handed straight on, out of a RETURN type,
+/// into a local binding, and through a second arrow type in the same program.
+#[test]
+fn a_named_function_travels_as_a_value_through_every_shape() {
+    let binary = compile_fixture("closure.fss", "closure");
+    let out = run(&binary);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "7\n20\n8\n8\n14\n18\nhi!\n"
+    );
+    assert_eq!(out.status.code(), Some(0));
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// THE BRANCH ANSWER, and it needs both halves or it answers nothing. With TWO
+/// implementors of one arrow the registry builds a real table and codegen emits
+/// a `switch` on the tag; with ONE it collapses to a direct call and memoises
+/// no table at all. A spike measured only on the one-implementor shape would
+/// report success without ever building the thing under test -- this project's
+/// own `inferreddispatch` fixture exists for the same reason.
+#[test]
+fn two_closures_of_one_arrow_build_a_real_dispatch_table_and_one_does_not() {
+    let two = emitted_ir("closure.fss");
+    assert!(
+        two.contains("switch i32"),
+        "two implementors must reach a tag switch"
+    );
+    assert!(
+        two.contains("apply$dispatch$Arrow$ZZ32$ZZ32"),
+        "the dispatch function is named after the arrow trait"
+    );
+    let one = emitted_ir("closureone.fss");
+    assert!(
+        !one.contains("switch i32"),
+        "one implementor collapses to a direct call"
+    );
+    assert!(
+        one.contains("inc$fn$Arrow$ZZ32$ZZ32$m$apply"),
+        "and it still goes through the generated object's method"
+    );
+}
+
+/// The signature is checked where the object is minted, because nothing
+/// downstream will: after the pass the generated object is an ordinary
+/// implementor and its `apply` body is an ordinary call to the function.
+#[test]
+fn a_function_value_whose_signature_is_not_the_arrow_is_refused() {
+    let message = refusal("badclosuresig.fss");
+    assert!(
+        message.contains("is used as a value of type `ZZ32 -> ZZ32`"),
+        "{message}"
+    );
+}
+
+// ------------------------------------------------------------ `fn`
+
+/// `fn` on the closure representation: a generated object whose CONSTRUCTOR
+/// PARAMETERS are what the body captures. That is why the body needs no
+/// rewriting at all -- a dotted method reads its receiver's fields by their own
+/// spelling, so a captured `k` resolves to the field `k` exactly as it resolved
+/// to the enclosing local, with no environment struct and no fat pointer.
+///
+/// Eight lines, and the last two are the ones that matter: `adder(100)` is a
+/// closure that OUTLIVES the call that made it, carrying its capture in a
+/// scanned field, and `nested(7)` is a lambda whose body builds another one.
+#[test]
+fn a_lambda_captures_its_enclosing_bindings_and_outlives_them() {
+    let binary = compile_fixture("lambda.fss", "lambda");
+    let out = run(&binary);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "6\n18\n42\n15\n115\nhi-tagged\n105\n12\n"
+    );
+    assert_eq!(out.status.code(), Some(0));
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// A capture becomes a constructor parameter, and a constructor parameter needs
+/// a written type. There is no inference here and no guess: `k = 10` is refused
+/// by name.
+#[test]
+fn a_lambda_may_not_capture_a_name_with_no_written_type() {
+    let message = refusal("badlambdacapture.fss");
+    assert!(message.contains("has no written type"), "{message}");
+}
+
+/// The generated object binds `self` to the CLOSURE, so a captured `self` would
+/// be silently shadowed by it. Refused rather than shadowed.
+#[test]
+fn a_lambda_may_not_capture_self() {
+    let message = refusal("badlambdaself.fss");
+    assert!(message.contains("may not close over `self`"), "{message}");
+}
+
+// -------------------------------------------------- BIG over ranges
+
+/// SPIKE-BIG-OVER-RANGES. `reductions.tex:60-77` desugars `SUM[v <- g] e` into
+/// `do var r = identity; for v <- g do r += e end; r end`, which is EXACTLY the
+/// shape M5's recogniser already turns into a per-worker private accumulator.
+/// No `Reduction` trait, no generator protocol, no closure.
+///
+/// EXACT AT EVERY WORKER COUNT, which is the whole assertion: a reduction that
+/// is right at one worker and wrong at sixteen is the signature this project
+/// has measured twice, and the PROD line is the one that had it -- with the
+/// zero identity and the `+` merge it printed 1.
+#[test]
+fn a_big_reduction_over_a_range_is_exact_at_every_worker_count() {
+    let binary = compile_fixture("bigreduction.fss", "bigreduction");
+    for workers in ["1", "2", "8", "16"] {
+        let out = Command::new(&binary)
+            .env("FORTRESS_WORKERS", workers)
+            .output()
+            .expect("could not run the produced binary");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "55\n30\n55\n100\n120\n120\n10\n499999500000\n",
+            "at FORTRESS_WORKERS={workers}"
+        );
+        assert_eq!(out.status.code(), Some(0));
+    }
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// MAX and MIN are recognised so that they are refused BY NAME rather than read
+/// as a subscript. Their identity is the type's own extremum rather than a zero
+/// bit pattern, and the accumulator carries no operator that could fold them --
+/// guessing zero would make a MAX over negative numbers quietly wrong.
+#[test]
+fn a_big_max_is_refused_by_name_rather_than_read_as_a_subscript() {
+    let message = refusal("badbigmax.fss");
+    assert!(message.contains("identity element"), "{message}");
 }

@@ -54,6 +54,26 @@ pub enum ParseError {
         first: &'static str,
         second: &'static str,
     },
+    /// `case most > of` and `case z IN of`. Both replace `=` as the comparison
+    /// the arms are matched with, and both need an operator table to look the
+    /// replacement up in.
+    CaseFormUnsupported {
+        span: Span,
+        form: &'static str,
+    },
+    /// `fn n => e` and `fn(a, b) => e`. A lambda whose parameters carry no
+    /// written type: they would have to come from the arrow the lambda lands
+    /// in, which is a fact the checker holds and the parser does not.
+    LambdaFormUnsupported {
+        span: Span,
+        form: &'static str,
+    },
+    /// `MAX[i <- a:b] e` and `MIN` likewise. Recognised so that they are
+    /// refused by name rather than read as a subscript.
+    BigReductionUnsupported {
+        span: Span,
+        name: String,
+    },
 }
 
 impl ParseError {
@@ -66,7 +86,10 @@ impl ParseError {
             | Self::StaticParameterKindUnsupported { span, .. }
             | Self::LocalFunctionDeclarationUnsupported { span }
             | Self::WhereClauseFormUnsupported { span, .. }
-            | Self::ChainedOperatorsDiffer { span, .. } => Some(*span),
+            | Self::ChainedOperatorsDiffer { span, .. }
+            | Self::CaseFormUnsupported { span, .. }
+            | Self::LambdaFormUnsupported { span, .. }
+            | Self::BigReductionUnsupported { span, .. } => Some(*span),
             Self::UnexpectedEndOfInput { .. } => None,
         }
     }
@@ -105,6 +128,26 @@ impl core::fmt::Display for ParseError {
                 f,
                 "a chain mixes `{first}` with `{second}`; \
                  chained ordering operators must have the same sense"
+            ),
+            Self::LambdaFormUnsupported { span, form } => write!(
+                f,
+                "{}..{}: `fn` with {form} is not implemented; write \
+                 `fn (x: T): R => ...` with every parameter typed",
+                span.start, span.end
+            ),
+            Self::BigReductionUnsupported { span, name } => write!(
+                f,
+                "{}..{}: `{name}` over a range needs an identity element that \
+                 is the type's own extremum rather than zero, and a merge \
+                 operator the accumulator does not carry; only `SUM` and \
+                 `PROD` are lowered",
+                span.start, span.end
+            ),
+            Self::CaseFormUnsupported { span, form } => write!(
+                f,
+                "{}..{}: {form} replaces the `=` a case arm is matched with, \
+                 and there is no operator table to look the replacement up in",
+                span.start, span.end
             ),
         }
     }

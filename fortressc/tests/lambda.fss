@@ -1,0 +1,44 @@
+component lambda
+
+export Executable
+
+(* `fn` on the representation the closure spike built: a generated object whose
+   CONSTRUCTOR PARAMETERS are what the body captures. That choice is why the
+   body needs no rewriting -- a dotted method reads its receiver's fields by
+   their own spelling, so `k` inside `apply` resolves to the field `k` exactly
+   as it resolved to the enclosing local. No environment struct, no fat
+   pointer, and nothing in codegen that did not already exist. *)
+
+apply1(f: ZZ32 -> ZZ32, x: ZZ32): ZZ32 = f(x)
+twice(f: ZZ32 -> ZZ32, x: ZZ32): ZZ32 = f(f(x))
+applyS(f: String -> String, s: String): String = f(s)
+
+(* A closure that OUTLIVES the call that made it, with its capture. The capture
+   is a field of a scanned block, so the collector sees it. *)
+adder(k: ZZ32): ZZ32 -> ZZ32 = fn (x: ZZ32): ZZ32 => x + k
+
+(* A lambda whose body builds another one. The inner is lowered first, so by
+   the time the outer's captures are counted the inner is already a
+   construction and `k` is one of ITS free names. *)
+nested(k: ZZ32): ZZ32 -> ZZ32 = fn (x: ZZ32): ZZ32 => apply1(fn (y: ZZ32): ZZ32 => y + k, x)
+
+run(): () = do
+    println(apply1(fn (x: ZZ32): ZZ32 => x + 1, 5))
+    println(twice(fn (x: ZZ32): ZZ32 => x 3, 2))
+
+    (* The return type is not written. The slot's arrow supplies it, which is
+       the only other source; there is no inference. *)
+    println(apply1(fn (x: ZZ32) => x + 1, 41))
+
+    k: ZZ32 = 10
+    j: ZZ32 = 100
+    println(apply1(fn (x: ZZ32): ZZ32 => x + k, 5))
+    println(apply1(fn (x: ZZ32): ZZ32 => x + k + j, 5))
+
+    tag: String = "-tagged"
+    println(applyS(fn (s: String): String => s tag, "hi"))
+
+    println(apply1(adder(100), 5))
+    println(apply1(nested(7), 5))
+end
+end

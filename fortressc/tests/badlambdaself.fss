@@ -1,0 +1,14 @@
+component badlambdaself
+
+export Executable
+
+(* The generated object binds `self` to the CLOSURE, so a captured `self` would
+   be silently shadowed by it rather than refused. *)
+apply1(f: ZZ32 -> ZZ32, x: ZZ32): ZZ32 = f(x)
+
+object O(n: ZZ32)
+    go(): ZZ32 = apply1(fn (x: ZZ32): ZZ32 => x + self.n, 5)
+end
+
+run(): () = println(O(3).go())
+end

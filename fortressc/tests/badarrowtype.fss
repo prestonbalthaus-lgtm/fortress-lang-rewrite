@@ -1,7 +1,19 @@
 component badarrowtype
+
 export Executable
 
-f(): ZZ32 -> String = 1
+(* An arrow type this subset does not implement.
+   SPIKE-CLOSURE-REPRESENTATION made `ZZ32 -> String` a real type -- it lifts to
+   a generated trait -- so the file had to move to an arrow that is still out of
+   the subset, or it would have stopped testing anything. A TUPLE DOMAIN is the
+   one that stays: `apply` would need a parameter this subset cannot store, so
+   `liftable` leaves the arrow exactly as it was and `Registry::resolve` gives
+   it the refusal it always had.
+
+   The liftable case is covered by fortressc/tests/closure.fss and by
+   `an_arrow_over_liftable_types_becomes_a_trait_and_the_rest_stay_refused` in
+   crates/types/tests/types.rs, which asserts all four forms in one place. *)
+f(g: (ZZ32, ZZ32) -> String): ZZ32 = 1
 
 run(): () = ()
 

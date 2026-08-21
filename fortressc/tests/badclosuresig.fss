@@ -1,0 +1,14 @@
+component badclosuresig
+
+export Executable
+
+(* The arrow says ZZ32 -> ZZ32 and the only `inc` is ZZ64 -> ZZ64. Nothing
+   downstream would catch it: after this pass the generated object is an
+   ordinary implementor and its `apply` body is an ordinary call, so the
+   signature has to be checked where the object is minted. *)
+inc(x: ZZ64): ZZ64 = x + 1
+
+apply1(f: ZZ32 -> ZZ32, x: ZZ32): ZZ32 = f(x)
+
+run(): () = println(apply1(inc, 5))
+end

@@ -11,6 +11,7 @@
 //! Everything leaves here resolved to one concrete [`Target`], so codegen never
 //! asks a type question.
 
+mod closure;
 mod error;
 mod mono;
 mod registry;
@@ -22,16 +23,16 @@ pub use error::TypeError;
 pub use types::{
     intern, ArithOp, AssignTarget, CompareOp, DispatchFn, DispatchNode, Elem, MpiOp, Target, Type,
     TypedBlockItem, TypedCapture, TypedComponent, TypedExpr, TypedExprKind, TypedField, TypedFn,
-    TypedObject, TypedParam, TypedReduction, ARRAY_ALLOC, ARRAY_LENGTH, ARRAY_SLOT, ASSERT_FAILED,
-    ATOMIC_ENTER, ATOMIC_LEAVE, DISPATCH_FAILED, ENV_ALLOC, FIRST_TAG, OBJECT_ALLOC, PARALLEL_FOR,
-    REDUCTION_ALLOC, REDUCTION_WORKERS,
+    TypedObject, TypedParam, TypedReduction, TypedTypeCaseArm, ARRAY_ALLOC, ARRAY_LENGTH,
+    ARRAY_SLOT, ASSERT_FAILED, ATOMIC_ENTER, ATOMIC_LEAVE, CASE_FAILED, DISPATCH_FAILED, ENV_ALLOC,
+    FIRST_TAG, OBJECT_ALLOC, PARALLEL_FOR, REDUCTION_ALLOC, REDUCTION_WORKERS,
 };
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use fortress_ast::{
-    Assign, BinOp, BlockItem, Component, Decl, Expr, FieldDecl, FnDecl, Member, MethodDecl,
-    ObjectDecl, Span, TypeRef, UnOp,
+    Assign, BinOp, BlockItem, CaseArm, Component, Decl, Expr, FieldDecl, FnDecl, Member,
+    MethodDecl, ObjectDecl, Span, TypeCaseArm, TypeRef, UnOp,
 };
 
 use registry::{close_traits, ObjectInfo, Registry, TraitInfo};
@@ -51,6 +52,11 @@ type Checked<T> = Result<T, TypeError>;
 /// to be closed before that happens.
 pub fn check(component: &Component) -> Checked<TypedComponent> {
     let ground = mono::expand(component)?;
+    // Closure lowering sits BETWEEN the two for the same reason expansion sits
+    // before the checker: it appends object declarations, and tags freeze in
+    // `Checker::new`. It runs after expansion so it never meets a static
+    // parameter -- everything it sees is already ground.
+    let ground = closure::lower(&ground)?;
     Checker::new(&ground)?.run(&ground)
 }
 
@@ -87,6 +93,7 @@ struct SelfCtx {
 }
 
 /// One parallel loop being checked.
+#[derive(Clone)]
 struct LoopCtx {
     binder: String,
     /// A `seq(...)` loop runs in order on one thread, so the scope boundary
@@ -101,18 +108,45 @@ struct LoopCtx {
     /// WRITES would never reach the environment at all -- and codegen would
     /// meet an assignment to a name it has no binding for.
     assigned: BTreeMap<String, AssignRecord>,
+    /// Loop-LOCAL names that nevertheless name shared storage, because their
+    /// initializer read something from below the floor. `b = shared` makes `b`
+    /// loop-local by scope and shared by reference, and the depth comparison
+    /// alone cannot tell the two apart. A reference type only: copying a
+    /// scalar out of a shared name copies its value.
+    tainted: BTreeSet<String>,
+}
+
+/// One `label` open around the walk. The two depths are what an `exit` is
+/// checked against: crossing either of them is a branch the lowering cannot
+/// make, and each has its own diagnostic.
+struct LabelCtx {
+    name: String,
+    /// Fixed by the first `exit` carrying a value, or by the context the label
+    /// itself was checked in.
+    ty: Option<Type>,
+    /// `self.atomic_depth` where the label opened. An exit from deeper inside
+    /// an `atomic` would branch past `fortress_atomic_leave`.
+    atomic_depth: usize,
+    /// `self.loop_ctx.len()` where the label opened. Every `for` body is
+    /// outlined, so an exit from deeper inside one is a cross-function jump.
+    loop_depth: usize,
 }
 
 /// What the body did to one escaping name, collected across the whole walk.
 /// The verdict cannot be reached at the assignment: reduction.tex:35 asks
 /// whether the name is otherwise READ, and the read may not have happened yet.
+#[derive(Clone)]
 struct AssignRecord {
     ty: Type,
     /// The first assignment, which is what a failed recogniser points at.
     span: Span,
-    /// Every assignment to this name was `+=` or `-=` -- reduction.tex:30-31.
-    /// One `l := e` disqualifies it for good.
+    /// Every assignment to this name was compound -- reduction.tex:30-31. One
+    /// `l := e` disqualifies it for good.
     only_compound: bool,
+    /// What the partials must be folded with. `+=` and `-=` agree on `Add`;
+    /// `*=` is `Mul`. `None` once two assignments disagree, which disqualifies
+    /// the name: one accumulator cannot be both.
+    merge: Option<ArithOp>,
     /// Every assignment to this name was inside an `atomic`. That is the other
     /// carve-out, and it is the one that actually takes the lock.
     all_atomic: bool,
@@ -188,6 +222,12 @@ struct Checker {
     object_init: bool,
     /// Numbers the outlined loop bodies so their symbols are unique.
     loops: usize,
+    /// Numbers the bindings `case` desugars its subject into. `$` cannot be
+    /// lexed, so no source name can collide with one.
+    cases: usize,
+    /// The labels open around the walk, innermost last. A bare `exit` names the
+    /// last of them.
+    labels: Vec<LabelCtx>,
     /// How deep inside `atomic` the walk is. A parallel body MAY assign to an
     /// escaping name inside one: the lock serialises the write, and the
     /// capture becomes a by-reference one so the write lands on real storage.
@@ -259,6 +299,47 @@ fn strictly_below(a: &[Type], b: &[Type], registry: &Registry) -> bool {
 
 fn more_specific(a: &Signature, b: &Signature, registry: &Registry) -> bool {
     strictly_below(&a.params, &b.params, registry)
+}
+
+/// Whether an abstract member may keep a type that did not resolve.
+///
+/// THE LINE IS BETWEEN A TYPE THIS COMPILER CANNOT REPRESENT AND A TYPE THAT
+/// DOES NOT EXIST. The first is our limitation: `ProjectFortress/tests/
+/// tupleTypeParam2.fss` instantiates `A[\(ZZ32, ZZ32)\]`, so the instance's
+/// abstract `f(x: (ZZ32, ZZ32))` cannot be typed here -- and nothing calls it,
+/// because the object that extends it declares its own concrete `f`. Refusing
+/// that would refuse a program that runs and prints the right answer.
+///
+/// The second is the PROGRAM's error, and it used to be accepted in silence.
+/// An abstract member is the one place in this compiler where a type is written
+/// and read by nothing, so `m(x: Foo): ZZ32` with no `Foo` compiled to exit 0 --
+/// which is how the closure pass came to need its own `liftable` guard against
+/// exactly this. It is a diagnostic now.
+///
+/// The original comment here said the concession was for a generic trait's own
+/// static parameter. That reason is dead: `mono::emit` never emits a template,
+/// only its instances, so a bare static parameter cannot reach this pass at all.
+/// What the per-worker partials of a compound assignment are folded with.
+///
+/// `+=` and `-=` share `Add` on purpose, and it is not a simplification: `-=`
+/// accumulates `Identity - e` into a slot that starts at the identity, so the
+/// group inverse is ALREADY INSIDE the partial. Folding with `Sub` would take
+/// it back out. `*=` is its own, because 0 is not the identity for it and the
+/// sum of partial products is not a product.
+const fn merge_op(op: ArithOp) -> ArithOp {
+    match op {
+        ArithOp::Add | ArithOp::Sub => ArithOp::Add,
+        ArithOp::Mul => ArithOp::Mul,
+        ArithOp::Div => ArithOp::Div,
+    }
+}
+
+fn excusable(e: &TypeError, abstract_: bool) -> bool {
+    abstract_
+        && matches!(
+            e,
+            TypeError::TypeNotImplemented { .. } | TypeError::UnsupportedElementType { .. }
+        )
 }
 
 fn members_of(decl: &Decl) -> &[Member] {
@@ -436,6 +517,8 @@ impl Checker {
             loop_ctx: Vec::new(),
             atomic_depth: 0,
             loops: 0,
+            cases: 0,
+            labels: Vec::new(),
         };
         let counts = overload_counts(component);
         checker.build_hierarchy(component)?;
@@ -514,16 +597,11 @@ impl Checker {
             fields.push(TypedField {
                 name: p.name.clone(),
                 ty: self.storable(&p.ty, "a field")?,
+                mutable: false,
             });
         }
         for member in &o.members {
             let Member::Field(f) = member else { continue };
-            if f.mutable {
-                return Err(TypeError::MutableFieldUnsupported {
-                    span: f.span,
-                    name: f.name.clone(),
-                });
-            }
             if f.init.is_none() {
                 return Err(TypeError::FieldNeedsInitializer {
                     span: f.span,
@@ -533,6 +611,7 @@ impl Checker {
             fields.push(TypedField {
                 name: f.name.clone(),
                 ty: self.storable(&f.ty, "a field")?,
+                mutable: f.mutable,
             });
         }
         for (index, field) in fields.iter().enumerate() {
@@ -612,7 +691,7 @@ impl Checker {
                 // program for a signature nothing calls.
                 let abstract_ = m.body.is_none();
                 let mut params = vec![receiver];
-                let mut unresolved = false;
+                let mut unrepresentable = false;
                 for p in &m.params {
                     // `Self` stands for the declaring type here exactly as it
                     // does in a functional method. The two kinds disagreeing
@@ -620,20 +699,20 @@ impl Checker {
                     let written = substitute_self(&p.ty, owner);
                     match self.storable(&written, "a parameter") {
                         Ok(ty) => params.push(ty),
-                        Err(_) if abstract_ => {
-                            unresolved = true;
+                        Err(e) if excusable(&e, abstract_) => {
+                            unrepresentable = true;
                             break;
                         }
                         Err(e) => return Err(e),
                     }
                 }
-                if unresolved {
+                if unrepresentable {
                     continue;
                 }
                 let returns = match &m.return_type {
                     Some(t) => match self.registry.resolve(&substitute_self(t, owner)) {
                         Ok(ty) => ty,
-                        Err(_) if abstract_ => continue,
+                        Err(e) if excusable(&e, abstract_) => continue,
                         Err(e) => return Err(e),
                     },
                     None => Type::Void,
@@ -705,7 +784,7 @@ impl Checker {
                 // refusing a program for a signature nothing calls.
                 let abstract_ = m.body.is_none();
                 let mut params = Vec::with_capacity(m.params.len());
-                let mut unresolved = false;
+                let mut unrepresentable = false;
                 // The parser gives the `self` parameter the written type
                 // `Self`, so it needs no case of its own: one substitution
                 // covers the receiver, `x: Self` in another position, and the
@@ -714,25 +793,22 @@ impl Checker {
                     let written = substitute_self(&p.ty, owner);
                     match self.storable(&written, "a parameter") {
                         Ok(ty) => params.push(ty),
-                        Err(_) if abstract_ => {
-                            unresolved = true;
+                        Err(e) if excusable(&e, abstract_) => {
+                            unrepresentable = true;
                             break;
                         }
                         Err(e) => return Err(e),
                     }
                 }
-                if unresolved {
+                if unrepresentable {
                     continue;
                 }
                 let returns = match &m.return_type {
-                    Some(t) => {
-                        let written = substitute_self(t, owner);
-                        match self.registry.resolve(&written) {
-                            Ok(ty) => ty,
-                            Err(_) if abstract_ => continue,
-                            Err(e) => return Err(e),
-                        }
-                    }
+                    Some(t) => match self.registry.resolve(&substitute_self(t, owner)) {
+                        Ok(ty) => ty,
+                        Err(e) if excusable(&e, abstract_) => continue,
+                        Err(e) => return Err(e),
+                    },
                     None => Type::Void,
                 };
                 if self
@@ -1597,7 +1673,13 @@ impl Checker {
     /// resolves below. The counterpart to `lookup_capturing`, and it exists
     /// because `assign` reads its target with `lookup`, which records nothing:
     /// a name the body only writes has no crossing READ to notice.
-    fn record_assignment(&mut self, name: &str, compound: bool, in_atomic: bool, span: Span) {
+    fn record_assignment(
+        &mut self,
+        name: &str,
+        compound: Option<ArithOp>,
+        in_atomic: bool,
+        span: Span,
+    ) {
         let Some(depth) = self.depth_of(name) else {
             return;
         };
@@ -1612,9 +1694,16 @@ impl Checker {
                 ty,
                 span,
                 only_compound: true,
+                merge: compound,
                 all_atomic: true,
             });
-            record.only_compound &= compound;
+            record.only_compound &= compound.is_some();
+            // Two assignments that disagree about the operator cannot share one
+            // accumulator, and folding a product with `+` is the silent wrong
+            // answer this carries.
+            if record.merge != compound {
+                record.merge = None;
+            }
             record.all_atomic &= in_atomic;
         }
     }
@@ -1730,6 +1819,48 @@ impl Checker {
                 expected,
             ),
             Expr::Atomic { body, span } => self.atomic(body, *span, expected),
+            Expr::Case {
+                subject,
+                arms,
+                else_arm,
+                span,
+            } => self.case_expr(subject, arms, else_arm.as_deref(), *span, expected),
+            Expr::TypeCase {
+                subject,
+                arms,
+                else_arm,
+                span,
+            } => self.typecase_expr(subject, arms, else_arm, *span, expected),
+            Expr::Label { name, body, span } => self.label_expr(name, body, *span, expected),
+            Expr::BigReduction {
+                op,
+                binder,
+                lo,
+                hi,
+                inclusive,
+                sequential,
+                body,
+                span,
+            } => self.big_reduction(
+                *op,
+                binder,
+                lo,
+                hi,
+                *inclusive,
+                *sequential,
+                body,
+                *span,
+                expected,
+            ),
+            // Unreachable: closure lowering runs before the checker and either
+            // rewrites a lambda into a construction or refuses it by name.
+            Expr::Lambda { span, .. } => Err(TypeError::LambdaUnsupported {
+                span: *span,
+                form: "a `fn` in this position",
+            }),
+            Expr::Exit { name, value, span } => {
+                self.exit_expr(name.as_deref(), value.as_deref(), *span, expected)
+            }
             // Unreachable: expansion rewrites every instantiation to a plain
             // name before the checker is constructed.
             Expr::Instantiate { callee, span, .. } => Err(TypeError::NotGeneric {
@@ -2001,6 +2132,7 @@ impl Checker {
             floor: self.scopes.len() - 1,
             captures: BTreeMap::new(),
             assigned: BTreeMap::new(),
+            tainted: BTreeSet::new(),
         });
 
         let checked = self.expr(body, Some(Type::Void));
@@ -2039,12 +2171,14 @@ impl Checker {
         for (name, record) in ctx.assigned {
             let recognised = !sequential
                 && record.only_compound
+                && record.merge.is_some()
                 && !ctx.captures.contains_key(&name)
                 && Self::reducible(record.ty);
-            if recognised {
+            if let (true, Some(op)) = (recognised, record.merge) {
                 reductions.push(TypedReduction {
                     name,
                     ty: record.ty,
+                    op,
                 });
                 continue;
             }
@@ -2145,6 +2279,11 @@ impl Checker {
         let arith = match op {
             BinOp::Add => ArithOp::Add,
             BinOp::Sub => ArithOp::Sub,
+            // Reachable only from a `PROD` reduction: `*=` is not a compound
+            // operator this parser reads, deliberately, because the corpus
+            // writes none. The accumulator carries its own operator, so the
+            // merge folds with `*` and the identity is 1.
+            BinOp::Mul => ArithOp::Mul,
             _ => {
                 return Err(TypeError::CompoundOperatorUnsupported {
                     span,
@@ -2192,6 +2331,118 @@ impl Checker {
         matches!(self.depth_of(name), Some(depth) if depth < floor)
     }
 
+    /// The same question once ALIASING is possible. `escapes_loop` answers it
+    /// by scope depth, which was exact while the only way to name shared
+    /// storage was to be declared outside the loop. A binding whose value came
+    /// from outside is loop-local and shared at once, so it is carried
+    /// separately and asked about here.
+    fn shared_in_loop(&self, name: &str, floor: usize) -> bool {
+        self.escapes_loop(name, floor)
+            || self
+                .parallel_loop()
+                .is_some_and(|c| c.tainted.contains(name))
+    }
+
+    /// Whether an initializer reads anything shared. Conservative and
+    /// syntactic: any mention anywhere in the expression taints the binding,
+    /// because `shared.child` and `pick(shared)` are both aliases of it.
+    fn reads_shared(&self, e: &Expr, floor: usize) -> bool {
+        match e {
+            Expr::Var { name, .. } => self.shared_in_loop(name, floor),
+            Expr::Unit { .. }
+            | Expr::IntLit { .. }
+            | Expr::FloatLit { .. }
+            | Expr::StrLit { .. }
+            | Expr::BoolLit { .. } => false,
+            Expr::Tuple { items, .. } | Expr::Juxt { items, .. } | Expr::ArrayLit { items, .. } => {
+                items.iter().any(|i| self.reads_shared(i, floor))
+            }
+            Expr::Infix { lhs, rhs, .. } => {
+                self.reads_shared(lhs, floor) || self.reads_shared(rhs, floor)
+            }
+            Expr::Prefix { operand, .. } => self.reads_shared(operand, floor),
+            Expr::Call { callee, args, .. } => {
+                self.reads_shared(callee, floor) || args.iter().any(|a| self.reads_shared(a, floor))
+            }
+            Expr::If {
+                cond,
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                self.reads_shared(cond, floor)
+                    || self.reads_shared(then_branch, floor)
+                    || else_branch
+                        .as_deref()
+                        .is_some_and(|e| self.reads_shared(e, floor))
+            }
+            Expr::Block { items, .. } => items.iter().any(|item| match item {
+                BlockItem::Binding(b) => self.reads_shared(&b.value, floor),
+                BlockItem::Assign(a) => self.reads_shared(&a.value, floor),
+                BlockItem::Expr(e) => self.reads_shared(e, floor),
+            }),
+            Expr::Index { base, index, .. } => {
+                self.reads_shared(base, floor) || self.reads_shared(index, floor)
+            }
+            Expr::While { cond, body, .. } => {
+                self.reads_shared(cond, floor) || self.reads_shared(body, floor)
+            }
+            Expr::Field { base, .. } => self.reads_shared(base, floor),
+            Expr::For { lo, hi, body, .. } => {
+                self.reads_shared(lo, floor)
+                    || self.reads_shared(hi, floor)
+                    || self.reads_shared(body, floor)
+            }
+            Expr::Instantiate { callee, .. } => self.reads_shared(callee, floor),
+            Expr::Atomic { body, .. } => self.reads_shared(body, floor),
+            Expr::Case {
+                subject,
+                arms,
+                else_arm,
+                ..
+            } => {
+                self.reads_shared(subject, floor)
+                    || arms.iter().any(|a| {
+                        self.reads_shared(&a.guard, floor) || self.reads_shared(&a.body, floor)
+                    })
+                    || else_arm
+                        .as_deref()
+                        .is_some_and(|e| self.reads_shared(e, floor))
+            }
+            Expr::TypeCase {
+                subject,
+                arms,
+                else_arm,
+                ..
+            } => {
+                self.reads_shared(subject, floor)
+                    || arms.iter().any(|a| self.reads_shared(&a.body, floor))
+                    || self.reads_shared(else_arm, floor)
+            }
+            Expr::Label { body, .. } => self.reads_shared(body, floor),
+            Expr::Lambda { body, .. } => self.reads_shared(body, floor),
+            Expr::BigReduction { lo, hi, body, .. } => {
+                self.reads_shared(lo, floor)
+                    || self.reads_shared(hi, floor)
+                    || self.reads_shared(body, floor)
+            }
+            Expr::Exit { value, .. } => value
+                .as_deref()
+                .is_some_and(|e| self.reads_shared(e, floor)),
+        }
+    }
+
+    /// The name an assignment target is rooted at. `o.left.count := 1` is
+    /// rooted at `o`; a target rooted at no name at all -- the result of a
+    /// call -- has no name to ask about and is treated as shared.
+    fn target_root(target: &Expr) -> Option<(&str, Span)> {
+        match target {
+            Expr::Var { name, span } => Some((name, *span)),
+            Expr::Field { base, .. } | Expr::Index { base, .. } => Self::target_root(base),
+            _ => None,
+        }
+    }
+
     fn assign(&mut self, a: &Assign) -> Checked<TypedBlockItem> {
         let in_atomic = self.atomic_depth > 0;
         // Before anything can refuse it: the crossing has to be on the record
@@ -2199,7 +2450,17 @@ impl Checker {
         // exactly these two maps and a write-only name appears in neither
         // otherwise.
         if let Expr::Var { name, .. } = &a.target {
-            self.record_assignment(name, a.op.is_some(), in_atomic, a.span);
+            // The MERGE operator, not the assignment's own: `-=` accumulates
+            // `Identity - e`, so the group inverse is already inside the
+            // partial and the fold is `+`. Recording `Sub` here folds it back
+            // out -- 1000 - (-100000) = 101000 where -99000 belongs, which is
+            // what tools/atomic-gate.sh's two-reduction case measures.
+            let compound = self
+                .lookup(name)
+                .and_then(|local| self.compound_op(a.op, local.ty, a.span).ok())
+                .flatten()
+                .map(merge_op);
+            self.record_assignment(name, compound, in_atomic, a.span);
         }
         // THE scope boundary, and it is still one comparison. Everything M4
         // claims about data races reduces to this: a parallel body may only
@@ -2223,13 +2484,35 @@ impl Checker {
                         });
                     }
                 }
+                // A field has no index, so there is no `a[binder]` carve-out
+                // to make two iterations disjoint: a shared receiver is
+                // refused outright. This is the rule that keeps M5's soundness
+                // argument true now that a field store exists -- the argument
+                // was "no field store exists in the language yet".
+                Expr::Field { span, .. } if !in_atomic => {
+                    let root = Self::target_root(&a.target).map(|(n, _)| n.to_owned());
+                    let shared = root
+                        .as_deref()
+                        .is_none_or(|name| self.shared_in_loop(name, floor));
+                    if shared {
+                        let aliased = root
+                            .as_deref()
+                            .is_some_and(|name| !self.escapes_loop(name, floor));
+                        return Err(TypeError::ParallelFieldEscape {
+                            span: *span,
+                            name: root.unwrap_or_default(),
+                            aliased,
+                        });
+                    }
+                }
                 Expr::Index { base, index, span } if !in_atomic => {
                     // An array the body created ITSELF is private to this
                     // iteration, so any index into it is safe. Only a shared
-                    // array -- one whose name resolves below the loop -- has to
-                    // be written at the slot this iteration owns.
+                    // array -- one whose name resolves below the loop, or one
+                    // bound from such a name -- has to be written at the slot
+                    // this iteration owns.
                     let shared = match base.as_ref() {
-                        Expr::Var { name, .. } => self.escapes_loop(name, floor),
+                        Expr::Var { name, .. } => self.shared_in_loop(name, floor),
                         _ => true,
                     };
                     let names_binder = matches!(
@@ -2250,6 +2533,14 @@ impl Checker {
         }
         match &a.target {
             Expr::Var { name, span } => {
+                // Inside a method a bare name may be one of the receiver's
+                // fields, exactly as it is when it is READ. Locals win, so
+                // this is only reached when nothing else binds the name.
+                if self.lookup(name).is_none() {
+                    if let Some(target) = self.self_field_target(name, *span)? {
+                        return self.field_assignment(target, a, *span);
+                    }
+                }
                 let local = self
                     .lookup(name)
                     .ok_or_else(|| TypeError::AssignToUndeclared {
@@ -2298,7 +2589,110 @@ impl Checker {
                     span: a.span,
                 })
             }
+            Expr::Field { base, name, span } => {
+                let base = self.expr(base, None)?;
+                let Type::Object(object) = base.ty else {
+                    return Err(TypeError::UnknownField {
+                        span: *span,
+                        found: base.ty,
+                        name: name.clone(),
+                    });
+                };
+                let Some((index, field)) = self.registry.field_decl(object, name) else {
+                    return Err(TypeError::UnknownField {
+                        span: *span,
+                        found: base.ty,
+                        name: name.clone(),
+                    });
+                };
+                let (ty, mutable) = (field.ty, field.mutable);
+                if !mutable {
+                    return Err(TypeError::FieldIsImmutable {
+                        span: *span,
+                        name: name.clone(),
+                    });
+                }
+                self.field_assignment(
+                    AssignTarget::Field {
+                        base: Box::new(base),
+                        index,
+                        ty,
+                    },
+                    a,
+                    *span,
+                )
+            }
             other => Err(TypeError::InvalidAssignTarget { span: other.span() }),
+        }
+    }
+
+    /// A bare name that is a mutable field of the receiver, as an assignment
+    /// target. `None` when the name is not a field at all; the immutable case
+    /// is an error rather than a miss, so that `w := 1` on a constructor
+    /// parameter says what is wrong instead of "not declared".
+    fn self_field_target(&mut self, name: &str, span: Span) -> Checked<Option<AssignTarget>> {
+        let Some(ctx) = &self.self_ctx else {
+            return Ok(None);
+        };
+        let Some((index, field)) = ctx.fields.iter().enumerate().find(|(_, f)| f.name == name)
+        else {
+            return Ok(None);
+        };
+        if !field.mutable {
+            return Err(TypeError::FieldIsImmutable {
+                span,
+                name: name.to_owned(),
+            });
+        }
+        let (ty, receiver) = (field.ty, ctx.ty);
+        let index = u32::try_from(index).unwrap_or(u32::MAX);
+        Ok(Some(AssignTarget::Field {
+            base: Box::new(TypedExpr {
+                kind: TypedExprKind::Var("self".to_owned()),
+                ty: receiver,
+                span,
+            }),
+            index,
+            ty,
+        }))
+    }
+
+    /// The half both field spellings share: the compound operator and the
+    /// value, checked against the field's own type.
+    fn field_assignment(
+        &mut self,
+        target: AssignTarget,
+        a: &Assign,
+        span: Span,
+    ) -> Checked<TypedBlockItem> {
+        let AssignTarget::Field { ty, .. } = target else {
+            return Err(TypeError::InvalidAssignTarget { span });
+        };
+        let op = self.compound_op(a.op, ty, span)?;
+        let value = self.expr(&a.value, Some(ty))?;
+        Ok(TypedBlockItem::Assign {
+            target,
+            op,
+            value,
+            span: a.span,
+        })
+    }
+
+    /// A loop-local binding that names storage from outside the loop. Only a
+    /// reference type can: a scalar binding is a copy, and writing it cannot
+    /// reach anything another iteration sees.
+    fn taint_if_aliased(&mut self, name: &str, ty: Type, value: &Expr) {
+        let Some(floor) = self.parallel_loop().map(|c| c.floor) else {
+            return;
+        };
+        if !ty.is_reference() && !matches!(ty, Type::Array(_)) {
+            return;
+        }
+        if !self.reads_shared(value, floor) {
+            return;
+        }
+        if let Some(ctx) = self.loop_ctx.iter_mut().rev().find(|c| c.parallel) {
+            ctx.tainted.insert(name.to_owned());
         }
     }
 
@@ -2914,6 +3308,14 @@ impl Checker {
         } = callee
         {
             self.refuse_keyword_argument(args)?;
+            // The RECEIVER is an argument too, and the one this compiler used
+            // to be able to trust: before a field store existed, a method
+            // could not write anything its receiver owned. `b.bump()` where
+            // `bump` writes `self.n` is the same race as `bump(b)`, and the
+            // method body is checked in the method's own context, so the
+            // loop's lexical rules never see the write.
+            self.refuse_shared_receiver(base)?;
+            self.refuse_shared_array_argument(args)?;
             return self.method_call(base, name, args, span, *dot_span, expected);
         }
         let Expr::Var {
@@ -2966,6 +3368,46 @@ impl Checker {
     ///
     /// Inside `atomic` the lock serialises the callee's writes too, so the
     /// refusal lifts with the rest of the boundary.
+    /// The receiver half of the same rule. A method reaches its receiver's
+    /// storage by construction -- that is what a receiver IS -- so the question
+    /// is only whether the receiver names something shared between iterations
+    /// and whether anything under it can be written.
+    fn refuse_shared_receiver(&mut self, base: &Expr) -> Checked<()> {
+        if self.atomic_depth > 0 {
+            return Ok(());
+        }
+        let Some(floor) = self.parallel_loop().map(|c| c.floor) else {
+            return Ok(());
+        };
+        let Expr::Var { name, span } = base else {
+            return Ok(());
+        };
+        if !self.shared_in_loop(name, floor) {
+            return Ok(());
+        }
+        let Some(ty) = self.lookup(name).map(|l| l.ty) else {
+            return Ok(());
+        };
+        if matches!(ty, Type::Array(_)) {
+            return Err(TypeError::ParallelSharedArrayArgument {
+                span: *span,
+                name: name.clone(),
+            });
+        }
+        if let Some(path) = self.registry.reaches_mutable(ty) {
+            return Err(TypeError::ParallelSharedObjectArgument {
+                span: *span,
+                name: name.clone(),
+                path: if path.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{name}.{path}")
+                },
+            });
+        }
+        Ok(())
+    }
+
     fn refuse_shared_array_argument(&mut self, args: &[Expr]) -> Checked<()> {
         if self.atomic_depth > 0 {
             return Ok(());
@@ -2977,12 +3419,31 @@ impl Checker {
             let Expr::Var { name, span } = arg else {
                 continue;
             };
-            let shared_array = matches!(self.lookup(name).map(|l| l.ty), Some(Type::Array(_)))
-                && self.escapes_loop(name, floor);
-            if shared_array {
+            let Some(ty) = self.lookup(name).map(|l| l.ty) else {
+                continue;
+            };
+            if !self.shared_in_loop(name, floor) {
+                continue;
+            }
+            if matches!(ty, Type::Array(_)) {
                 return Err(TypeError::ParallelSharedArrayArgument {
                     span: *span,
                     name: name.clone(),
+                });
+            }
+            // An object is only safe to hand over while nothing inside it can
+            // be written. That was every object until field mutation landed,
+            // which is why this question is asked of the registry now rather
+            // than assumed.
+            if let Some(path) = self.registry.reaches_mutable(ty) {
+                return Err(TypeError::ParallelSharedObjectArgument {
+                    span: *span,
+                    name: name.clone(),
+                    path: if path.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{name}.{path}")
+                    },
                 });
             }
         }
@@ -3754,6 +4215,504 @@ impl Checker {
         })
     }
 
+    /// `case` is a DESUGARING and not a node: the subject is bound once and the
+    /// arms become an `if`/`elif` chain over `subject = guard`. Building the
+    /// chain out of AST rather than typed nodes is what makes every comparison
+    /// rule -- which types `=` is defined on, what it means on an object --
+    /// exactly the rules `infix` already enforces, with the diagnostics it
+    /// already writes.
+    ///
+    /// THE SUBJECT IS EVALUATED ONCE. `case f(x) of ...` with the subject
+    /// inlined into every guard runs `f` once per arm, which is the defect
+    /// M3f's chained comparison already paid for once.
+    fn case_expr(
+        &mut self,
+        subject: &Expr,
+        arms: &[CaseArm],
+        else_arm: Option<&Expr>,
+        span: Span,
+        expected: Option<Type>,
+    ) -> Checked<TypedExpr> {
+        if arms.is_empty() {
+            return Err(TypeError::CaseHasNoArms { span });
+        }
+        let name = format!("$case{}", self.cases);
+        self.cases = self.cases.saturating_add(1);
+        let subject_typed = self.expr(subject, None)?;
+        let subject_ty = subject_typed.ty;
+        let subject_ref = Expr::Var {
+            name: name.clone(),
+            span: subject.span(),
+        };
+
+        self.scopes.push(HashMap::new());
+        self.declare(name.clone(), subject_ty, false);
+        let built = self.case_chain(&subject_ref, arms, else_arm, span, expected);
+        self.scopes.pop();
+        let (chain, ty) = built?;
+
+        Ok(TypedExpr {
+            kind: TypedExprKind::Block {
+                items: vec![TypedBlockItem::Binding {
+                    name,
+                    ty: subject_ty,
+                    value: subject_typed,
+                    mutable: false,
+                    span: subject.span(),
+                }],
+                tail: Some(Box::new(chain)),
+            },
+            ty,
+            span,
+        })
+    }
+
+    /// The arms, folded into `if`/`elif` from the bottom up. Each guard is
+    /// compared through `infix`, so which types `=` is defined on -- and what
+    /// it means on an object -- are exactly the rules that were already there,
+    /// with the diagnostics that were already written.
+    fn case_chain(
+        &mut self,
+        subject_ref: &Expr,
+        arms: &[CaseArm],
+        else_arm: Option<&Expr>,
+        span: Span,
+        expected: Option<Type>,
+    ) -> Checked<(TypedExpr, Type)> {
+        let mut conditions = Vec::with_capacity(arms.len());
+        let mut bodies = Vec::with_capacity(arms.len());
+        let mut result = expected;
+        for arm in arms {
+            let test = Expr::Infix {
+                op: BinOp::Eq,
+                fixity: fortress_ast::Fixity::Loose,
+                lhs: Box::new(subject_ref.clone()),
+                rhs: Box::new(arm.guard.clone()),
+                span: arm.guard.span(),
+            };
+            conditions.push(self.expr(&test, Some(Type::Boolean))?);
+            let body = self.expr(&arm.body, result)?;
+            result = result.or(Some(body.ty));
+            bodies.push(body);
+        }
+        let otherwise = match else_arm {
+            Some(e) => Some(self.expr(e, result)?),
+            None => None,
+        };
+        let ty = result.unwrap_or(Type::Void);
+        for body in bodies.iter().chain(otherwise.as_ref()) {
+            if body.ty != ty {
+                return Err(TypeError::BranchTypeMismatch {
+                    span: body.span,
+                    then_type: ty,
+                    else_type: body.ty,
+                });
+            }
+        }
+
+        // THE FALLTHROUGH. 1.0 throws MatchFailure when nothing matches
+        // (case-expr.tex); this subset has no exceptions, so a `case` used for
+        // its effect HALTS with a diagnostic rather than doing nothing -- the
+        // same answer `assert` and the dispatch tree give. A `case` whose VALUE
+        // is used cannot halt into a value, so that one is refused instead.
+        let mut chain = match otherwise {
+            Some(e) => e,
+            None if ty == Type::Void => TypedExpr {
+                kind: TypedExprKind::Apply {
+                    target: Target::CaseFailed,
+                    args: Vec::new(),
+                },
+                ty: Type::Void,
+                span,
+            },
+            None => return Err(TypeError::CaseNeedsElse { span }),
+        };
+        for (cond, body) in conditions.into_iter().zip(bodies).rev() {
+            chain = TypedExpr {
+                kind: TypedExprKind::If {
+                    cond: Box::new(cond),
+                    then_branch: Box::new(body),
+                    else_branch: Some(Box::new(chain)),
+                },
+                ty,
+                span,
+            };
+        }
+        Ok((chain, ty))
+    }
+
+    /// `typecase`, and it is a real node rather than a desugaring: there is no
+    /// expression in this language that reads a tag, and inventing one to
+    /// desugar through would be a second way to do what M3c's dispatch tree
+    /// already does.
+    ///
+    /// FIRST ARM WINS. A tag claimed by an earlier arm is removed from every
+    /// later one, so the switch has one entry per tag; an arm left with no tag
+    /// at all is refused, because it is dead code the reader believes in.
+    fn typecase_expr(
+        &mut self,
+        subject: &Expr,
+        arms: &[TypeCaseArm],
+        else_arm: &Expr,
+        span: Span,
+        expected: Option<Type>,
+    ) -> Checked<TypedExpr> {
+        let subject = self.expr(subject, None)?;
+        if !subject.ty.is_reference() {
+            return Err(TypeError::TypeCaseSubjectNotReference {
+                span: subject.span,
+                found: subject.ty,
+            });
+        }
+
+        let mut claimed: BTreeSet<u32> = BTreeSet::new();
+        let mut typed_arms: Vec<TypedTypeCaseArm> = Vec::new();
+        let mut result: Option<Type> = expected;
+        for arm in arms {
+            let ty = self.registry.resolve(&arm.ty)?;
+            if !self.registry.is_subtype(ty, subject.ty) {
+                return Err(TypeError::TypeCaseArmUnrelated {
+                    span: arm.span,
+                    subject: subject.ty,
+                    arm: ty,
+                });
+            }
+            let tags: Vec<u32> = self
+                .concrete_tags(ty)
+                .into_iter()
+                .filter(|tag| !claimed.contains(tag))
+                .collect();
+            if tags.is_empty() {
+                return Err(TypeError::TypeCaseArmDead {
+                    span: arm.span,
+                    arm: ty,
+                });
+            }
+            claimed.extend(tags.iter().copied());
+
+            self.scopes.push(HashMap::new());
+            if let Some(binder) = &arm.binder {
+                self.declare(binder.clone(), ty, false);
+            }
+            let body = self.expr(&arm.body, result);
+            self.scopes.pop();
+            let body = body?;
+            let body_ty = body.ty;
+            typed_arms.push(TypedTypeCaseArm {
+                tags,
+                binder: arm.binder.clone(),
+                ty,
+                body,
+            });
+            result = result.or(Some(body_ty));
+        }
+
+        let else_branch = self.expr(else_arm, result)?;
+        let ty = result.unwrap_or(else_branch.ty);
+        if else_branch.ty != ty {
+            return Err(TypeError::BranchTypeMismatch {
+                span,
+                then_type: ty,
+                else_type: else_branch.ty,
+            });
+        }
+        for arm in &typed_arms {
+            if arm.body.ty != ty {
+                return Err(TypeError::BranchTypeMismatch {
+                    span: arm.body.span,
+                    then_type: ty,
+                    else_type: arm.body.ty,
+                });
+            }
+        }
+        Ok(TypedExpr {
+            kind: TypedExprKind::TypeCase {
+                subject: Box::new(subject),
+                arms: typed_arms,
+                else_branch: Box::new(else_branch),
+            },
+            ty,
+            span,
+        })
+    }
+
+    /// Every concrete tag a value of this type can carry. A trait is the closed
+    /// set below it -- whole program, so the set is complete -- and an object is
+    /// itself.
+    fn concrete_tags(&self, ty: Type) -> Vec<u32> {
+        match ty {
+            Type::Object(name) => self.registry.tag_of(name).into_iter().collect(),
+            Type::Trait(name) => self
+                .registry
+                .concretes_below(name)
+                .into_iter()
+                .filter_map(|concrete| self.registry.tag_of(concrete))
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// `SUM[i <- lo:hi] e`, lowered onto the M5 accumulator and nothing else.
+    ///
+    /// `reductions.tex:60-77` desugars it to
+    /// `do var r = identity; for i <- lo:hi do r OP= e end; r end`, which is
+    /// EXACTLY the shape M5's recogniser already turns into a per-worker
+    /// private accumulator. So this needs no `Reduction` trait, no generator
+    /// protocol and no closure -- which is why the gap analysis calls it the
+    /// one separable part of the generator chain.
+    ///
+    /// THE ACCUMULATOR'S TYPE IS THE BODY'S, and that is why the desugaring is
+    /// here rather than in the parser: `SUM[i <- 1:10] i` accumulates ZZ64,
+    /// because a loop binder is ZZ64, and the parser cannot know that. The
+    /// context supplies it when there is one -- `total: ZZ32 = SUM[...]` -- and
+    /// otherwise the body is walked SPECULATIVELY for its type alone.
+    #[allow(clippy::too_many_arguments)]
+    fn big_reduction(
+        &mut self,
+        op: BinOp,
+        binder: &str,
+        lo: &Expr,
+        hi: &Expr,
+        inclusive: bool,
+        sequential: bool,
+        body: &Expr,
+        span: Span,
+        expected: Option<Type>,
+    ) -> Checked<TypedExpr> {
+        let ty = match expected {
+            Some(t) if Self::reducible(t) => t,
+            _ => self.probe_type(body, binder, span)?,
+        };
+        if !Self::reducible(ty) {
+            return Err(TypeError::Mismatch {
+                span,
+                found: ty,
+                required: Type::ZZ64,
+            });
+        }
+        let name = format!("$big{}", self.cases);
+        self.cases = self.cases.saturating_add(1);
+
+        let identity = match (op, ty) {
+            (BinOp::Mul, Type::RR64) => Expr::FloatLit {
+                int_digits: "1".to_owned(),
+                frac_digits: "0".to_owned(),
+                span,
+            },
+            (BinOp::Mul, _) => Expr::IntLit {
+                digits: "1".to_owned(),
+                span,
+            },
+            (_, Type::RR64) => Expr::FloatLit {
+                int_digits: "0".to_owned(),
+                frac_digits: "0".to_owned(),
+                span,
+            },
+            _ => Expr::IntLit {
+                digits: "0".to_owned(),
+                span,
+            },
+        };
+        let desugared = Expr::Block {
+            items: vec![
+                BlockItem::Binding(fortress_ast::Binding {
+                    name: name.clone(),
+                    // WRITTEN, not inferred: an unannotated `0` is ZZ32 and the
+                    // body is usually ZZ64, so the accumulator has to say what
+                    // it is.
+                    ty: Some(TypeRef::Named {
+                        name: ty.name().to_owned(),
+                        args: Vec::new(),
+                        span,
+                    }),
+                    value: identity,
+                    mutable: true,
+                    span,
+                }),
+                BlockItem::Expr(Expr::For {
+                    binder: binder.to_owned(),
+                    lo: Box::new(lo.clone()),
+                    hi: Box::new(hi.clone()),
+                    inclusive,
+                    sequential,
+                    body: Box::new(Expr::Block {
+                        items: vec![BlockItem::Assign(Assign {
+                            target: Expr::Var {
+                                name: name.clone(),
+                                span,
+                            },
+                            op: Some(op),
+                            value: body.clone(),
+                            span,
+                        })],
+                        span,
+                    }),
+                    span,
+                }),
+                BlockItem::Expr(Expr::Var { name, span }),
+            ],
+            span,
+        };
+        self.expr(&desugared, expected)
+    }
+
+    /// The type of an expression, walked for that alone.
+    ///
+    /// The walk has side effects -- it memoises dispatch tables, numbers
+    /// outlined loop bodies, and records captures into an enclosing loop
+    /// context -- so the two that would be WRONG to keep are saved and put
+    /// back. A memoised dispatch table is not one of them: the real walk
+    /// computes the same table from the same types, and `or_insert_with` keeps
+    /// the first.
+    fn probe_type(&mut self, body: &Expr, binder: &str, span: Span) -> Checked<Type> {
+        let loops = self.loops;
+        let saved = self.loop_ctx.clone();
+        let mut scope = HashMap::new();
+        scope.insert(
+            binder.to_owned(),
+            Local {
+                ty: Type::ZZ64,
+                mutable: false,
+            },
+        );
+        self.scopes.push(scope);
+        let probed = self.expr(body, None);
+        self.scopes.pop();
+        self.loops = loops;
+        self.loop_ctx = saved;
+        let _ = span;
+        Ok(probed?.ty)
+    }
+
+    /// `label L ... end L`. The label's type is fixed by the FIRST `exit` that
+    /// carries a value, and everything else -- later exits, the body's own
+    /// fallthrough -- is checked against it. It cannot be taken from the body
+    /// instead: the body has not been walked yet when the first exit is.
+    fn label_expr(
+        &mut self,
+        name: &str,
+        body: &Expr,
+        span: Span,
+        expected: Option<Type>,
+    ) -> Checked<TypedExpr> {
+        if self.labels.iter().any(|l| l.name == name) {
+            return Err(TypeError::LabelAlreadyOpen {
+                span,
+                name: name.to_owned(),
+            });
+        }
+        self.labels.push(LabelCtx {
+            name: name.to_owned(),
+            ty: expected,
+            atomic_depth: self.atomic_depth,
+            loop_depth: self.loop_ctx.len(),
+        });
+        let body = self.expr(body, expected);
+        let ctx = self.labels.pop();
+        let body = body?;
+        let ty = ctx.and_then(|c| c.ty).unwrap_or(body.ty);
+        // A label whose exits carry a value and whose body can also fall out of
+        // the bottom needs a value on that edge too. 1.0 has no answer for it
+        // either; refusing beats inventing a zero and printing it.
+        if body.ty != ty {
+            return Err(TypeError::LabelFallsThrough {
+                span,
+                name: name.to_owned(),
+                expected: ty,
+                found: body.ty,
+            });
+        }
+        Ok(TypedExpr {
+            kind: TypedExprKind::Label {
+                name: name.to_owned(),
+                body: Box::new(body),
+            },
+            ty,
+            span,
+        })
+    }
+
+    /// `exit L with e`, and the two crossings that have to be refused.
+    ///
+    /// AN `atomic` BOUNDARY: the branch would skip `fortress_atomic_leave` and
+    /// leave one process-wide RECURSIVE mutex held for the rest of the process.
+    /// `atomic.tex:59-70`'s rollback rule has two arms and this is the one
+    /// `label`/`exit` re-opens; until there is an answer, the crossing is a
+    /// diagnostic rather than a deadlock.
+    ///
+    /// A LOOP BOUNDARY: every `for` body is OUTLINED into its own function --
+    /// `seq(...)` included, because one lowering serves both -- so a branch out
+    /// of it is a jump between functions, which is exactly the unwinding this
+    /// construct was chosen for not needing.
+    fn exit_expr(
+        &mut self,
+        name: Option<&str>,
+        value: Option<&Expr>,
+        span: Span,
+        expected: Option<Type>,
+    ) -> Checked<TypedExpr> {
+        let Some(index) = (match name {
+            Some(wanted) => self.labels.iter().rposition(|l| l.name == wanted),
+            None => self.labels.len().checked_sub(1),
+        }) else {
+            return Err(TypeError::UnknownLabel {
+                span,
+                name: name.unwrap_or("").to_owned(),
+            });
+        };
+        let (label, atomic_depth, loop_depth, declared) = {
+            let ctx = self.labels.get(index).ok_or(TypeError::UnknownLabel {
+                span,
+                name: name.unwrap_or("").to_owned(),
+            })?;
+            (ctx.name.clone(), ctx.atomic_depth, ctx.loop_depth, ctx.ty)
+        };
+        if self.atomic_depth > atomic_depth {
+            return Err(TypeError::ExitCrossesAtomic { span, name: label });
+        }
+        if self.loop_ctx.len() > loop_depth {
+            return Err(TypeError::ExitCrossesLoop { span, name: label });
+        }
+
+        let value = match value {
+            Some(e) => Some(Box::new(self.expr(e, declared)?)),
+            None => None,
+        };
+        let carried = value.as_ref().map_or(Type::Void, |v| v.ty);
+        if let Some(want) = declared {
+            if carried != want {
+                return Err(TypeError::ExitTypeMismatch {
+                    span,
+                    name: label,
+                    expected: want,
+                    found: carried,
+                });
+            }
+        } else if let Some(ctx) = self.labels.get_mut(index) {
+            ctx.ty = Some(carried);
+        }
+        Ok(TypedExpr {
+            kind: TypedExprKind::Exit { name: label, value },
+            // BOTTOM, spelled with the context instead of with a type. Control
+            // never comes back from an `exit`, so it fits wherever it is
+            // written: as the tail of a function body it is that function's
+            // return type, and in statement position -- inside `if c then exit
+            // L with i end`, which is the shape the corpus writes -- it is
+            // Void, so the `if` needs no `else`.
+            //
+            // A `Never` variant on `Type` would say this properly. It would
+            // also touch every exhaustive match in the workspace, which is
+            // SPIKE-COMPOSITE-TYPE's decision and not this one's. The cost of
+            // spelling it this way: `if c then exit L with 1 else 2 end` in a
+            // position with NO expected type refuses, because the `then` side
+            // takes Void from its context and the `else` side is then checked
+            // against it. Give the expression a type -- a declared return type,
+            // an annotated binding -- and it goes through.
+            ty: expected.unwrap_or(Type::Void),
+            span,
+        })
+    }
+
     fn if_expr(
         &mut self,
         cond: &Expr,
@@ -3866,6 +4825,7 @@ impl Checker {
                         });
                     }
                     self.declare(b.name.clone(), ty, b.mutable);
+                    self.taint_if_aliased(&b.name, ty, &b.value);
                     typed.push(TypedBlockItem::Binding {
                         name: b.name.clone(),
                         ty,

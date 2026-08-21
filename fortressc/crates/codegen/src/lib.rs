@@ -10,10 +10,12 @@ use std::path::Path;
 use fortress_types::{
     ArithOp, AssignTarget, CompareOp, DispatchFn, DispatchNode, Elem, Target, Type, TypedBlockItem,
     TypedCapture, TypedComponent, TypedExpr, TypedExprKind, TypedFn, TypedObject, TypedReduction,
-    ARRAY_ALLOC, ARRAY_LENGTH, ARRAY_SLOT, ASSERT_FAILED, ATOMIC_ENTER, ATOMIC_LEAVE,
-    DISPATCH_FAILED, ENV_ALLOC, OBJECT_ALLOC, PARALLEL_FOR, REDUCTION_ALLOC, REDUCTION_WORKERS,
+    TypedTypeCaseArm, ARRAY_ALLOC, ARRAY_LENGTH, ARRAY_SLOT, ASSERT_FAILED, ATOMIC_ENTER,
+    ATOMIC_LEAVE, CASE_FAILED, DISPATCH_FAILED, ENV_ALLOC, OBJECT_ALLOC, PARALLEL_FOR,
+    REDUCTION_ALLOC, REDUCTION_WORKERS,
 };
 use inkwell::attributes::AttributeLoc;
+use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::{Linkage, Module};
@@ -103,6 +105,7 @@ fn build_module<'ctx>(
         singletons: HashMap::new(),
         scopes: Vec::new(),
         reductions: HashSet::new(),
+        labels: Vec::new(),
     };
     lowering.declare_runtime();
     if component.uses_mpi {
@@ -149,6 +152,11 @@ struct Lowering<'ctx> {
     /// the `atomic` lowering, which drops the lock around a block that does
     /// nothing but write them.
     reductions: HashSet<String>,
+    /// The labels open around the lowering, innermost last. A loop body is
+    /// outlined into its own function and the checker refuses an `exit` that
+    /// would cross into one, so a frame here always belongs to the function
+    /// being emitted.
+    labels: Vec<LabelFrame<'ctx>>,
 }
 
 /// Everything the outliner needs about one `for`. A struct rather than nine
@@ -175,6 +183,15 @@ enum Slot<'ctx> {
         pointer: PointerValue<'ctx>,
         ty: BasicTypeEnum<'ctx>,
     },
+}
+
+/// One `label` open around the lowering. Its merge block is the target of
+/// every `exit`, and `incoming` is the phi's edge list.
+struct LabelFrame<'ctx> {
+    name: String,
+    end: BasicBlock<'ctx>,
+    ty: Type,
+    incoming: Vec<(BasicValueEnum<'ctx>, BasicBlock<'ctx>)>,
 }
 
 impl<'ctx> Lowering<'ctx> {
@@ -360,6 +377,14 @@ impl<'ctx> Lowering<'ctx> {
         self.module.add_function(
             ASSERT_FAILED,
             void.fn_type(&[ptr.into()], false),
+            Some(Linkage::External),
+        );
+
+        // The `case` fallthrough halt, declared on the same terms as the two
+        // above: a program with no `case` never calls it.
+        self.module.add_function(
+            CASE_FAILED,
+            void.fn_type(&[], false),
             Some(Linkage::External),
         );
 
@@ -656,15 +681,17 @@ impl<'ctx> Lowering<'ctx> {
         Ok(())
     }
 
-    fn load_field(
+    /// The address of one field of one object, with the base evaluated exactly
+    /// once. A compound assignment reads and writes through the same address,
+    /// so evaluating the receiver twice would be a second side effect.
+    fn field_pointer(
         &mut self,
         base: &TypedExpr,
         index: u32,
-        ty: Type,
-    ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+    ) -> Result<PointerValue<'ctx>, CodegenError> {
         let Type::Object(name) = base.ty else {
             return Err(CodegenError::internal(
-                "a field read on something that is not an object".to_owned(),
+                "a field reference on something that is not an object".to_owned(),
             ));
         };
         let layout = *self
@@ -672,7 +699,16 @@ impl<'ctx> Lowering<'ctx> {
             .get(name)
             .ok_or_else(|| CodegenError::internal(format!("no layout for `{name}`")))?;
         let object = self.operand(base)?.into_pointer_value();
-        let slot = self.field_slot(layout, object, index, "field")?;
+        self.field_slot(layout, object, index, "field")
+    }
+
+    fn load_field(
+        &mut self,
+        base: &TypedExpr,
+        index: u32,
+        ty: Type,
+    ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+        let slot = self.field_pointer(base, index)?;
         let loaded = self
             .basic_type(ty)
             .ok_or_else(|| CodegenError::internal("a field with no storage type".to_owned()))?;
@@ -916,6 +952,13 @@ impl<'ctx> Lowering<'ctx> {
                 })
                 .map(|()| None),
             TypedExprKind::Atomic { body } => self.atomic(body),
+            TypedExprKind::TypeCase {
+                subject,
+                arms,
+                else_branch,
+            } => self.typecase(subject, arms, else_branch, e.ty),
+            TypedExprKind::Label { name, body } => self.label(name, body, e.ty),
+            TypedExprKind::Exit { name, value } => self.exit(name, value.as_deref(), e.ty),
             TypedExprKind::Field { base, index } => self.load_field(base, *index, e.ty).map(Some),
             TypedExprKind::Singleton { name } => {
                 let global =
@@ -973,6 +1016,9 @@ impl<'ctx> Lowering<'ctx> {
         let env_type = self.context.struct_type(&field_types, false);
 
         let partials = self.reduction_alloc(loop_.reductions)?;
+        if let Some(block) = partials {
+            self.reduction_init(block, loop_.reductions)?;
+        }
 
         // Scanned, not atomic: a capture may be a String or an Array, and the
         // collector has to see through the environment to it while a worker is
@@ -1133,6 +1179,105 @@ impl<'ctx> Lowering<'ctx> {
     /// the gate pins FORTRESS_WORKERS rather than asserting an equality that is
     /// not true. ZZ32 and ZZ64 are unaffected: two's-complement addition is
     /// associative whatever the grouping, overflow included.
+    /// Every slot to its reduction's identity, before the loop runs.
+    ///
+    /// The runtime memsets the block to zero, which is the identity for `+` and
+    /// `-` on all three reducible types and is NOT the identity for `*`. Doing
+    /// it here instead of there is what lets the identity be a fact about the
+    /// operator rather than about the allocator -- and the allocator has no
+    /// type knowledge to decide it with.
+    fn reduction_init(
+        &mut self,
+        block: PointerValue<'ctx>,
+        reductions: &[TypedReduction],
+    ) -> Result<(), CodegenError> {
+        if reductions.iter().all(|r| r.op == ArithOp::Add) {
+            // The runtime's memset already wrote this one, and emitting a loop
+            // to write zeroes over zeroes would change the IR of every program
+            // that already had a reduction.
+            return Ok(());
+        }
+        let i64t = self.context.i64_type();
+        let workers = self
+            .call_runtime(REDUCTION_WORKERS, &[], true)?
+            .ok_or_else(|| CodegenError::internal("no worker count returned".to_owned()))?
+            .into_int_value();
+        let function = self.current_function()?;
+        let cond_bb = self.context.append_basic_block(function, "init.cond");
+        let body_bb = self.context.append_basic_block(function, "init.body");
+        let end_bb = self.context.append_basic_block(function, "init.end");
+
+        let counter = self.entry_alloca("init.w", i64t.into())?;
+        self.builder
+            .build_store(counter, i64t.const_zero())
+            .map_err(CodegenError::from_builder)?;
+        self.branch_to(cond_bb)?;
+
+        self.builder.position_at_end(cond_bb);
+        let w = self
+            .builder
+            .build_load(i64t, counter, "init.w")
+            .map_err(CodegenError::from_builder)?
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, w, workers, "init.more")
+            .map_err(CodegenError::from_builder)?;
+        self.builder
+            .build_conditional_branch(more, body_bb, end_bb)
+            .map_err(CodegenError::from_builder)?;
+
+        self.builder.position_at_end(body_bb);
+        for (k, reduction) in reductions.iter().enumerate() {
+            let slot = self.reduction_slot(block, w, reductions.len(), k)?;
+            let identity = self.identity_of(reduction)?;
+            self.builder
+                .build_store(slot, identity)
+                .map_err(CodegenError::from_builder)?;
+        }
+        let next = self
+            .builder
+            .build_int_add(w, i64t.const_int(1, false), "init.next")
+            .map_err(CodegenError::from_builder)?;
+        self.builder
+            .build_store(counter, next)
+            .map_err(CodegenError::from_builder)?;
+        self.branch_to(cond_bb)?;
+        self.builder.position_at_end(end_bb);
+        Ok(())
+    }
+
+    /// 0 for `+` and `-`, 1 for `*`, at the reduction's own type.
+    fn identity_of(
+        &self,
+        reduction: &TypedReduction,
+    ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+        let one = reduction.op == ArithOp::Mul;
+        Ok(match reduction.ty {
+            Type::ZZ32 => self
+                .context
+                .i32_type()
+                .const_int(u64::from(one), false)
+                .into(),
+            Type::ZZ64 => self
+                .context
+                .i64_type()
+                .const_int(u64::from(one), false)
+                .into(),
+            Type::RR64 => self
+                .context
+                .f64_type()
+                .const_float(if one { 1.0 } else { 0.0 })
+                .into(),
+            other => {
+                return Err(CodegenError::internal(format!(
+                    "`{}` is not a reducible type",
+                    other.name()
+                )))
+            }
+        })
+    }
+
     fn reduction_merge(
         &mut self,
         block: PointerValue<'ctx>,
@@ -1190,10 +1335,11 @@ impl<'ctx> Lowering<'ctx> {
                 .builder
                 .build_load(ty, target, &reduction.name)
                 .map_err(CodegenError::from_builder)?;
-            // `+` for both operators: `-=` accumulated `Identity - e`, so the
-            // group inverse is already inside the partial and there is no
-            // second accumulator kind.
-            let merged = self.arith(ArithOp::Add, reduction.ty, current, partial)?;
+            // The reduction's OWN operator. `+=` and `-=` share `Add` -- `-=`
+            // accumulated `Identity - e`, so the group inverse is already
+            // inside the partial -- and `*=` folds with `Mul`, because adding
+            // the partials of a product is not a product.
+            let merged = self.arith(reduction.op, reduction.ty, current, partial)?;
             self.builder
                 .build_store(target, merged)
                 .map_err(CodegenError::from_builder)?;
@@ -1642,6 +1788,7 @@ impl<'ctx> Lowering<'ctx> {
                 let value = self.one(args)?;
                 self.call_runtime(&target.symbol(), &[value], false)
             }
+            Target::CaseFailed => self.call_runtime(&target.symbol(), &[], false),
             Target::Mpi(op) => self.call_runtime(&target.symbol(), &[], op.returns() != Type::Void),
             Target::ArrayNew { elem } => {
                 let count = self.one(args)?;
@@ -1861,6 +2008,195 @@ impl<'ctx> Lowering<'ctx> {
         Ok(Some(phi.as_basic_value()))
     }
 
+    /// `typecase`: the same 32-bit tag load at offset 0 that `dispatch_node`
+    /// does, and one switch entry per concrete tag. The checker already removed
+    /// every tag an earlier arm claimed, so the arms cannot overlap here and
+    /// there is nothing to order at run time.
+    fn typecase(
+        &mut self,
+        subject: &TypedExpr,
+        arms: &[TypedTypeCaseArm],
+        else_branch: &TypedExpr,
+        result: Type,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, CodegenError> {
+        let value = self.operand(subject)?;
+        let function = self.current_function()?;
+        let i32t = self.context.i32_type();
+        let tag = self
+            .builder
+            .build_load(i32t, value.into_pointer_value(), "tag")
+            .map_err(CodegenError::from_builder)?
+            .into_int_value();
+
+        let else_bb = self.context.append_basic_block(function, "typecase.else");
+        let merge_bb = self.context.append_basic_block(function, "typecase.merge");
+        let mut cases = Vec::new();
+        let mut blocks = Vec::with_capacity(arms.len());
+        for arm in arms {
+            let bb = self.context.append_basic_block(function, "typecase.arm");
+            for tag_value in &arm.tags {
+                cases.push((i32t.const_int(u64::from(*tag_value), false), bb));
+            }
+            blocks.push(bb);
+        }
+        self.builder
+            .build_switch(tag, else_bb, &cases)
+            .map_err(CodegenError::from_builder)?;
+
+        let mut incoming: Vec<(BasicValueEnum<'ctx>, BasicBlock<'ctx>)> = Vec::new();
+        for (arm, bb) in arms.iter().zip(blocks) {
+            self.builder.position_at_end(bb);
+            // The narrowed binding is the same pointer: a trait typed value IS
+            // a pointer to the concrete object, so narrowing costs no
+            // instruction at all.
+            self.scopes.push(HashMap::new());
+            if let Some(binder) = &arm.binder {
+                self.bind(binder, value);
+            }
+            let lowered = self.expr(&arm.body);
+            self.scopes.pop();
+            if let Some(produced) = lowered? {
+                if let Some(exit) = self.builder.get_insert_block() {
+                    incoming.push((produced, exit));
+                }
+            }
+            self.branch_to(merge_bb)?;
+        }
+
+        self.builder.position_at_end(else_bb);
+        let otherwise = self.expr(else_branch)?;
+        if let Some(produced) = otherwise {
+            if let Some(exit) = self.builder.get_insert_block() {
+                incoming.push((produced, exit));
+            }
+        }
+        self.branch_to(merge_bb)?;
+
+        self.builder.position_at_end(merge_bb);
+        self.merge_phi(result, &incoming, "typecase")
+    }
+
+    /// `label L ... end L`: one merge block, and every `exit L` is an incoming
+    /// edge of its phi. A forward jump inside one function, so there is no
+    /// unwinding, no personality function and no landing pad.
+    fn label(
+        &mut self,
+        name: &str,
+        body: &TypedExpr,
+        result: Type,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, CodegenError> {
+        let function = self.current_function()?;
+        let end_bb = self.context.append_basic_block(function, "label.end");
+        self.labels.push(LabelFrame {
+            name: name.to_owned(),
+            end: end_bb,
+            ty: result,
+            incoming: Vec::new(),
+        });
+
+        let lowered = self.expr(body);
+        let frame = self.labels.pop();
+        let lowered = lowered?;
+
+        let mut incoming = frame.map(|f| f.incoming).unwrap_or_default();
+        // The fallthrough edge. It may be leaving a block nothing can reach --
+        // the body's tail was an `exit` -- and that costs one dead incoming
+        // rather than a reachability question.
+        if let Some(produced) = lowered {
+            if let Some(exit) = self.builder.get_insert_block() {
+                incoming.push((produced, exit));
+            }
+        }
+        self.branch_to(end_bb)?;
+        self.builder.position_at_end(end_bb);
+        self.merge_phi(result, &incoming, "label")
+    }
+
+    /// `exit L with e`: record the value as an incoming edge, branch, and
+    /// continue lowering into a block nothing branches to. Whatever follows an
+    /// `exit` in the source is dead, and putting it in an unreachable block is
+    /// what keeps every enclosing construct -- `if`'s phi, a block's tail --
+    /// working with no notion of "already terminated".
+    fn exit(
+        &mut self,
+        name: &str,
+        value: Option<&TypedExpr>,
+        result: Type,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, CodegenError> {
+        let lowered = match value {
+            Some(e) => self.expr(e)?,
+            None => None,
+        };
+        let Some(index) = self.labels.iter().rposition(|f| f.name == name) else {
+            return Err(CodegenError::internal(format!("no open label `{name}`")));
+        };
+        let (end, frame_ty) = {
+            let frame = self
+                .labels
+                .get(index)
+                .ok_or_else(|| CodegenError::internal(format!("no open label `{name}`")))?;
+            (frame.end, frame.ty)
+        };
+        if let (Some(produced), Some(block)) = (lowered, self.builder.get_insert_block()) {
+            if let Some(frame) = self.labels.get_mut(index) {
+                frame.incoming.push((produced, block));
+            }
+        }
+        self.builder
+            .build_unconditional_branch(end)
+            .map_err(CodegenError::from_builder)?;
+
+        let function = self.current_function()?;
+        let dead = self.context.append_basic_block(function, "exit.after");
+        self.builder.position_at_end(dead);
+        let _ = frame_ty;
+        // A value for the enclosing expression to carry, out of a block that
+        // cannot run. `if c then exit L with 1 else 2 end` needs its phi to
+        // have an incoming from this side, and this is it.
+        Ok(self.basic_type(result).map(|ty| ty.const_zero()))
+    }
+
+    fn current_function(&self) -> Result<FunctionValue<'ctx>, CodegenError> {
+        self.builder
+            .get_insert_block()
+            .and_then(inkwell::basic_block::BasicBlock::get_parent)
+            .ok_or_else(|| CodegenError::internal("no enclosing function".to_owned()))
+    }
+
+    fn branch_to(&self, target: BasicBlock<'ctx>) -> Result<(), CodegenError> {
+        self.builder
+            .build_unconditional_branch(target)
+            .map_err(CodegenError::from_builder)?;
+        Ok(())
+    }
+
+    /// The phi at a merge with any number of incoming edges. None of them means
+    /// nothing reaches the merge, which cannot happen while every arm branches
+    /// here unconditionally.
+    fn merge_phi(
+        &mut self,
+        result: Type,
+        incoming: &[(BasicValueEnum<'ctx>, BasicBlock<'ctx>)],
+        name: &str,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, CodegenError> {
+        let Some(ty) = self.basic_type(result) else {
+            return Ok(None);
+        };
+        if incoming.is_empty() {
+            return Ok(None);
+        }
+        let phi = self
+            .builder
+            .build_phi(ty, name)
+            .map_err(CodegenError::from_builder)?;
+        let edges: Vec<(&dyn inkwell::values::BasicValue<'ctx>, BasicBlock<'ctx>)> = incoming
+            .iter()
+            .map(|(value, block)| (value as &dyn inkwell::values::BasicValue<'ctx>, *block))
+            .collect();
+        phi.add_incoming(&edges);
+        Ok(Some(phi.as_basic_value()))
+    }
+
     fn block(
         &mut self,
         items: &[TypedBlockItem],
@@ -1974,6 +2310,31 @@ impl<'ctx> Lowering<'ctx> {
                     }
                 };
                 self.store_element(*elem, slot, stored)
+            }
+            // A direct store into the receiver's own block. The specification
+            // calls the setter here; there is no setter machinery to call, and
+            // the deviation is recorded on `AssignTarget::Field`. Boehm needs
+            // no write barrier -- the block is scanned, so a pointer stored
+            // into it is seen by the next collection.
+            AssignTarget::Field { base, index, ty } => {
+                let slot = self.field_pointer(base, *index)?;
+                let stored = match op {
+                    None => lowered,
+                    Some(op) => {
+                        let cell = self.basic_type(*ty).ok_or_else(|| {
+                            CodegenError::internal("a field with no storage type".to_owned())
+                        })?;
+                        let current = self
+                            .builder
+                            .build_load(cell, slot, "field")
+                            .map_err(CodegenError::from_builder)?;
+                        self.arith(op, *ty, current, lowered)?
+                    }
+                };
+                self.builder
+                    .build_store(slot, stored)
+                    .map_err(CodegenError::from_builder)?;
+                Ok(())
             }
         }
     }

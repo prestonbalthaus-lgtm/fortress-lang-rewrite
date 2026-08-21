@@ -1,0 +1,28 @@
+component badsharedmethodarg
+
+export Executable
+
+(* The other half: a shared object handed to a dotted method as an ARGUMENT.
+   The functional-call path already refused this; the dotted path is a
+   different function and had no guard at all.
+
+   Measured with the guard removed: 1000000 at one worker, 255981 at sixteen. *)
+object Box()
+    var n: ZZ64 = 0
+end
+
+object Bumper()
+    hit(b: Box): () = do
+        b.n := b.n + 1
+    end
+end
+
+run(): () = do
+    b = Box()
+    u = Bumper()
+    for i <- 0#1000000 do
+        u.hit(b)
+    end
+    println(b.n)
+end
+end

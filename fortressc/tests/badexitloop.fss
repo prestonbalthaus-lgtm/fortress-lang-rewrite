@@ -1,0 +1,14 @@
+component badexitloop
+
+export Executable
+
+(* Every `for` body is outlined into its own function -- `seq(...)` included,
+   because one lowering serves both -- so this is a jump between functions. *)
+run(): () = do
+    label out
+        for i <- seq(0#10) do
+            exit out
+        end
+    end out
+end
+end

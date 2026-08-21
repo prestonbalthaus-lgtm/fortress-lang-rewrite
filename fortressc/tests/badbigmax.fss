@@ -1,0 +1,10 @@
+component badbigmax
+
+export Executable
+
+(* MAX and MIN are recognised so that they are refused BY NAME rather than read
+   as a subscript, which is what they were. Their identity is the type's own
+   extremum rather than a zero bit pattern, and guessing zero would make a MAX
+   over negative numbers quietly wrong. *)
+run(): () = println(MAX[i <- 1:10] i)
+end

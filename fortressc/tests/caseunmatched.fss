@@ -1,0 +1,25 @@
+component caseunmatched
+
+export Executable
+
+(* 2 + 2 is 4 and no arm matches. 1.0 throws MatchFailure here; this subset has
+   no exceptions, so it halts with a diagnostic and exit 1 -- the same answer a
+   failed `assert` and an unreachable dispatch arm give. Falling through
+   silently was the one option worse than either.
+
+   This file is ProjectFortress/tests/XXXcaseTest.fss, which is a must-FAIL
+   test: with the halt it fails at RUN time, which is where the legacy
+   implementation fails it too. *)
+test1(): () = do
+    case 2 + 2 of
+        64 => ()
+        128 => ()
+    end
+end
+
+run(): () = do
+    println("before")
+    test1()
+    println("unreachable")
+end
+end

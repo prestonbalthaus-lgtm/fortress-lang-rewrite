@@ -1,0 +1,19 @@
+component badaliasedfield
+
+export Executable
+
+(* `c` is loop-LOCAL and names storage from outside the loop, so a depth
+   comparison alone calls it private. It is not. *)
+object Box()
+    var n: ZZ64 = 0
+end
+
+run(): () = do
+    b = Box()
+    for i <- 0#10 do
+        c = b
+        c.n := i
+    end
+    println(b.n)
+end
+end

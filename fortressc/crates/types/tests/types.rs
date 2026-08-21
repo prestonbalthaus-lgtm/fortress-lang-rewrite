@@ -815,12 +815,73 @@ fn a_field_initializer_may_not_reach_a_singleton() {
 }
 
 #[test]
-fn a_mutable_field_is_refused_rather_than_ignored() {
-    let e = body_error("object Box(w: ZZ32) var seen: ZZ32 = 0 end\nrun(): ZZ32 = Box(1).w");
+fn a_mutable_field_is_storage_and_an_immutable_one_is_not() {
+    let source = "component t\nobject Box(w: ZZ32) var seen: ZZ32 = 0 end\n\
+                  run(): ZZ32 = do b = Box(1)\n b.seen := 7\n b.seen end\nend\n";
+    let component = typed(source);
+    let boxed = component
+        .objects
+        .iter()
+        .find(|o| o.name == "Box")
+        .expect("Box is registered");
+    let named = |n: &str| {
+        boxed
+            .fields
+            .iter()
+            .find(|f| f.name == n)
+            .unwrap_or_else(|| panic!("no field `{n}`"))
+    };
+    assert!(!named("w").mutable, "a constructor parameter is not");
+    assert!(named("seen").mutable, "`var seen` is");
+
+    let e = body_error("object Box(w: ZZ32) end\nrun(): ZZ32 = do b = Box(1)\n b.w := 2\n b.w end");
     assert!(
-        matches!(e, TypeError::MutableFieldUnsupported { .. }),
-        "got {e}"
+        matches!(e, TypeError::FieldIsImmutable { .. }),
+        "an immutable field is not an assignment target: got {e}"
     );
+}
+
+#[test]
+fn an_abstract_member_may_name_an_unrepresentable_type_but_not_a_missing_one() {
+    // An abstract member is the one place in this compiler where a type is
+    // WRITTEN and READ BY NOTHING, so anything at all used to be accepted
+    // there -- in silence, at exit 0. That is how the closure pass came to
+    // need its own guard against `Foo -> ZZ32` with no `Foo`.
+    for source in [
+        "trait T
+ m(x: Foo): ZZ32
+end
+run(): ZZ32 = 1",
+        "trait T
+ m(x: ZZ32): Foo
+end
+run(): ZZ32 = 1",
+        "trait T
+ m(self, x: Foo): ZZ32
+end
+run(): ZZ32 = 1",
+    ] {
+        match body_error(source) {
+            TypeError::UnknownType { name, .. } => assert_eq!(name, "Foo"),
+            other => panic!("expected UnknownType for `{source}`, got {other:?}"),
+        }
+    }
+
+    // And the line that keeps it honest: a type this compiler cannot
+    // REPRESENT is our limitation, not the program's. `tupleTypeParam2.fss`
+    // instantiates a trait at a tuple, so the instance's abstract member
+    // cannot be typed here -- and nothing calls it, because the object that
+    // extends it declares its own concrete one. It compiles and prints 7.
+    let component = typed(
+        "component t
+trait T
+ m(x: (ZZ32, ZZ32)): ZZ32
+end
+run(): ZZ32 = 1
+end
+",
+    );
+    assert_eq!(component.functions.len(), 1, "only `run` is emitted");
 }
 
 #[test]
@@ -1163,10 +1224,32 @@ fn a_tuple_type_is_refused_with_a_diagnostic() {
 }
 
 #[test]
-fn an_arrow_type_is_refused_with_a_diagnostic() {
-    match type_error("component t\nf(): ZZ32 -> String = 1\nend\n") {
-        TypeError::TypeNotImplemented { form, .. } => assert_eq!(form, "an arrow type"),
-        other => panic!("expected TypeNotImplemented, got {other:?}"),
+fn an_arrow_over_liftable_types_becomes_a_trait_and_the_rest_stay_refused() {
+    // SPIKE-CLOSURE-REPRESENTATION lifts an arrow whose sides are types this
+    // subset can store: `ZZ32 -> String` is a trait now, so a literal in that
+    // slot is an ordinary type error rather than "an arrow type".
+    let e = body_error("f(): ZZ32 -> String = 1");
+    assert!(
+        matches!(
+            e,
+            TypeError::Mismatch { .. } | TypeError::LiteralNotApplicable { .. }
+        ),
+        "got {e}"
+    );
+
+    // The three that are NOT liftable keep the diagnostic they had, because
+    // `apply` would need a parameter this subset cannot store -- or, for an
+    // undeclared name, because an abstract member's parameter types are
+    // resolved by nothing and it would compile in silence.
+    for source in [
+        "f(g: (ZZ32, ZZ32) -> ZZ32): ZZ32 = 1",
+        "f(g: () -> ZZ32): ZZ32 = 1",
+        "f(g: Foo -> ZZ32): ZZ32 = 1",
+    ] {
+        match body_error(source) {
+            TypeError::TypeNotImplemented { form, .. } => assert_eq!(form, "an arrow type"),
+            other => panic!("expected TypeNotImplemented for `{source}`, got {other:?}"),
+        }
     }
 }
 

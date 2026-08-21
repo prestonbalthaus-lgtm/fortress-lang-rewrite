@@ -1,0 +1,15 @@
+component badlabelfall
+
+export Executable
+
+(* The exits carry a ZZ32 and the body can also run off the bottom, where there
+   is no value at all. Inventing a zero for that edge is the silent wrong answer
+   this compiler refuses to produce. *)
+run(): () = do
+    x = label out
+        if true then exit out with 1 end
+        println("fell")
+    end out
+    println(x)
+end
+end
