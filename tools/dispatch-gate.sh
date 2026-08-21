@@ -230,7 +230,10 @@ ambiguity() {
         bad 'a symmetrically ambiguous call is refused' "status $status: $err"
         return
     fi
-    if [[ $err == *"is ambiguous for (OL, OR)"* ]]; then
+    # `OL` and `OR` are OPERATOR WORDS since the frontend lane's lexical rule --
+    # `OR` IS the disjunction operator -- so the fixture's two objects were
+    # renamed OLeft/ORight and this assertion follows them.
+    if [[ $err == *"is ambiguous for (OLeft, ORight)"* ]]; then
         ok 'a symmetrically ambiguous call is refused, naming the tuple'
     else
         bad 'a symmetrically ambiguous call is refused, naming the tuple' "$err"

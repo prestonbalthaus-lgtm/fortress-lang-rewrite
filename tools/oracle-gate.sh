@@ -218,12 +218,14 @@ BUILD       = os.environ['BUILD']
 COMPILE_TIMEOUT = 60
 RUN_TIMEOUT     = 20
 
-# Measured at f81f41ace with FORTRESS_WORKERS=1. The floor is the third
+# Measured at the three-lane merge (semantics + codegen + frontend) with
+# FORTRESS_WORKERS=1; it was 285 at f81f41ace and the merge took passes to 291.
+# The floor is the third
 # ratchet and it is the one that catches a case moving pass -> fail, which
 # neither list can see: the acceptance list only knows about must-fail
 # programs and the signal list only about binaries. Raise it when passes are
 # won; never lower it to make a red run green.
-PASS_FLOOR = 285
+PASS_FLOOR = 291
 
 args, opt = sys.argv[1:], {}
 i = 0
