@@ -47,7 +47,7 @@ set -uo pipefail
 
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 build=$repo/fortressc/build
-fortressc=$repo/fortressc/target/debug/fortressc
+fortressc=${FORTRESSC:-$repo/fortressc/target/debug/fortressc}
 export LLVM_SYS_221_PREFIX=${LLVM_SYS_221_PREFIX:-$HOME/.local/opt/llvm22-root/usr/lib64/llvm22}
 export CPATH=${CPATH:-$HOME/.local/opt/gc-root/usr/include}
 export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
@@ -311,7 +311,22 @@ MUTATIONS=(
   'crates/types/src/types.rs|            Self::Boolean => 1,|            Self::Boolean => 2,|double the size of a Boolean element'
 )
 
+# FORTRESSC AND --mutate DO NOT MIX, and the failure is silent. Every mutation
+# below rebuilds fortressc/target/debug; if FORTRESSC points anywhere else the
+# gate keeps reading the pinned binary, the mutation has no effect, the
+# assertion holds, and the table reports a clean escape. Refuse instead.
+mutate_needs_the_built_compiler() {
+    local built=$repo/fortressc/target/debug/fortressc
+    if [[ $fortressc != "$built" ]]; then
+        printf 'refusing --mutate: FORTRESSC is %s\n' "$fortressc" >&2
+        printf 'but every mutation rebuilds %s.\n' "$built" >&2
+        printf 'A pinned binary makes each mutation a silent no-op. Unset FORTRESSC.\n' >&2
+        exit 2
+    fi
+}
+
 mutate() {
+    mutate_needs_the_built_compiler
     if ! git -C "$repo" diff --quiet HEAD -- fortressc/crates fortressc/runtime; then
         printf 'refusing to mutate: the tree differs from HEAD\n' >&2
         exit 2

@@ -13,7 +13,7 @@ set -uo pipefail
 
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 build=$repo/fortressc/build
-fortressc=$repo/fortressc/target/debug/fortressc
+fortressc=${FORTRESSC:-$repo/fortressc/target/debug/fortressc}
 export LLVM_SYS_221_PREFIX=${LLVM_SYS_221_PREFIX:-$HOME/.local/opt/llvm22-root/usr/lib64/llvm22}
 export CPATH=${CPATH:-$HOME/.local/opt/gc-root/usr/include}
 export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
