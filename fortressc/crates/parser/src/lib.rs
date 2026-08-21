@@ -1850,9 +1850,57 @@ impl<'t, 'a> Parser<'t, 'a> {
         Ok(out)
     }
 
+    /// THE SIX KINDS ARE THREE GROUPS NOW, AND ALL SIX STILL REFUSE.
+    ///
+    /// This is the hook `SPIKE-NAT` drops into and nothing more.
+    /// `2026-08-21-d7-reconcile-nat.md` §3.4 is explicit that the decision comes
+    /// before the parser change -- "doing (2) before (1) means the parser
+    /// accepts a shape nobody has decided the meaning of, and
+    /// `ChunkedSparseArray` will be the file that discovers it" -- and D7's own
+    /// header says **drafted, not adopted**. So the split is diagnostics and a
+    /// named place to put the code, with ZERO change to what parses.
+    ///
+    /// `nat` `int` `bool`   D7 §3.1 puts them IN v1, with every static ARGUMENT
+    ///                      statically evaluable -- a literal, or an expression
+    ///                      over the enclosing declaration's own static
+    ///                      parameters. That sublanguage is sub-phase 4b and is
+    ///                      NOT optional: `Library/Generator22D.fss` writes
+    ///                      `[\T, 0, s0 + s2, 0, s1 + s3\]`, so "literals only"
+    ///                      cannot compile the library's own array generators.
+    ///                      `NatReflect.reflect`, which turns a run-time `ZZ32`
+    ///                      into a static parameter, is a NAMED DEVIATION (§3.2)
+    ///                      and must be refused by a diagnostic that says so --
+    ///                      a monomorphizing compiler cannot stamp a
+    ///                      specialisation for a value it does not know.
+    ///                      Scope, measured: 8 census `.fsi` files block on
+    ///                      `nat` today and 61 corpus files write it.
+    /// `unit` `dim`         D7 §3.3 defers both to sub-phase 4d, gated on
+    ///                      SPIKE-COMPOSITE-TYPE rather than on D7. Sized from
+    ///                      the corpus and not the spec: `unit` is 6 corpus
+    ///                      files and ZERO library files, `dim` is zero corpus
+    ///                      files at all.
+    /// `opr`                D7 §4 keeps this refusal in place when the other
+    ///                      three open, and says so in the parser spike's
+    ///                      scope. It is a different mechanism -- a name in
+    ///                      OPERATOR position, which is SPIKE-OPEXPR territory
+    ///                      and not arithmetic -- and it belongs with the
+    ///                      operator-property traits, which begin by WRITING
+    ///                      declarations that exist only as commented LaTeX.
     fn static_param(&mut self) -> Parsed<StaticParam> {
         if let Some(Kind::Reserved(word)) = self.peek_kind() {
-            if matches!(*word, "nat" | "int" | "bool" | "unit" | "dim" | "opr") {
+            // The D7 group. When D7 is adopted, THIS is the arm that goes: the
+            // kind is recorded on `StaticParam` and `mono::expand` learns to
+            // stamp on a value. Nothing else here moves.
+            if matches!(*word, "nat" | "int" | "bool") {
+                return Err(ParseError::StaticParameterKindPendingDecision {
+                    span: self.span_here(),
+                    kind: (*word).to_owned(),
+                });
+            }
+            // `unit` and `dim` wait for 4d; `opr` waits for the
+            // operator-property traits. Both stay refused when the group above
+            // opens.
+            if matches!(*word, "unit" | "dim" | "opr") {
                 return Err(ParseError::StaticParameterKindUnsupported {
                     span: self.span_here(),
                     kind: (*word).to_owned(),

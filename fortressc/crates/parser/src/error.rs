@@ -22,6 +22,14 @@ pub enum ParseError {
     },
     /// `[\nat n\]`. M3d is type parameters only: mixing static integers with
     /// type parameters is a dependent type system, and this is not one.
+    /// A static parameter kind D7 OPENS but that nothing parses yet:
+    /// `nat`, `int`, `bool`. Separate from the deferred kinds because the
+    /// answer is different -- these are waiting on a decision that is written,
+    /// and those are waiting on a sub-phase.
+    StaticParameterKindPendingDecision {
+        span: Span,
+        kind: String,
+    },
     StaticParameterKindUnsupported {
         span: Span,
         kind: String,
@@ -137,6 +145,7 @@ impl ParseError {
             Self::UnexpectedToken { span, .. }
             | Self::PostfixOperatorUnsupported { span }
             | Self::ReservedWord { span, .. }
+            | Self::StaticParameterKindPendingDecision { span, .. }
             | Self::StaticParameterKindUnsupported { span, .. }
             | Self::LocalFunctionDeclarationUnsupported { span }
             | Self::WhereClauseFormUnsupported { span, .. }
@@ -172,6 +181,11 @@ impl core::fmt::Display for ParseError {
             Self::ReservedWord { word, .. } => {
                 write!(f, "reserved word `{word}` is not in the implemented subset")
             }
+            Self::StaticParameterKindPendingDecision { kind, .. } => write!(
+                f,
+                "`{kind}` static parameters are not implemented yet; D7 puts them in v1 \
+                 with statically-known arguments and is drafted, not adopted"
+            ),
             Self::StaticParameterKindUnsupported { kind, .. } => write!(
                 f,
                 "`{kind}` static parameters are not implemented; M3d is type parameters only"
