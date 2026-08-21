@@ -1,11 +1,18 @@
 component seqreductionhuge
 
+(* The sequential floor for the phase 7 reduction. Byte for byte reductionhuge
+   with `seq(...)` around the range and nothing else changed -- and `+=` rather
+   than `total := total + ...`, because the reduction recogniser requires every
+   assignment to a name to be compound. Written the other way this fixture is
+   disqualified for a reason that has nothing to do with `seq`, and a mutation
+   that gives a sequential loop a private accumulator then goes unnoticed. *)
+
 export Executable
 
 run():()=do
    total: ZZ64 := 0
    for i <- seq(0#1000000000) do
-      total := total + i i
+      total += i i
    end
    println(total)
 end
