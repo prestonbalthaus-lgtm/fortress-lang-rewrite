@@ -26,7 +26,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use fortress_ast::{Component, Decl, ImportDecl};
+use fortress_ast::{Component, Decl, ImportDecl, ImportItems, TypeRef};
 
 /// `default_repository/configuration:44`:
 /// `fortress.source.path=;.;${_fr}/LibraryBuiltin;${FORTRESS_AUTOHOME}/Library;${_fr}/test_library`
@@ -114,6 +114,73 @@ fn find(name: &str, path: &[PathBuf]) -> Option<PathBuf> {
     path.iter().map(|dir| dir.join(&file)).find(|p| p.is_file())
 }
 
+/// Every type name a declaration mentions: its topology clauses and the types
+/// of its members. A merged declaration has to be WELL FORMED, and a trait
+/// whose supertype was left behind is `unknown type` at the use site -- so a
+/// named import brings what it named PLUS what those declarations need from the
+/// same api, to a fixpoint.
+fn references(decl: &Decl, out: &mut Vec<String>) {
+    fn walk(t: &TypeRef, out: &mut Vec<String>) {
+        match t {
+            TypeRef::Named { name, args, .. } => {
+                out.push(name.clone());
+                for a in args {
+                    walk(a, out);
+                }
+            }
+            TypeRef::Tuple { elems, .. } => elems.iter().for_each(|e| walk(e, out)),
+            TypeRef::Arrow { from, to, .. } => {
+                walk(from, out);
+                walk(to, out);
+            }
+            TypeRef::Unit { .. } | TypeRef::Static { .. } => {}
+        }
+    }
+    // SUPERTYPES ONLY, and the narrowing is measured rather than tasteful. A
+    // trait's supertype is part of its IDENTITY -- subtyping cannot be decided
+    // without it, so merging a trait and leaving its supertype behind merges
+    // something ill formed. A METHOD'S parameter type is not: it is needed when
+    // that method is CALLED, and if it is called the name is demanded and
+    // reported honestly.
+    //
+    // FOLLOWING MEMBER TYPES TOO WAS TRIED AND IS WIDER THAN THE DEFECT IT
+    // FIXES: `import FortressLibrary.{println, String}` reaches `Reduction`
+    // through String's members and blows MAX_INSTANTIATIONS again -- a
+    // different name from the `Indexed` the old merge-everything hit, and the
+    // same failure. Neither `comprises` nor `excludes` is followed either:
+    // both name types that are BELOW or BESIDE this one, never above it.
+    let topology = match decl {
+        Decl::Trait(t) => &t.extends,
+        Decl::Object(o) => &o.extends,
+        Decl::Function(_) => return,
+    };
+    for t in topology {
+        walk(t, out);
+    }
+}
+
+/// The named set closed over `references`, restricted to what THIS api
+/// declares. A name the api does not declare is somebody else's to provide and
+/// is left alone.
+fn closure(decls: &[Decl], seed: Vec<String>) -> HashSet<String> {
+    let here: HashMap<&str, &Decl> = decls.iter().map(|d| (decl_name(d), d)).collect();
+    let mut want: HashSet<String> = seed.into_iter().collect();
+    let mut work: Vec<String> = want.iter().cloned().collect();
+    while let Some(name) = work.pop() {
+        let Some(decl) = here.get(name.as_str()) else {
+            continue;
+        };
+        let mut found = Vec::new();
+        references(decl, &mut found);
+        for r in found {
+            if here.contains_key(r.as_str()) && want.insert(r.clone()) {
+                work.push(r);
+            }
+        }
+    }
+    want
+}
+
 fn decl_name(decl: &Decl) -> &str {
     match decl {
         Decl::Function(f) => &f.name,
@@ -147,6 +214,12 @@ pub fn resolve(component: &Component, source: &Path) -> Resolution {
         .collect();
     let mut merged: Vec<Decl> = Vec::new();
 
+    // WHAT EACH IMPORT ASKED FOR, carried alongside it. `ImportItems` is on the
+    // declaration and was read by nothing -- so `import FortressLibrary.{
+    // println, String}` pulled in EVERY trait and object the library declares.
+    // That is not a tidiness point: it is what put `Indexed` into the
+    // instantiation budget of a component that never named it, and
+    // MAX_INSTANTIATIONS is what that component died on.
     let mut queue: Vec<ImportDecl> = component.imports.clone();
     let mut sources: HashMap<String, PathBuf> = HashMap::new();
     while let Some(import) = queue.pop() {
@@ -179,6 +252,19 @@ pub fn resolve(component: &Component, source: &Path) -> Resolution {
         // are not in the census set at all.
         queue.extend(api.imports.iter().cloned());
         sources.insert(name.clone(), file);
+        // WHAT THE IMPORT NAMED, or everything for an on-demand one.
+        // `intro.tex:38-63` calls `.{...}` and `import api Foo` imports ON
+        // DEMAND -- every name -- and a NAMED list is a request for those names
+        // and no others. 841 corpus imports are on-demand and 142 are named, so
+        // this narrows one import in seven and leaves the rest exactly as they
+        // were.
+        let wanted: Option<HashSet<String>> = match &import.items {
+            ImportItems::OnDemand => None,
+            ImportItems::Named(names) => Some(closure(
+                &api.decls,
+                names.iter().map(|n| n.name.clone()).collect(),
+            )),
+        };
         // ONLY THE TYPES. An api's FUNCTION declarations are signatures the
         // importing component must SATISFY -- `source-code.tex:313-320` makes
         // that the component's obligation and it is step 5, not this step --
@@ -188,6 +274,11 @@ pub fn resolve(component: &Component, source: &Path) -> Resolution {
         for decl in api.decls {
             if matches!(decl, Decl::Function(_)) {
                 continue;
+            }
+            if let Some(wanted) = wanted.as_ref() {
+                if !wanted.contains(decl_name(&decl)) {
+                    continue;
+                }
             }
             if taken.insert(decl_name(&decl).to_owned()) {
                 merged.push(decl);

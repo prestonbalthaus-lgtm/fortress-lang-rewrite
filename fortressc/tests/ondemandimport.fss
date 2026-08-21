@@ -1,0 +1,11 @@
+component ondemandimport
+import namedimportapi.{...}
+export Executable
+
+(* ON DEMAND still brings everything -- intro.tex:38-63 -- and 841 of the
+   corpus's 983 brace imports are this form. Narrowing it would be the real
+   regression. *)
+f(x: Unwanted): Unwanted = x
+
+run():() = println("ok")
+end

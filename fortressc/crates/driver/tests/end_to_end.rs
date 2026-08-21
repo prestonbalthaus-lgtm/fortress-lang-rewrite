@@ -2135,6 +2135,43 @@ fn the_api_with_that_defect_is_still_refused_on_its_own() {
     );
 }
 
+// --------------------------------------------- a named import brings what it named
+//
+// `ImportItems` was on the declaration and read by NOTHING, so
+// `import FortressLibrary.{println, String}` merged every trait and object the
+// library declares. That is what put `Indexed` into the instantiation budget of
+// a component that never named it, and MAX_INSTANTIATIONS is what that
+// component died on.
+
+/// What was named, PLUS its supertypes -- a trait's supertype is part of its
+/// identity and subtyping cannot be decided without it.
+#[test]
+fn a_named_import_brings_what_it_named_and_its_supertypes() {
+    let binary = compile_fixture("namedimport.fss", "namedimport");
+    let out = run(&binary);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "ok\n");
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// AND NOTHING ELSE. Without this the whole api arrived and `Unwanted`
+/// compiled; that is the defect, stated as a test.
+#[test]
+fn a_named_import_does_not_bring_what_it_did_not_name() {
+    let message = refusal("badnamedimport.fss");
+    assert!(message.contains("unknown type `Unwanted`"), "{message}");
+}
+
+/// ON DEMAND STILL BRINGS EVERYTHING. `intro.tex:38-63`, and 841 of the
+/// corpus's 983 brace imports are this form -- narrowing it would be the real
+/// regression, so the pair is the assertion and neither half alone is.
+#[test]
+fn an_on_demand_import_still_brings_the_whole_api() {
+    let binary = compile_fixture("ondemandimport.fss", "ondemandimport");
+    let out = run(&binary);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "ok\n");
+    let _ = std::fs::remove_file(&binary);
+}
+
 // ------------------------------------------ operator declarations (SPIKE-OPEXPR)
 //
 // THE BOOTSTRAP ROOT'S TWO WALLS. `Library/FortressLibrary.fsi` died at byte

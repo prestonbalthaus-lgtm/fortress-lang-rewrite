@@ -77,3 +77,28 @@ ProjectFortress/compiler_tests/NYI.Compiled5.n.fss
 #                  deliberately. Defect register DEV-12.
 # ---------------------------------------------------------------------------
 ProjectFortress/compiler_tests/Compiled1.al.fss
+# ---------------------------------------------------------------------------
+# ADDED DELIBERATELY, 2026-08-21, WITH ITS REASON -- which is what this file
+# asks for; what it forbids is adding a line casually.
+#
+#   XXXPreparser.c  The legacy refuses it for UNMATCHED DELIMITERS:
+#                   `import List.{Cons => CC, opr <| => ||}` leaves `<|` open
+#                   as far as its preparser is concerned, and it reports three
+#                   errors none of which we implement.
+#                   IT WAS ONLY EVER REFUSED HERE BY ACCIDENT. Until the
+#                   resolver read the import list, this file merged the WHOLE
+#                   of `List` and died on `unknown type LexicographicOrder` --
+#                   a name it never mentions. Fixing the resolver removed the
+#                   accident and revealed we accept the program. That is an
+#                   exposure, not a regression: the refusal was never ours.
+#                   OUR PARSE IS STRUCTURALLY CORRECT, checked rather than
+#                   assumed: the import records `Cons => CC` and `<| => ||`,
+#                   two aliased names, which is what the source says. The gap
+#                   is that 1.0 wants its PREPARSER to refuse the program
+#                   before a parse is attempted at all -- the file is named
+#                   XXXPreparser on purpose. So we are MORE PERMISSIVE, not
+#                   more correct.
+#                   Re-opens with delimiter matching in the preparser, which is
+#                   real work and is nobody's item yet.
+# ---------------------------------------------------------------------------
+ProjectFortress/parser_tests/XXXPreparser.c.fss

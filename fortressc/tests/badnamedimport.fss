@@ -1,0 +1,11 @@
+component badnamedimport
+import namedimportapi.{Wanted}
+export Executable
+
+(* `Unwanted` was NOT named and is NOT a supertype of anything named, so it must
+   not be in scope. Before the resolver read the import list, the whole api came
+   in and this compiled. *)
+f(x: Unwanted): Unwanted = x
+
+run():() = println("ok")
+end

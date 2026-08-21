@@ -1,0 +1,10 @@
+component namedimport
+import namedimportapi.{Wanted}
+export Executable
+
+(* `Wanted` is in scope, and so is `Sup` -- a trait's SUPERTYPE is part of its
+   identity and subtyping cannot be decided without it. *)
+f(x: Wanted): Sup = x
+
+run():() = println("ok")
+end

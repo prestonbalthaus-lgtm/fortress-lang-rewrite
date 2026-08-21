@@ -149,8 +149,8 @@ if [[ ${1:-} == --mutate ]]; then
         's/^run_out_equals=pass/run_out_equals=nonesuch/' || exit 2
     got=$(gate | field 'd["outcomes"]["pass"]')
     restore ProjectFortress/compiler_tests/Compiled17.test
-    report 'a satisfied expectation corrupted' "$got" 310 \
-        'pass fell 311 -> 310, below the floor of 311; gate red'
+    report 'a satisfied expectation corrupted' "$got" 309 \
+        'pass fell 310 -> 309, below the floor of 310; gate red'
 
     # 4. Make `matches` a search rather than a full match, which is what Java
     #    String.matches is NOT.
@@ -158,9 +158,9 @@ if [[ ${1:-} == --mutate ]]; then
         's/^        return re.fullmatch(pattern, text, re.S) is not None$/        return re.search(pattern, text, re.S) is not None/' || exit 2
     got=$(gate | field 'str(d["outcomes"]["pass"]) + "/" + str(d["outcomes"]["fail"])')
     restore tools/oracle-gate.sh
-    if [[ $got == 311/39 ]]; then
+    if [[ $got == 310/40 ]]; then
         documented 'matches weakened from fullmatch to search' \
-            "nothing moved (311/39 either way). 36 cases carry a _matches or
+            "nothing moved (310/40 either way). 36 cases carry a _matches or
          _WImatches expectation and this compiler reaches only 5 of them; all
          5 are satisfied by both readings, so no assertion the suite can make
          separates them today.
@@ -168,7 +168,7 @@ if [[ ${1:-} == --mutate ]]; then
          prefix-matching case is reached, and it is 8 lines from a false
          green if the comparator is ever rewritten"
     else
-        report 'matches weakened from fullmatch to search' "$got" 311/39 \
+        report 'matches weakened from fullmatch to search' "$got" 310/40 \
             'a case changed verdict'
     fi
 
@@ -176,8 +176,8 @@ if [[ ${1:-} == --mutate ]]; then
     apply tools/oracle-gate.sh 's/^        if code == 1:$/        if code in (0, 1):/' || exit 2
     got=$(gate | field 'len(d["nowRefused"])')
     restore tools/oracle-gate.sh
-    report 'exit 0 read as a clean refusal' "$got" 38 \
-        'all 38 listed files reported as no longer refused'
+    report 'exit 0 read as a clean refusal' "$got" 39 \
+        'all 39 listed files reported as no longer refused'
 
     # 6. Break the Properties continuation so a wrapped `tests=` truncates.
     # THE ASSERTION IS THE MECHANISM AND NOT THE NUMBER. This row carried
@@ -242,7 +242,16 @@ RUN_TIMEOUT     = 20
 # neither list can see: the acceptance list only knows about must-fail
 # programs and the signal list only about binaries. Raise it when passes are
 # won; never lower it to make a red run green.
-PASS_FLOOR = 311
+# 2026-08-21: 311 -> 310, AND A FLOOR GOING DOWN NEEDS ITS REASON WRITTEN.
+# `XXXPreparser.c.fss` left the pass set, and the refusal it lost WAS NEVER
+# OURS: until the resolver read the import list, that file merged the WHOLE of
+# `List` and died on `unknown type LexicographicOrder`, a name it never
+# mentions. Fixing the resolver removed the accident and revealed we accept a
+# program 1.0's PREPARSER refuses for unmatched delimiters. The precedent is the
+# semantics lane's 291 -> 285, where every lost case was a must-fail being
+# wrongly accepted; this is the same shape one step further out -- a PASS being
+# wrongly earned.
+PASS_FLOOR = 310
 
 args, opt = sys.argv[1:], {}
 i = 0
