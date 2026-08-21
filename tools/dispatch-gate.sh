@@ -434,7 +434,14 @@ MUTATIONS=(
   'crates/types/src/lib.rs|self.method_slots.insert((owner, index), slot);|self.method_slots.insert((owner, m.span.start), slot);|file a method slot under its span, which two instantiations share'
   'crates/types/src/lib.rs|concrete: m.body.is_some(),|concrete: true,|let a bodiless functional declaration be a dispatch target'
   'crates/types/src/mono.rs|if !self.generic_methods.contains(&name) {|if true {|stamp no generic method anywhere'
-  'crates/types/src/mono.rs|for (param, arg) in template.decl.static_params.iter().zip(&request.args) {|for (param, arg) in template.decl.static_params.iter().skip(1).zip(&request.args) {|drop the first static argument of every stamp'
+  # RE-TARGETED at the consolidation. The row named the loop that built a
+  # method stamp's substitution inline; D7 replaced it with `bind_static`, which
+  # is the same binding for both stamp paths and is where the property lives
+  # now. The row read `0 hits` and reported COULD NOT BE APPLIED, which is the
+  # harness working -- a pattern that stops matching is a row that stops
+  # testing, and this table is split on `|` so a multi-line anchor is not
+  # available to make it more specific.
+  'crates/types/src/mono.rs|    for (param, arg) in params.iter().zip(args) {|    for (param, arg) in params.iter().skip(1).zip(args) {|drop the first static argument of every stamp'
   'crates/types/src/lib.rs|self.prune_stamp(owner, method);|let _ = (owner, method);|refuse the component instead of withdrawing a wrong stamp'
   'crates/types/src/lib.rs|!signature.pruned && signature.params.len() == arity|signature.params.len() == arity|leave a withdrawn stamp in the candidate set'
   'crates/types/src/lib.rs|if targets.is_empty() {|if false {|let a requirement tie with an implementation'

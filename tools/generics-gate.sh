@@ -277,7 +277,12 @@ overload_set() {
 MUTATIONS=(
   'crates/types/src/mono.rs|for ((mangled, slot), instance) in &self.instances {|for ((mangled, slot), instance) in self.instances.iter().rev() {|emit instantiations in reverse name order'
   'crates/types/src/mono.rs|check_uniformity(component)?;|let _ = check_uniformity(component);|stop enforcing the uniformity rule'
-  'crates/types/src/lib.rs|self.discharge_bounds(component)?;|let _ = self.discharge_bounds(component);|stop discharging bound obligations'
+  # RE-TARGETED at the consolidation. `self.discharge_bounds(component)?;` has
+  # TWO hits since api check mode landed -- `run` and `check_api` both call it --
+  # so the row reported COULD NOT BE APPLIED. Mutating the LOOP INSIDE the
+  # function is unique and kills both call sites at once, which is what the row
+  # meant in the first place.
+  'crates/types/src/lib.rs|        for obligation in \&component.bounds {|        for obligation in \&Vec::new() {|stop discharging bound obligations'
   'crates/types/src/mono.rs|if instance.origin == name && instance.member == member {|if instance.origin == name {|emit every instance once per source declaration of its name'
   'crates/types/src/mono.rs|for (member, template) in templates.iter().enumerate() {|for (member, template) in templates.iter().enumerate().take(1) {|instantiate only the first member of an overload set'
 )
