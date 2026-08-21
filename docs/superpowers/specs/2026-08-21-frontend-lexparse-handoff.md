@@ -1,6 +1,6 @@
 # Frontend spikes: varargs, operator expressions, Unicode, import resolution
 
-Branch `spike/frontend-lexparse`, ten commits off `f81f41ace`, in the worktree
+Branch `spike/frontend-lexparse`, twelve commits off `f81f41ace`, in the worktree
 at `/home/prestonalthaus/claude/fortress-wt-lexparse`. Nothing is merged and
 nothing is pushed.
 
@@ -115,6 +115,37 @@ Merge theirs and re-apply those two.
    (+17 corpus files), the import list recorded, qualified type names, foreign
    imports refused by name.
 10. **`7c51130c4` api resolution.** Above.
+11. **`9181f9e29`** this document.
+12. **`1462d35b2` compound assignment named.** `x ||= e` was reported as a
+    lopsided infix; it now names the construct.
+
+## What the post-varargs re-census found, which is a Group-1 input
+
+The task made "re-census immediately after varargs" its own deliverable because
+the 329 -> 74 -> 234 trail on `FortressLibrary.fsi` says a new wall sits behind
+each one. It does. The bootstrap root moved
+
+    8254 -> 10380 -> 28314 -> 37399
+
+across the first three commits of this branch, and **it now dies on `nat` static
+parameters** -- `[\nat n\]`, refused at the parser by M3d's locked decision.
+That is not a parser gap and no amount of frontend work moves it. **The `nat`
+reconciliation is Group 1 of the gap analysis and it is now the thing standing
+between the frontend and the bootstrap root.** `Library/Set.fsi` reached a
+continuation-line return type and then `UncheckedException`; `Library/String.fsi`
+reached a `var` member; `CompilerBuiltin.fsi` -- the file that declares `Object`
+-- reached `coerce`. Every one of those is a different milestone.
+
+## `||=`, checked rather than assumed
+
+Making `||` an infix operator could have changed how `x ||= e` fails, and 37
+corpus sites write it. Probed: before the last commit it reported `||` as a
+LOPSIDED infix -- a real rule, and not the one the program broke. It now reports
+`the compound assignment operator `||=` is not in the implemented subset`, which
+also covers `UNIONCAT= UPLUS= TIMES= MIN= MAX= CUP= BITAND=` in one rule. No
+silent acceptance in any position, and the declaration side (`opr ||=`) still
+parses. One corpus file's diagnostic moves; the other 36 sit behind earlier
+walls.
 
 ## What is deliberately NOT done, and why
 
