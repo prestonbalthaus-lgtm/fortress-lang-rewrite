@@ -261,7 +261,15 @@ MUTATIONS=(
   'crates/types/src/lib.rs|(right, constant(false))|(constant(false), right)|swap the arms of the AND desugaring'
   'crates/types/src/lib.rs|(constant(true), right)|(right, constant(true))|swap the arms of the OR desugaring'
   'crates/parser/src/lib.rs|let exponent = self.primary()?;|let exponent = self.postfix()?;|make the exponent right associative'
-  'crates/parser/src/lib.rs|if self.word_operator_here() {|if false {|let a word operator be swallowed by juxtaposition again'
+  # RE-TARGETED at the three-lane merge. This row used to disable
+  # `word_operator_here`, and that mutation SURVIVED -- not because the gate went
+  # blind but because the property moved. `AND` and `OR` were `Ident` to the lexer
+  # when the row was written; the frontend lane's operator-word rule lexes them as
+  # `OpWord`, which `starts_juxt_operand`'s arm list does not carry, so the run
+  # stops at one whether that guard fires or not. What models the defect NOW is
+  # letting an `OpWord` start an operand again. The row cannot say so in the arm
+  # list itself: those arms are separated by `|` and the table is split on it.
+  'crates/parser/src/lib.rs|fn starts_juxt_operand(&self) -> bool {|fn starts_juxt_operand(&self) -> bool { if matches!(self.peek_kind(), Some(Kind::OpWord(_))) { return true; }|let a word operator be swallowed by juxtaposition again'
   'runtime/shims.c|if (b < 0) {|if (0) {|let a negative exponent return a number'
   'crates/types/src/lib.rs|target: Target::AssertFailed,|target: Target::Println { ty: Type::String },|let a failed assert print and carry on'
 )

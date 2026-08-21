@@ -116,11 +116,17 @@ if [[ ${1:-} == --mutate ]]; then
 
     # 1. Take a file off the accepted-must-fail list. A program that must fail
     #    and does not is then unaccounted for, and that is the whole ratchet.
+    # AGAINST TODAY'S BASELINE AND NOT AGAINST 1. This row asserted 1 outright
+    # and escaped at the three-lane merge reporting 8 -- seven acceptances the
+    # merge introduced and nobody has signed off were already unaccounted for,
+    # so the mutation's own file was the eighth. The mutation was working; the
+    # expectation was absolute where the quantity is a DELTA.
+    base=$(gate | field 'len(d["newAcceptances"])')
     apply tools/oracle-accepted-must-fail.txt '5d' || exit 2
     got=$(gate | field 'len(d["newAcceptances"])')
     restore tools/oracle-accepted-must-fail.txt
-    report 'a file dropped from the accepted-must-fail list' "$got" 1 \
-        'reported as 1 new acceptance; gate red'
+    report 'a file dropped from the accepted-must-fail list' "$got" "$((base + 1))" \
+        "reported as one more than the $base already unaccounted for; gate red"
 
     # 2. Same for the signal list. This one needs part C, so it is the slow one.
     apply tools/oracle-known-signals.txt '3d' || exit 2
@@ -138,8 +144,8 @@ if [[ ${1:-} == --mutate ]]; then
         's/^run_out_equals=pass/run_out_equals=nonesuch/' || exit 2
     got=$(gate | field 'd["outcomes"]["pass"]')
     restore ProjectFortress/compiler_tests/Compiled17.test
-    report 'a satisfied expectation corrupted' "$got" 284 \
-        'pass fell 285 -> 284, below the floor of 285; gate red'
+    report 'a satisfied expectation corrupted' "$got" 290 \
+        'pass fell 291 -> 290, below the floor of 291; gate red'
 
     # 4. Make `matches` a search rather than a full match, which is what Java
     #    String.matches is NOT.
@@ -147,9 +153,9 @@ if [[ ${1:-} == --mutate ]]; then
         's/^        return re.fullmatch(pattern, text, re.S) is not None$/        return re.search(pattern, text, re.S) is not None/' || exit 2
     got=$(gate | field 'str(d["outcomes"]["pass"]) + "/" + str(d["outcomes"]["fail"])')
     restore tools/oracle-gate.sh
-    if [[ $got == 285/47 ]]; then
+    if [[ $got == 291/48 ]]; then
         documented 'matches weakened from fullmatch to search' \
-            "nothing moved (285/47 either way). 36 cases carry a _matches or
+            "nothing moved (291/48 either way). 36 cases carry a _matches or
          _WImatches expectation and this compiler reaches only 5 of them; all
          5 are satisfied by both readings, so no assertion the suite can make
          separates them today.
@@ -157,7 +163,7 @@ if [[ ${1:-} == --mutate ]]; then
          prefix-matching case is reached, and it is 8 lines from a false
          green if the comparator is ever rewritten"
     else
-        report 'matches weakened from fullmatch to search' "$got" 285/47 \
+        report 'matches weakened from fullmatch to search' "$got" 291/48 \
             'a case changed verdict'
     fi
 
@@ -165,15 +171,15 @@ if [[ ${1:-} == --mutate ]]; then
     apply tools/oracle-gate.sh 's/^        if code == 1:$/        if code in (0, 1):/' || exit 2
     got=$(gate | field 'len(d["nowRefused"])')
     restore tools/oracle-gate.sh
-    report 'exit 0 read as a clean refusal' "$got" 47 \
-        'all 47 listed files reported as no longer refused'
+    report 'exit 0 read as a clean refusal' "$got" 41 \
+        'all 41 listed files reported as no longer refused'
 
     # 6. Break the Properties continuation so a wrapped `tests=` truncates.
     apply tools/oracle-gate.sh 's/^    return n % 2 == 1$/    return False/' || exit 2
     got=$(gate | field 'str(d["cases"]) + "/" + str(d["outcomes"]["pass"])')
     restore tools/oracle-gate.sh
-    report 'line continuation disabled in the .test reader' "$got" 495/89 \
-        'cases fell 609 -> 495 and pass 285 -> 89, far below the floor; gate red'
+    report 'line continuation disabled in the .test reader' "$got" 495/93 \
+        'cases fell 609 -> 495 and pass 291 -> 93, far below the floor; gate red'
 
     printf '\n%d mutations, %d refused, %d documented escape(s), %d unexplained\n' \
         "$((mut_pass + mut_fail + mut_doc))" "$mut_pass" "$mut_doc" "$mut_fail"
