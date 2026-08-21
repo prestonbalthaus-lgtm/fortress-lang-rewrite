@@ -2117,7 +2117,13 @@ fn a_for_loop_over_something_that_is_not_an_array_is_refused() {
 #[test]
 fn an_open_comprises_clause_in_a_component_is_refused() {
     let message = refusal("badcomprisesopen.fss");
-    assert!(message.contains("is open (`...`)"), "{message}");
+    // The phrase is the one only THIS rule prints. `is open (`...`)` appears in
+    // the :236-241 diagnostic too, and asserting on that made the fixture pass
+    // with this rule deleted -- caught by the mutation table, not by review.
+    assert!(
+        message.contains("an api may write and a component may not"),
+        "{message}"
+    );
 }
 
 /// `traits.tex:232-235` -- the traits a `comprises` clause lists "must
@@ -2137,7 +2143,7 @@ fn a_comprises_name_that_does_not_extend_the_trait_is_refused() {
 fn an_api_extending_its_own_open_comprises_trait_is_refused() {
     let message = refusal("badcomprisesextendsopen.fsi");
     assert!(
-        message.contains("whose `comprises` clause is open"),
+        message.contains("an api may not declare a trait that extends"),
         "{message}"
     );
 }

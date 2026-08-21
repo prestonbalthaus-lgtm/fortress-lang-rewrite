@@ -1,9 +1,11 @@
 component badcomprisesopen
 export Executable
 
-(* traits.tex:161-162 -- the open marker belongs in an api, never here. *)
+(* traits.tex:161-162 -- the open marker belongs in an api, never here.
+   NOTHING EXTENDS T ON PURPOSE: with an extender present the :236-241 rule
+   fires too, and its message also carries the words "is open (`...`)", so the
+   assertion would hold with this rule deleted. *)
 trait T comprises { ... } end
-object O extends T end
 
 run():() = ()
 end
