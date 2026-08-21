@@ -32,7 +32,10 @@
 #   ./tools/api-census.sh --json       machine readable
 #
 # FORTRESSC pins the binary. Set it when other work is rebuilding the tree, or
-# the sweep silently mixes two compilers.
+# the sweep silently mixes two compilers. KEEP THE PINNED COPY OUTSIDE
+# fortressc/build/ -- that directory is shared, and another gate wiped a pin
+# out of it mid-session. Every report stamps the repo SHA AND the binary's
+# sha256, because with a pin those two are different facts.
 set -uo pipefail
 
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -49,6 +52,7 @@ mkdir -p "$repo/fortressc/build"
 
 cd "$repo" && FORTRESSC=$fortressc \
     CENSUS_SHA=$(git rev-parse --short=9 HEAD 2>/dev/null || echo unknown) \
+    CENSUS_CC=$(sha256sum "$fortressc" 2>/dev/null | cut -c1-12 || echo unknown) \
     CACHE=${CACHE:-$repo/fortressc/build/api-census.json} \
     python3 - "$@" <<'PY'
 import json, os, re, subprocess, sys, collections
@@ -57,6 +61,8 @@ from concurrent.futures import ThreadPoolExecutor
 FORTRESSC = os.environ['FORTRESSC']
 CACHE     = os.environ['CACHE']
 SHA       = os.environ['CENSUS_SHA']
+# FORTRESSC pins the binary, so repo HEAD is NOT compiler identity. Both.
+CCID      = os.environ.get('CENSUS_CC', 'unknown')
 
 args, opt = sys.argv[1:], {}
 i = 0
@@ -180,7 +186,7 @@ with ThreadPoolExecutor(max_workers=jobs) as pool:
     recs = list(pool.map(run_one, GROUPS['all']))
 by_path = {r['path']: r for r in recs}
 with open(CACHE, 'w') as f:
-    json.dump({'sha': SHA, 'records': recs}, f, indent=1)
+    json.dump({'sha': SHA, 'cc': CCID, 'records': recs}, f, indent=1)
 
 sel = [by_path[p] for p in GROUPS[want_group]]
 if 'status' in opt:
@@ -197,7 +203,7 @@ def tally(paths):
 
 if opt.get('json'):
     print(json.dumps({
-        'sha': SHA,
+        'sha': SHA, 'compiler': CCID,
         'groups': {g: {'files': len(ps),
                        'compiles': tally(ps)[0], 'terminus': tally(ps)[1],
                        'blocked': tally(ps)[2]} for g, ps in GROUPS.items()},
@@ -205,7 +211,7 @@ if opt.get('json'):
     }, indent=2))
     sys.exit(0)
 
-print(f'== library census at {SHA} ==')
+print(f'== library census at repo {SHA}, compiler {CCID} ==')
 print('THE DENOMINATOR: 114 = Library/ top level 104 + CompilerLibrary/ 10.')
 print('126 = Library/ RECURSIVE; the extra 22 are Library/incomplete/.')
 print('The census set is NOT the bootstrap set -- the legacy source path')

@@ -42,7 +42,10 @@
 #   ./tools/oracle-gate.sh --json
 #
 # FORTRESSC pins the binary. Set it when other work is rebuilding the tree, or
-# the sweep silently mixes two compilers.
+# the sweep silently mixes two compilers. KEEP THE PINNED COPY OUTSIDE
+# fortressc/build/ -- that directory is shared, and another gate wiped a pin
+# out of it mid-session. Every report stamps the repo SHA AND the binary's
+# sha256, because with a pin those two are different facts.
 set -uo pipefail
 
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -190,6 +193,7 @@ mkdir -p "$repo/fortressc/build/oracle"
 
 cd "$repo" && FORTRESSC=$fortressc \
     ORACLE_SHA=$(git rev-parse --short=9 HEAD 2>/dev/null || echo unknown) \
+    ORACLE_CC=$(sha256sum "$fortressc" 2>/dev/null | cut -c1-12 || echo unknown) \
     REFUSE_LIST=$repo/tools/oracle-accepted-must-fail.txt \
     SIGNAL_LIST=$repo/tools/oracle-known-signals.txt \
     BUILD=$repo/fortressc/build/oracle \
@@ -199,6 +203,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 FORTRESSC   = os.environ['FORTRESSC']
 SHA         = os.environ['ORACLE_SHA']
+# FORTRESSC pins the binary, so repo HEAD is NOT compiler identity. Both.
+CCID        = os.environ.get('ORACLE_CC', 'unknown')
 REFUSE_LIST = os.environ['REFUSE_LIST']
 SIGNAL_LIST = os.environ['SIGNAL_LIST']
 BUILD       = os.environ['BUILD']
@@ -353,6 +359,13 @@ def cases():
         for k in p:
             if k not in DIRECTIVES and not CHECK.match(k) and \
                k not in ('tests', 'STATIC_TESTS_DIR', 'PREPARSER_TESTS_DIR', 'arg1'):
+                # `arg1` IS NOT MODELLED. Two .test files pass a command-line
+                # argument to the binary and this gate runs every binary with
+                # none. No case reaches it today -- the 51 fails are 47
+                # acceptances plus 4 wrong outputs, all accounted for -- but
+                # the day one compiles it will report `the default check
+                # run_out_contains=PASS did not hold`, which names the wrong
+                # mechanism. Wire the argument in before then.
                 junk[f'{t}: {k[:40]}'] += 1
         names = p.get('tests', '').split()
         if not names:
@@ -678,7 +691,7 @@ new_signal = sorted({r['path'] for r in signal_rows} - known_signal)
 
 if opt.get('json'):
     print(json.dumps({
-        'sha': SHA, 'cases': len(CS), 'outcomes': dict(buckets),
+        'sha': SHA, 'compiler': CCID, 'cases': len(CS), 'outcomes': dict(buckets),
         'passFloor': PASS_FLOOR,
         'mustFail': len(must_fail), 'accepted': len(accepted),
         'newAcceptances': new_accept, 'nowRefused': now_refused,
@@ -686,7 +699,7 @@ if opt.get('json'):
     }, indent=2))
     sys.exit(0)
 
-print(f'== oracle gate at {SHA} ==\n')
+print(f'== oracle gate at repo {SHA}, compiler {CCID} ==\n')
 print('-- A. the cases. Every name in every `tests=`, one bucket each --')
 print(f"{'cases':>7}  bucket")
 order = ['pass', 'fail', 'blocked', 'unmodelled']

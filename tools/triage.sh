@@ -42,7 +42,10 @@
 #   ./tools/triage.sh --selftest             only prove the instrument can refuse
 #
 # FORTRESSC pins the binary. Set it when other work is rebuilding the tree, or
-# the sweep silently mixes two compilers.
+# the sweep silently mixes two compilers. KEEP THE PINNED COPY OUTSIDE
+# fortressc/build/ -- that directory is shared, and another gate wiped a pin
+# out of it mid-session. Every report stamps the repo SHA AND the binary's
+# sha256, because with a pin those two are different facts.
 set -uo pipefail
 
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -58,12 +61,19 @@ fi
 mkdir -p "$repo/fortressc/build"
 
 cd "$repo" && FORTRESSC=$fortressc CACHE=${CACHE:-$repo/fortressc/build/triage.json} \
+    TRIAGE_SHA=$(git rev-parse --short=9 HEAD 2>/dev/null || echo unknown) \
+    TRIAGE_CC=$(sha256sum "$fortressc" 2>/dev/null | cut -c1-12 || echo unknown) \
     python3 - "$@" <<'PY'
 import json, os, re, subprocess, sys, collections
 from concurrent.futures import ThreadPoolExecutor
 
 FORTRESSC = os.environ['FORTRESSC']
 CACHE     = os.environ['CACHE']
+# WHAT PRODUCED THE CACHE, stamped into it. Three agents share this tree and
+# FORTRESSC pins the binary, so repo HEAD and compiler identity DIVERGE by
+# design -- a report saying only "at <HEAD>" is not self describing.
+SHA       = os.environ.get('TRIAGE_SHA', 'unknown')
+CCID      = os.environ.get('TRIAGE_CC', 'unknown')
 
 # ---------------------------------------------------------------- arguments
 args, opt = sys.argv[1:], {}
@@ -129,10 +139,20 @@ def compile_one(path):
     lines = r.stderr.strip().splitlines()
     return {'path': path, 'code': r.returncode, 'last': lines[-1] if lines else ''}
 
+def _cache_load():
+    with open(CACHE) as f:
+        blob = json.load(f)
+    # The cache was a bare list before it was stamped. Both shapes are read so
+    # an existing cache does not have to be thrown away to gain a stamp.
+    if isinstance(blob, list):
+        return blob, 'unstamped', 'unstamped'
+    return blob['records'], blob.get('sha', '?'), blob.get('cc', '?')
+
+
 def results(base):
+    global SHA, CCID
     if opt.get('reuse') and os.path.exists(CACHE):
-        with open(CACHE) as f:
-            cached = json.load(f)
+        cached, SHA, CCID = _cache_load()
         if base in ('.', './'):
             return cached
         want = os.path.normpath(base)
@@ -143,7 +163,7 @@ def results(base):
         out = list(pool.map(compile_one, files))
     if base in ('.', './'):
         with open(CACHE, 'w') as f:
-            json.dump(out, f)
+            json.dump({'sha': SHA, 'cc': CCID, 'records': out}, f)
     return out
 
 # `file: 123..456: the message` -> `the message`. The span is what makes 340
@@ -513,7 +533,8 @@ if top:
 
 if opt.get('json'):
     print(json.dumps({
-        'root': root, 'total': len(res), 'compiled': passed, 'failed': len(failed),
+        'root': root, 'sha': SHA, 'compiler': CCID,
+        'total': len(res), 'compiled': passed, 'failed': len(failed),
         'categories': [{'category': k, 'stage': stages[k], 'count': len(v),
                         'example': v[0]['path'], 'message': diagnostic(v[0])}
                        for k, v in ranked],
@@ -526,6 +547,7 @@ if opt.get('conformance'):
     label = (' (syntax abstraction cut by ROADMAP decision 1)' +
              (', must-fail and known-broken dropped' if opt.get('real') else ''))
 print(f'== {root}: {len(res)} files, {passed} compile, {len(failed)} do not{label} ==')
+print(f'   repo {SHA}, compiler {CCID}')
 if not opt.get('real'):
     hidden = sum(1 for r in failed if NEGATIVE.search(r['path']))
     print(f'   {hidden} of them live in must-fail or known-broken paths. '
