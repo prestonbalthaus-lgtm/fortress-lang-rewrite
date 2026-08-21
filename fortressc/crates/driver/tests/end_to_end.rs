@@ -1527,3 +1527,29 @@ fn a_case_that_matches_nothing_halts_rather_than_falling_through() {
     assert_eq!(out.status.code(), Some(1));
     let _ = std::fs::remove_file(&binary);
 }
+
+/// The hole the first draft of the reachability pass left: it guarded the
+/// arguments of a FUNCTIONAL call and nothing else. A dotted call routes
+/// through `method_call`, and its receiver reaches the receiver's storage by
+/// construction -- that is what a receiver is. Before field mutation no method
+/// could write anything it owned, so receivers were safe by construction and
+/// the guard was not missing, it was unnecessary. It is necessary now.
+#[test]
+fn a_shared_receiver_may_not_take_a_method_call_in_a_parallel_body() {
+    let message = refusal("badsharedmethod.fss");
+    assert!(
+        message.contains("reaches mutable storage through `b.n`"),
+        "{message}"
+    );
+}
+
+/// And the argument half of the same path: `u.hit(b)` never reached the
+/// argument guard either, because that guard sits on the functional branch.
+#[test]
+fn a_shared_object_may_not_be_a_method_argument_in_a_parallel_body() {
+    let message = refusal("badsharedmethodarg.fss");
+    assert!(
+        message.contains("reaches mutable storage through `b.n`"),
+        "{message}"
+    );
+}

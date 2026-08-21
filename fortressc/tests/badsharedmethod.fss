@@ -1,0 +1,27 @@
+component badsharedmethod
+
+export Executable
+
+(* The RECEIVER of a dotted call is an argument too, and it is the one this
+   compiler could trust until a field store existed: before that, no method
+   could write anything its receiver owned. The method body is checked in the
+   method's own context, so the loop's rules -- which are lexical -- never see
+   `n := n + 1` at all.
+
+   Measured with the guard removed: 1000000 iterations print 1000000 at one
+   worker, 367097 at four and 130775 at sixteen. *)
+object Box()
+    var n: ZZ64 = 0
+    bump(): () = do
+        n := n + 1
+    end
+end
+
+run(): () = do
+    b = Box()
+    for i <- 0#1000000 do
+        b.bump()
+    end
+    println(b.n)
+end
+end

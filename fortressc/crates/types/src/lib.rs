@@ -3173,6 +3173,14 @@ impl Checker {
             span: dot_span,
         } = callee
         {
+            // The RECEIVER is an argument too, and the one this compiler used
+            // to be able to trust: before a field store existed, a method
+            // could not write anything its receiver owned. `b.bump()` where
+            // `bump` writes `self.n` is the same race as `bump(b)`, and the
+            // method body is checked in the method's own context, so the
+            // loop's lexical rules never see the write.
+            self.refuse_shared_receiver(base)?;
+            self.refuse_shared_array_argument(args)?;
             return self.method_call(base, name, args, span, *dot_span, expected);
         }
         let Expr::Var {
@@ -3223,6 +3231,46 @@ impl Checker {
     ///
     /// Inside `atomic` the lock serialises the callee's writes too, so the
     /// refusal lifts with the rest of the boundary.
+    /// The receiver half of the same rule. A method reaches its receiver's
+    /// storage by construction -- that is what a receiver IS -- so the question
+    /// is only whether the receiver names something shared between iterations
+    /// and whether anything under it can be written.
+    fn refuse_shared_receiver(&mut self, base: &Expr) -> Checked<()> {
+        if self.atomic_depth > 0 {
+            return Ok(());
+        }
+        let Some(floor) = self.parallel_loop().map(|c| c.floor) else {
+            return Ok(());
+        };
+        let Expr::Var { name, span } = base else {
+            return Ok(());
+        };
+        if !self.shared_in_loop(name, floor) {
+            return Ok(());
+        }
+        let Some(ty) = self.lookup(name).map(|l| l.ty) else {
+            return Ok(());
+        };
+        if matches!(ty, Type::Array(_)) {
+            return Err(TypeError::ParallelSharedArrayArgument {
+                span: *span,
+                name: name.clone(),
+            });
+        }
+        if let Some(path) = self.registry.reaches_mutable(ty) {
+            return Err(TypeError::ParallelSharedObjectArgument {
+                span: *span,
+                name: name.clone(),
+                path: if path.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{name}.{path}")
+                },
+            });
+        }
+        Ok(())
+    }
+
     fn refuse_shared_array_argument(&mut self, args: &[Expr]) -> Checked<()> {
         if self.atomic_depth > 0 {
             return Ok(());
