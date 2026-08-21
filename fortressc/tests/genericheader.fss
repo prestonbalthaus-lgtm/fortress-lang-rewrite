@@ -1,0 +1,15 @@
+component genericheader
+
+export Executable
+
+trait Top end
+object Leaf(n: ZZ32) extends {Top} end
+
+(* Names only: the header resolves, the BODY is still unchecked at an opaque
+   parameter, and that is deliberate -- see the spec. *)
+trait Holder[\T extends Top\] end
+object Cell[\T extends Top\](item: T) extends {Holder[\T\]} end
+pick[\T extends Top\](a: T, b: T): T = a
+
+run():()=println(1)
+end

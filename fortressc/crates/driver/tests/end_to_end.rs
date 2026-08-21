@@ -1537,3 +1537,30 @@ fn a_satisfied_where_bound_compiles_and_an_empty_clause_is_legal() {
     assert_eq!(String::from_utf8_lossy(&out.stdout), "1\n7\n");
     let _ = std::fs::remove_file(&binary);
 }
+
+/// A generic declaration nothing instantiates is DELETED by expansion, so no
+/// name in its header is ever resolved by anything. The non-generic sibling
+/// `trait R extends Nowhere end` was refused all along.
+#[test]
+fn a_generic_declaration_header_resolves_its_type_names() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture("badgenericheader.fss"))
+        .arg("--emit-ir")
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{message}");
+    assert!(message.contains("unknown type `Nowhere`"), "{message}");
+}
+
+/// Names only. A generic header whose names all resolve still compiles, and its
+/// BODY is still unchecked at an opaque parameter -- deliberately, because the
+/// encoding that would check it cannot represent `T extends ZZ32`.
+#[test]
+fn a_generic_header_whose_names_resolve_still_compiles() {
+    let binary = compile_fixture("genericheader.fss", "genericheader");
+    let out = run(&binary);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "1\n");
+    let _ = std::fs::remove_file(&binary);
+}

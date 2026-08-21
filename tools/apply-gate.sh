@@ -60,7 +60,18 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # XXXimmutable0.fss is a must-FAIL negative test we still accept, and refusing
 # it properly must not break this floor. That single unit of slack is spoken
 # for; it was not spent here.
-COMPILE_FLOOR=287
+# 2026-08-21, SPIKE-TEMPLATE-WELLFORMEDNESS half one: 288 -> 285, floor 287 to
+# 284. Again the count went DOWN because the metric got HONEST, and again every
+# lost file is a must-FAIL test whose expected error is on disk -- this time
+# matching OUR diagnostic at the same LINE AND COLUMN:
+#   Compiled1.ae.fss  XXX1ae.test  `D is undefined.`        14:32
+#   Compiled1.n.fss   XXX1n.test   `Garbage is undefined.`  15:25
+#   Compiled10.e.fss  XXX10e.test  `S is undefined.`        20:26
+# Refusing `Object` and `Any` as well would cost FOUR more -- Compiled12.a0,
+# Compiled12.b0, Go0b and Library/TypeProxy.fss, a quarter of the Library files
+# that compile at all -- and that is the Object/Any seeding decision, not this
+# one. See docs/superpowers/specs/2026-08-21-template-wellformedness.md.
+COMPILE_FLOOR=284
 
 passed=0
 failed=0
