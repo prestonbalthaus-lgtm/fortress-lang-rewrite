@@ -1,0 +1,24 @@
+component asstring
+export Executable
+run():() = do
+  n: ZZ32 = 3
+  w: ZZ64 = 9
+  b: Boolean = true
+  s: String = "hi"
+  r: RR64 = 17.0
+  q: RR64 = 2.5
+  println(n.asString)
+  println(w.asString)
+  println(b.asString)
+  println(s.asString)
+  (* A Fortress RR64 SHOWS THAT IT IS ONE. `%g` prints `17`, which is a silent
+     wrong answer -- Compiled7.Print17.fss asserts `17.0`. *)
+  println(r.asString)
+  println(q.asString)
+  (* The same value through the OTHER two shims, because all three reached %g
+     and a value printed one way and concatenated another is the defect one
+     step later. *)
+  println(r)
+  println("r = " || r.asString)
+end
+end

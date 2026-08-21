@@ -2110,6 +2110,35 @@ impl Checker {
         expected: Option<Type>,
     ) -> Checked<TypedExpr> {
         let base = self.expr(base, None)?;
+        // `x.asString` ON A SCALAR IS A BUILTIN, and it is checked BEFORE the
+        // accessor branch below because that branch would refuse it by name.
+        //
+        // `FortressLibrary.fsi` declares `asString` as a getter on every
+        // numeric trait; the scalars are BUILTINS in this compiler and do not
+        // come from the library, so nothing would ever declare it for them.
+        // The shim already exists -- it is the same `Target::ToString` that
+        // `println` and concatenation have used since M1 -- so this is the
+        // spelling reaching machinery that was already there, not new lowering.
+        //
+        // TEN of the sixteen accessor-blocked oracle cases are this, and every
+        // one of them arrived here through `"..." || x.asString`.
+        if name == "asString" && Elem::of(base.ty).is_some() {
+            self.require(Type::String, expected, span)?;
+            // A String's `asString` is itself. Routing it through the shim
+            // would emit `to_string_string`, which no runtime defines.
+            if base.ty == Type::String {
+                return Ok(base);
+            }
+            let from = base.ty;
+            return Ok(TypedExpr {
+                kind: TypedExprKind::Apply {
+                    target: Target::ToString { from },
+                    args: vec![base],
+                },
+                ty: Type::String,
+                span,
+            });
+        }
         // A getter is read exactly like a field, so a program reaching here for
         // an accessor's name is not asking for a field that does not exist --
         // it is asking for a getter, which parses and is not implemented.

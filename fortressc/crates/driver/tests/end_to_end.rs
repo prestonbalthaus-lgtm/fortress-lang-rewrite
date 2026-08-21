@@ -1027,7 +1027,10 @@ fn exponentiation_is_left_associative_and_binds_above_juxtaposition() {
     let out = run(&binary);
     assert_eq!(
         String::from_utf8_lossy(&out.stdout),
-        "1024\n64\n18\n18\n5\n0.00390625\n256\n0.00390625\n256\n"
+        // `256.0` and not `256`: the last line is an RR64, and an RR64 shows that
+        // it is one. It read `256` until `rr64_needs_point` landed, which is the
+        // `%g` defect Compiled7.Print17.fss asserts against.
+        "1024\n64\n18\n18\n5\n0.00390625\n256\n0.00390625\n256.0\n"
     );
     let _ = std::fs::remove_file(&binary);
 }
@@ -1458,7 +1461,11 @@ fn widen_reaches_every_widening_the_advice_recommends() {
     let binary = compile_fixture("widenrr64.fss", "widenrr64");
     let out = run(&binary);
     assert_eq!(out.status.code(), Some(0));
-    assert_eq!(String::from_utf8_lossy(&out.stdout), "3\n3\n3\n");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout), // ZZ32 -> RR64, ZZ32 -> ZZ64, ZZ64 -> RR64. The two RR64 results print
+        // `3.0` now; only the integer one prints `3`. Same `%g` fix.
+        "3.0\n3\n3.0\n"
+    );
     let _ = std::fs::remove_file(&binary);
 
     let ir = emit_ir_with("widenrr64.fss", &[]);
@@ -2133,6 +2140,32 @@ fn the_api_with_that_defect_is_still_refused_on_its_own() {
         message.contains("an api may not declare a trait that extends"),
         "{message}"
     );
+}
+
+// -------------------------------------------------------- `asString`, and `%g`
+//
+// `FortressLibrary.fsi` declares `asString` as a getter on every numeric trait.
+// The scalars are BUILTINS in this compiler and do not come from the library,
+// so nothing would ever declare it for them -- and the shim it needs is the
+// same `Target::ToString` `println` and concatenation have used since M1.
+
+/// TEN of the sixteen accessor-blocked oracle cases were this spelling, and
+/// every one arrived through `"..." || x.asString`.
+///
+/// THE RR64 LINES ARE THE POINT OF THE FIXTURE. `%g` prints `17` for `17.0`,
+/// which `compiler_tests/Compiled7.Print17.fss` asserts is wrong -- and all
+/// THREE shims that reach a double had it: `println`, `print` and `to_string`.
+/// A value printed one way and concatenated another is the same defect one
+/// step later, so the fixture takes the same RR64 through two of them.
+#[test]
+fn as_string_on_every_scalar_and_a_float_that_shows_its_point() {
+    let binary = compile_fixture("asstring.fss", "asstring");
+    let out = run(&binary);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "3\n9\ntrue\nhi\n17.0\n2.5\n17.0\nr = 17.0\n"
+    );
+    let _ = std::fs::remove_file(&binary);
 }
 
 // --------------------------------------------- a named import brings what it named

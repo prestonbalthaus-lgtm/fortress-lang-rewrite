@@ -149,8 +149,8 @@ if [[ ${1:-} == --mutate ]]; then
         's/^run_out_equals=pass/run_out_equals=nonesuch/' || exit 2
     got=$(gate | field 'd["outcomes"]["pass"]')
     restore ProjectFortress/compiler_tests/Compiled17.test
-    report 'a satisfied expectation corrupted' "$got" 309 \
-        'pass fell 310 -> 309, below the floor of 310; gate red'
+    report 'a satisfied expectation corrupted' "$got" 320 \
+        'pass fell 321 -> 320, below the floor of 321; gate red'
 
     # 4. Make `matches` a search rather than a full match, which is what Java
     #    String.matches is NOT.
@@ -158,9 +158,9 @@ if [[ ${1:-} == --mutate ]]; then
         's/^        return re.fullmatch(pattern, text, re.S) is not None$/        return re.search(pattern, text, re.S) is not None/' || exit 2
     got=$(gate | field 'str(d["outcomes"]["pass"]) + "/" + str(d["outcomes"]["fail"])')
     restore tools/oracle-gate.sh
-    if [[ $got == 310/40 ]]; then
+    if [[ $got == 321/40 ]]; then
         documented 'matches weakened from fullmatch to search' \
-            "nothing moved (310/40 either way). 36 cases carry a _matches or
+            "nothing moved (321/40 either way). 36 cases carry a _matches or
          _WImatches expectation and this compiler reaches only 5 of them; all
          5 are satisfied by both readings, so no assertion the suite can make
          separates them today.
@@ -168,7 +168,7 @@ if [[ ${1:-} == --mutate ]]; then
          prefix-matching case is reached, and it is 8 lines from a false
          green if the comparator is ever rewritten"
     else
-        report 'matches weakened from fullmatch to search' "$got" 310/40 \
+        report 'matches weakened from fullmatch to search' "$got" 321/40 \
             'a case changed verdict'
     fi
 
@@ -251,7 +251,7 @@ RUN_TIMEOUT     = 20
 # semantics lane's 291 -> 285, where every lost case was a must-fail being
 # wrongly accepted; this is the same shape one step further out -- a PASS being
 # wrongly earned.
-PASS_FLOOR = 310
+PASS_FLOOR = 321
 
 args, opt = sys.argv[1:], {}
 i = 0

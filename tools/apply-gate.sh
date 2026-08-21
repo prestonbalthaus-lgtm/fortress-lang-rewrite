@@ -91,6 +91,9 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 #   OBJECT_FLOOR   .fss files that compile end to end AND EMIT AN OBJECT
 #   API_FLOOR      .fsi files whose headers resolve and whose bounds discharge
 # Measured on the consolidated tree: 290 objects, 60 apis, 350 together.
+# ACCESSORS + the named-import fix: 318 objects, 62 apis, 380 together. The
+# `asString` builtin is 12 of the 13 gained .fss; the resolver reading its
+# import list is the other one.
 # SPIKE-OPEXPR, the operator DECLARATION half: 305 objects, 62 apis, 367
 # together, and the two commits are separable -- the mutation table measured
 # each rather than the arithmetic being inferred:
@@ -114,7 +117,7 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # applied to the real population instead of to the one file that was known when
 # the rule was written. When that list shrinks, this floor rises with it, and
 # the two move in the same commit.
-OBJECT_FLOOR=267
+OBJECT_FLOOR=280
 API_FLOOR=62
 
 passed=0

@@ -498,7 +498,33 @@ int fortress_div_zz32(int a, int b) {
 void println_string(const char *s) { printf("%s\n", s); }
 void println_zz32(int v) { printf("%d\n", v); }
 void println_zz64(long long v) { printf("%lld\n", v); }
-void println_rr64(double v) { printf("%g\n", v); }
+/*
+ * A Fortress RR64 always shows that it is one: `17.0`, never `17`. C's "%g"
+ * drops a trailing ".0" and that is a SILENT WRONG ANSWER rather than a
+ * formatting preference -- `compiler_tests/Compiled7.Print17.fss` asserts
+ * `17.0` for `(23.0 - 6.0).asString` and we printed `17`.
+ *
+ * THREE SHIMS REACHED %g AND ALL THREE WERE WRONG: `println`, `print` and
+ * `to_string`. They share this predicate so they cannot drift apart -- a value
+ * printed one way and concatenated another is the defect one step later.
+ *
+ * Anything already carrying a `.`, an exponent, or a nan/inf spelling is left
+ * exactly as "%g" wrote it.
+ */
+static int rr64_needs_point(const char *text) {
+    for (const char *p = text; *p != '\0'; p++) {
+        if (*p == '.' || *p == 'e' || *p == 'E' || *p == 'n' || *p == 'i') {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+void println_rr64(double v) {
+    char buf[64];
+    snprintf(buf, sizeof buf, "%g", v);
+    printf(rr64_needs_point(buf) ? "%s.0\n" : "%s\n", buf);
+}
 void println_boolean(int v) { puts(v ? "true" : "false"); }
 void println_void(void) { puts(""); }
 
@@ -552,7 +578,11 @@ long long pow_zz64_zz32(long long a, int b) { return pow_zz64_zz64(a, b); }
 void print_string(const char *s) { fputs(s, stdout); }
 void print_zz32(int v) { printf("%d", v); }
 void print_zz64(long long v) { printf("%lld", v); }
-void print_rr64(double v) { printf("%g", v); }
+void print_rr64(double v) {
+    char buf[64];
+    snprintf(buf, sizeof buf, "%g", v);
+    printf(rr64_needs_point(buf) ? "%s.0" : "%s", buf);
+}
 void print_boolean(int v) { fputs(v ? "true" : "false", stdout); }
 void print_void(void) {}
 
@@ -595,10 +625,23 @@ char *to_string_zz64(long long v) {
     return out;
 }
 
+/* See `rr64_needs_point`. */
 char *to_string_rr64(double v) {
     int n = snprintf(NULL, 0, "%g", v);
-    char *out = fortress_alloc((size_t)n + 1);
-    snprintf(out, (size_t)n + 1, "%g", v);
+    if (n < 0) {
+        return fortress_alloc(1);
+    }
+    size_t len = (size_t)n;
+    char *body = fortress_alloc(len + 1);
+    snprintf(body, len + 1, "%g", v);
+    if (rr64_needs_point(body) == 0) {
+        return body;
+    }
+    char *out = fortress_alloc(len + 3);
+    memcpy(out, body, len);
+    out[len] = '.';
+    out[len + 1] = '0';
+    out[len + 2] = '\0';
     return out;
 }
 
