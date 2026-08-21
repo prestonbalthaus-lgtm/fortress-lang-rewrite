@@ -1,0 +1,61 @@
+component arraygenerator
+
+export Executable
+
+(* `for x <- a do ... end` over an ARRAY, desugared onto the indexed loop that
+   already exists:
+
+       for $k <- 0 # length(a) do  x = a[$k]  <body> end
+
+   Nothing downstream needs a line for it. A reduction in the body is still
+   recognised -- `total` below is a per-worker private accumulator and the sum
+   is exact at every worker count -- `a[$k]` is still bounds checked, and
+   `length` is one of the builtins the shared-array guard leaves alone.
+
+   NOTHING FROM THE CLOSURE REPRESENTATION IS INVOLVED: zero minted traits, zero
+   `apply` methods. The generator PROTOCOL is what needs closures, and it is
+   blocked on imports rather than on this. *)
+
+object Counter()
+    var built: ZZ32 = 0
+end
+
+fill(c: Counter, n: ZZ64): Array[\ZZ64\] = do
+    c.built := c.built + 1
+    a: Array[\ZZ64\] = array(n)
+    k: ZZ64 := 0
+    while k < n do
+        a[k] := k + 1
+        k := k + 1
+    end
+    a
+end
+
+run(): () = do
+    c = Counter()
+
+    (* THE SOURCE IS EVALUATED ONCE: `built` is 1 afterwards, not 6. *)
+    total: ZZ64 := 0
+    for x <- fill(c, 6) do
+        total += x
+    end
+    println(total)
+    println(c.built)
+
+    a: Array[\ZZ64\] = fill(c, 6)
+    prod: ZZ64 := 1
+    for x <- seq(a) do
+        prod := prod x
+    end
+    println(prod)
+
+    s: Array[\String\] = array(2)
+    s[0] := "he"
+    s[1] := "llo"
+    joined: String := ""
+    for w <- seq(s) do
+        joined := joined w
+    end
+    println(joined)
+end
+end

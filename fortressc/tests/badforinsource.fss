@@ -1,0 +1,14 @@
+component badforinsource
+
+export Executable
+
+(* `for x <- e` needs `e` to be something this compiler can iterate, and today
+   that is an Array. A List or a Generator needs the generator PROTOCOL, which
+   needs a name to cross a file boundary first. *)
+run(): () = do
+    x: ZZ32 = 1
+    for y <- x do
+        println(y)
+    end
+end
+end

@@ -444,6 +444,23 @@ pub enum Expr {
         body: Box<Expr>,
         span: Span,
     },
+    /// `for x <- a do ... end`, where `a` is an ARRAY rather than a range.
+    ///
+    /// It is a node and not a parser desugaring for the same reason
+    /// `BigReduction` is: the parser does not know the element type to bind `x`
+    /// at. The checker types the source, takes the element type from it, and
+    /// builds today's INDEXED loop --
+    /// `for $k <- 0 # length(a) do x = a[$k]; body end` -- so nothing
+    /// downstream needs a line for it. A reduction in the body is still
+    /// recognised, `a[$k]` is still bounds checked, and `length` is one of the
+    /// builtins the shared-array guard deliberately leaves alone.
+    ForIn {
+        binder: String,
+        source: Box<Expr>,
+        sequential: bool,
+        body: Box<Expr>,
+        span: Span,
+    },
     /// `do A also do B also do C end`. `also.tex:17-21` makes each block an
     /// implicit thread of one group, and the group completes when all of them
     /// do.
@@ -587,6 +604,7 @@ impl Expr {
             | Self::Lambda { span, .. }
             | Self::BigReduction { span, .. }
             | Self::AlsoDo { span, .. }
+            | Self::ForIn { span, .. }
             | Self::Exit { span, .. }
             | Self::Instantiate { span, .. } => *span,
         }

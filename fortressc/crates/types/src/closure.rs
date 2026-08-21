@@ -870,6 +870,19 @@ impl Pass {
             }
             Expr::Label { body, .. } => self.rewrite_expr(body, scope),
             Expr::AlsoDo { blocks, .. } => self.rewrite_exprs(blocks, scope),
+            Expr::ForIn {
+                binder,
+                source,
+                body,
+                ..
+            } => {
+                self.rewrite_expr(source, scope)?;
+                scope.push();
+                scope.declare_opaque(binder);
+                let result = self.rewrite_expr(body, scope);
+                scope.pop();
+                result
+            }
             // A lambda in a position that does not say what arrow it is. The
             // written return type is the only other source, and `lambda` is
             // where that is decided.
@@ -1160,6 +1173,17 @@ fn free_names(e: &Expr, bound: &mut Vec<BTreeSet<String>>, out: &mut BTreeSet<St
             for b in blocks {
                 free_names(b, bound, out);
             }
+        }
+        Expr::ForIn {
+            binder,
+            source,
+            body,
+            ..
+        } => {
+            free_names(source, bound, out);
+            bound.push([binder.clone()].into_iter().collect());
+            free_names(body, bound, out);
+            bound.pop();
         }
         Expr::BigReduction {
             binder,

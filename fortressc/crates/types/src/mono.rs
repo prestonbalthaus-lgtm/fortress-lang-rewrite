@@ -901,6 +901,19 @@ impl<'a> Expander<'a> {
                 body: Box::new(self.expr(body, subst)?),
                 span: *span,
             },
+            Expr::ForIn {
+                binder,
+                source,
+                sequential,
+                body,
+                span,
+            } => Expr::ForIn {
+                binder: binder.clone(),
+                source: Box::new(self.expr(source, subst)?),
+                sequential: *sequential,
+                body: Box::new(self.expr(body, subst)?),
+                span: *span,
+            },
             Expr::AlsoDo { blocks, span } => Expr::AlsoDo {
                 blocks: self.exprs(blocks, subst)?,
                 span: *span,

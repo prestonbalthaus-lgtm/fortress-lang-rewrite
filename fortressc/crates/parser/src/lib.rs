@@ -36,8 +36,10 @@ const BIG_OPERATORS: [&str; 4] = ["SUM", "PROD", "MAX", "MIN"];
 /// One `i <- lo:hi` clause. `for` and a BIG reduction share the parser for it.
 struct Generator {
     binder: String,
+    /// The range's lower bound, or -- when `hi` is `None` -- the whole source.
     lo: Expr,
-    hi: Expr,
+    /// `None` for `x <- a`, where the source is a value and not a range.
+    hi: Option<Expr>,
     inclusive: bool,
     sequential: bool,
 }
@@ -1519,6 +1521,12 @@ impl<'t, 'a> Parser<'t, 'a> {
             inclusive,
             sequential,
         } = self.generator_clause()?;
+        let Some(hi) = hi else {
+            return Err(ParseError::BigReductionUnsupported {
+                span: name_span,
+                name: format!("{name} over a collection"),
+            });
+        };
         self.skip_newlines();
         self.expect(&Kind::RBracket, "`]` to close the generator")?;
         self.skip_newlines();
@@ -1557,26 +1565,38 @@ impl<'t, 'a> Parser<'t, 'a> {
             self.skip_newlines();
         }
         let lo = self.expr()?;
-        let (hi, inclusive) = match self.peek_kind() {
+        let range = match self.peek_kind() {
             Some(Kind::Colon) => {
                 self.pos += 1;
                 self.skip_newlines();
-                (self.expr()?, true)
+                Some((self.expr()?, true))
             }
             Some(Kind::Hash) => {
                 self.pos += 1;
                 self.skip_newlines();
-                (self.expr()?, false)
+                Some((self.expr()?, false))
             }
-            _ => return Err(self.error("`:` or `#` to close the generator range")),
+            // No `:` and no `#`: the source is a value rather than a range --
+            // `for x <- a`. Which values are iterable is the checker's
+            // question, and it answers `Array` today.
+            _ => None,
         };
         if sequential {
             self.expect(&Kind::RParen, "`)` to close `seq(`")?;
         }
+        let Some((hi, inclusive)) = range else {
+            return Ok(Generator {
+                binder,
+                lo,
+                hi: None,
+                inclusive: false,
+                sequential,
+            });
+        };
         Ok(Generator {
             binder,
             lo,
-            hi,
+            hi: Some(hi),
             inclusive,
             sequential,
         })
@@ -1603,6 +1623,15 @@ impl<'t, 'a> Parser<'t, 'a> {
         self.expect(&Kind::KwDo, "`do`")?;
         let body = self.block_body(&[Kind::KwEnd])?;
         let end = self.expect(&Kind::KwEnd, "`end`")?.span;
+        let Some(hi) = hi else {
+            return Ok(Expr::ForIn {
+                binder,
+                source: Box::new(lo),
+                sequential,
+                body: Box::new(body),
+                span: Span::new(start.start, end.end),
+            });
+        };
         Ok(Expr::For {
             binder,
             lo: Box::new(lo),

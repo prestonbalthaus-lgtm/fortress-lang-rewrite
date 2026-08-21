@@ -1780,3 +1780,43 @@ fn atomic_binds_to_one_also_front_and_not_to_the_group() {
     let message = refusal("badalsoatomicexit.fss");
     assert!(message.contains("leaves an `atomic` region"), "{message}");
 }
+
+// -------------------------------------------------- array generators
+
+/// `for x <- a do ... end` over an ARRAY, desugared onto the indexed loop that
+/// already exists: `for $k <- 0 # length(a) do x = a[$k]; body end`.
+///
+/// NOTHING FROM THE CLOSURE REPRESENTATION IS INVOLVED -- zero minted traits,
+/// zero `apply` methods. The generator PROTOCOL is the part that needs closures,
+/// and the census says it is blocked on imports rather than on them: of 238
+/// bare-identifier `for` sources in the corpus, five resolve to an Array and 134
+/// to List/Map/Set/Generator.
+///
+/// The first two lines are the two properties that could have gone wrong: the
+/// reduction in the body is still recognised, so the sum is exact at every
+/// worker count, and THE SOURCE IS EVALUATED ONCE -- `built` is 1, not 6.
+#[test]
+fn a_for_loop_over_an_array_iterates_it_and_evaluates_it_once() {
+    let binary = compile_fixture("arraygenerator.fss", "arraygenerator");
+    for workers in ["1", "8"] {
+        let out = Command::new(&binary)
+            .env("FORTRESS_WORKERS", workers)
+            .output()
+            .expect("could not run the produced binary");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "21\n1\n720\nhello\n",
+            "at FORTRESS_WORKERS={workers}"
+        );
+        assert_eq!(out.status.code(), Some(0));
+    }
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// And a source that is not an array is refused by name rather than read as a
+/// range with a missing bound.
+#[test]
+fn a_for_loop_over_something_that_is_not_an_array_is_refused() {
+    let message = refusal("badforinsource.fss");
+    assert!(message.contains("expected an array"), "{message}");
+}

@@ -1847,6 +1847,13 @@ impl Checker {
             } => self.typecase_expr(subject, arms, else_arm, *span, expected),
             Expr::Label { name, body, span } => self.label_expr(name, body, *span, expected),
             Expr::AlsoDo { blocks, span } => self.also_do(blocks, *span, expected),
+            Expr::ForIn {
+                binder,
+                source,
+                sequential,
+                body,
+                span,
+            } => self.for_in(binder, source, *sequential, body, *span, expected),
             Expr::BigReduction {
                 op,
                 binder,
@@ -2437,6 +2444,9 @@ impl Checker {
             Expr::Label { body, .. } => self.reads_shared(body, floor),
             Expr::Lambda { body, .. } => self.reads_shared(body, floor),
             Expr::AlsoDo { blocks, .. } => blocks.iter().any(|b| self.reads_shared(b, floor)),
+            Expr::ForIn { source, body, .. } => {
+                self.reads_shared(source, floor) || self.reads_shared(body, floor)
+            }
             Expr::BigReduction { lo, hi, body, .. } => {
                 self.reads_shared(lo, floor)
                     || self.reads_shared(hi, floor)
@@ -4391,6 +4401,101 @@ impl Checker {
                 .collect(),
             _ => Vec::new(),
         }
+    }
+
+    /// `for x <- a do ... end` over an ARRAY, desugared onto the indexed loop
+    /// that already exists:
+    ///
+    /// ```text
+    /// for $k <- 0 # length(a) do
+    ///     x = a[$k]
+    ///     <body, unchanged>
+    /// end
+    /// ```
+    ///
+    /// It is here rather than in the parser because the binder's type is the
+    /// ARRAY'S ELEMENT TYPE, which the parser cannot know -- the same reason
+    /// `BigReduction` is a node. `Elem` has five scalar kinds and nothing else,
+    /// so the binder is always a scalar and nothing downstream needs a line for
+    /// it: a reduction in the body is recognised by the same three-step
+    /// ordering, `a[$k]` is an ordinary bounds-checked element read, and
+    /// `length` is one of the builtins the shared-array guard leaves alone.
+    ///
+    /// THE SOURCE IS EVALUATED ONCE, into a binding the body cannot see the
+    /// name of. `for x <- makeArray() do ... end` must not build an array per
+    /// iteration.
+    fn for_in(
+        &mut self,
+        binder: &str,
+        source: &Expr,
+        sequential: bool,
+        body: &Expr,
+        span: Span,
+        expected: Option<Type>,
+    ) -> Checked<TypedExpr> {
+        let typed_source = self.expr(source, None)?;
+        let Type::Array(_) = typed_source.ty else {
+            return Err(TypeError::NotAnArray {
+                span: source.span(),
+                found: typed_source.ty,
+            });
+        };
+        let array = format!("$in{}", self.cases);
+        let index = format!("$at{}", self.cases);
+        self.cases = self.cases.saturating_add(1);
+
+        let array_ref = || Expr::Var {
+            name: array.clone(),
+            span,
+        };
+        let desugared = Expr::Block {
+            items: vec![
+                BlockItem::Binding(fortress_ast::Binding {
+                    name: array.clone(),
+                    ty: None,
+                    value: source.clone(),
+                    mutable: false,
+                    span,
+                }),
+                BlockItem::Expr(Expr::For {
+                    binder: index.clone(),
+                    lo: Box::new(Expr::IntLit {
+                        digits: "0".to_owned(),
+                        span,
+                    }),
+                    hi: Box::new(Expr::Call {
+                        callee: Box::new(Expr::Var {
+                            name: "length".to_owned(),
+                            span,
+                        }),
+                        args: vec![array_ref()],
+                        span,
+                    }),
+                    inclusive: false,
+                    sequential,
+                    body: Box::new(Expr::Block {
+                        items: vec![
+                            BlockItem::Binding(fortress_ast::Binding {
+                                name: binder.to_owned(),
+                                ty: None,
+                                value: Expr::Index {
+                                    base: Box::new(array_ref()),
+                                    index: Box::new(Expr::Var { name: index, span }),
+                                    span,
+                                },
+                                mutable: false,
+                                span,
+                            }),
+                            BlockItem::Expr(body.clone()),
+                        ],
+                        span,
+                    }),
+                    span,
+                }),
+            ],
+            span,
+        };
+        self.expr(&desugared, expected)
     }
 
     /// `do A also do B end`, SERIALISED, and that is a deviation with a licence
