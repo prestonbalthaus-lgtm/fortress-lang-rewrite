@@ -71,7 +71,22 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # Compiled12.b0, Go0b and Library/TypeProxy.fss, a quarter of the Library files
 # that compile at all -- and that is the Object/Any seeding decision, not this
 # one. See docs/superpowers/specs/2026-08-21-template-wellformedness.md.
-COMPILE_FLOOR=284
+# 2026-08-21, THE THREE-LANE MERGE: 285 -> 307, floor 284 to 306. The path is
+# not one number and each leg was swept and diffed on its own: the codegen lane
+# took 285 -> 290 (+6 features, and -1 for
+# SpecData/examples/preliminaries/Overview.List.fss, whose abstract member names
+# the unimplemented `Object` -- that lane measured and named the same file), and
+# the frontend lane took 290 -> 307 (+20, and -3 must-FAIL tests the
+# operator-word rule now refuses: XXXLabel, XXXWrongTraitName, XXXtest.OPR.name).
+# The IR BODY of every file compiling on both sides of every leg is byte for
+# byte unchanged -- measured with the unconditional runtime `declare` lines
+# filtered, which is the only thing each leg adds to a module it does not
+# otherwise touch.
+# The floor is 306 rather than 307 for the reason it has always been one below:
+# ProjectFortress/tests/XXXimmutable0.fss is a must-FAIL test we still accept,
+# and refusing it properly must not break this floor. XXXLabel needed the same
+# slack on the codegen branch and no longer does.
+COMPILE_FLOOR=306
 
 passed=0
 failed=0
