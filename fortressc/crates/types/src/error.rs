@@ -91,6 +91,13 @@ pub enum TypeError {
         span: Span,
         ty: Type,
     },
+    /// An integer division whose divisor is the literal `0`. There is no
+    /// quotient, and without this the program builds: LLVM's own constant
+    /// folder turns the division into `poison` and the callee prints whatever
+    /// that lowers to. RR64 does not reach here -- `1.0/0.0` is `inf`.
+    DivisionByZero {
+        span: Span,
+    },
     /// An integer literal in a slot that wants something other than ZZ32/ZZ64.
     LiteralNotApplicable {
         span: Span,
@@ -352,6 +359,7 @@ impl TypeError {
             | Self::EntryPointTakesArguments { span, .. }
             | Self::ArityMismatch { span, .. }
             | Self::LiteralOutOfRange { span, .. }
+            | Self::DivisionByZero { span }
             | Self::LiteralNotApplicable { span, .. }
             | Self::ConditionNotBoolean { span, .. }
             | Self::BranchTypeMismatch { span, .. }
@@ -463,6 +471,9 @@ impl core::fmt::Display for TypeError {
             }
             Self::LiteralOutOfRange { ty, .. } => {
                 write!(f, "integer literal does not fit in {}", ty.name())
+            }
+            Self::DivisionByZero { .. } => {
+                write!(f, "this division has a literal zero divisor")
             }
             Self::LiteralNotApplicable { required, .. } => {
                 write!(

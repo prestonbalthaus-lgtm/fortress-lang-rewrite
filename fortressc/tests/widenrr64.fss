@@ -1,0 +1,14 @@
+component widenrr64
+
+export Executable
+
+run():()=do
+   n: ZZ32 = 3
+   x: RR64 = widen(n)
+   y: ZZ64 = widen(n)
+   z: RR64 = widen(y)
+   println(x)
+   println(y)
+   println(z)
+end
+end

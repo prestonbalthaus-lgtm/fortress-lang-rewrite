@@ -1291,3 +1291,75 @@ fn a_dispatch_table_built_while_signatures_were_settling_is_discarded() {
     assert_eq!(out.status.code(), Some(0));
     let _ = std::fs::remove_file(&binary);
 }
+
+/// An `sdiv` traps on x86-64 for a zero divisor, and SIGFPE is a core dump with
+/// no diagnostic. 1.0 throws `DivideByZero`; this subset has no exceptions, so
+/// division halts the way a bad subscript does.
+#[test]
+fn integer_division_by_zero_halts_with_a_diagnostic_rather_than_faulting() {
+    let binary = compile_fixture("divzero.fss", "divzero");
+    let out = run(&binary);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "a trapping division must be a clean halt, not a signal:\n{stderr}"
+    );
+    assert!(stderr.contains("integer division by zero"), "{stderr}");
+    // The halt path flushes. Without it the program loses the line it had
+    // already printed, and a lost buffer looks exactly like never getting there.
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains('7'),
+        "output produced before the halt must survive it"
+    );
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// The other trapping operand pair. Its quotient is not representable, and
+/// delegating the 32 bit width to the 64 bit one would return a truncated
+/// `INT_MIN` instead of halting -- which is the silently wrong answer.
+#[test]
+fn the_minimum_over_minus_one_halts_at_both_widths() {
+    for (name, tag) in [
+        ("divoverflow32.fss", "divoverflow32"),
+        ("divoverflow64.fss", "divoverflow64"),
+    ] {
+        let binary = compile_fixture(name, tag);
+        let out = run(&binary);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{name}:\n{stderr}");
+        assert!(
+            stderr.contains("integer division overflows"),
+            "{name}: {stderr}"
+        );
+        let _ = std::fs::remove_file(&binary);
+    }
+}
+
+/// The one divisor the run-time guard can never see: LLVM's constant folder
+/// turns the division into `poison` while the module is being built, so the
+/// program prints a value nothing computed.
+#[test]
+fn a_literal_zero_divisor_is_refused_before_llvm_can_fold_it() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture("baddivzeroliteral.fss"))
+        .arg("--emit-ir")
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{message}");
+    assert!(message.contains("literal zero divisor"), "{message}");
+}
+
+/// RR64 is not routed through the guard: `1.0/0.0` is `inf` and that is right.
+#[test]
+fn floating_division_by_zero_is_still_infinity() {
+    let binary = compile_fixture("divquotients.fss", "divquotients");
+    let out = run(&binary);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "3\n-3\n3000000000\n0.25\ninf\n"
+    );
+    let _ = std::fs::remove_file(&binary);
+}

@@ -36,6 +36,7 @@
 
 #define GC_THREADS
 
+#include <limits.h>
 #include <math.h>
 #include <pthread.h>
 #include <stdint.h>
@@ -452,6 +453,39 @@ static void fortress_abnormal_exit(void) {
 static void fortress_halt(const char *what, long long a, long long b) {
     fprintf(stderr, "fortress: %s (%lld, %lld)\n", what, a, b);
     fortress_abnormal_exit();
+}
+
+/*
+ * Integer division. TWO of an `sdiv`'s operand pairs fault on x86-64 rather
+ * than producing a value -- a zero divisor, and the minimum value over -1,
+ * whose quotient is not representable -- and both raise SIGFPE. That is a core
+ * dump with no diagnostic, and it takes whatever stdio had buffered with it, so
+ * a program loses output it had already produced. 1.0 throws DivideByZero;
+ * this subset has no exceptions, so division halts the way a bad subscript
+ * does. RR64 division is NOT routed here: 1.0/0.0 is `inf` and that is right.
+ */
+long long fortress_div_zz64(long long a, long long b) {
+    if (b == 0) {
+        fortress_halt("integer division by zero", a, b);
+    }
+    if (a == LLONG_MIN && b == -1) {
+        fortress_halt("integer division overflows", a, b);
+    }
+    return a / b;
+}
+
+/*
+ * The 32 bit width delegates, so the zero rule is written down once. The
+ * overflow rule cannot delegate: INT_MIN / -1 is representable as a long long
+ * and would come back truncated to INT_MIN instead of halting, which is the
+ * silently wrong answer the guard exists to prevent. Every other quotient of
+ * two ints fits in an int, so the cast is lossless.
+ */
+int fortress_div_zz32(int a, int b) {
+    if (a == INT_MIN && b == -1) {
+        fortress_halt("integer division overflows", a, b);
+    }
+    return (int)fortress_div_zz64(a, b);
 }
 
 void println_string(const char *s) { printf("%s\n", s); }

@@ -2623,13 +2623,22 @@ impl Checker {
                 },
                 left.ty,
             ),
-            BinOp::Div => (
-                Target::Arith {
-                    op: ArithOp::Div,
-                    ty: left.ty,
-                },
-                left.ty,
-            ),
+            BinOp::Div => {
+                // The runtime guard catches every divisor that reaches it, but
+                // a literal zero never does: LLVM folds the division to
+                // `poison` while the module is being built, and the program
+                // prints a value nothing computed.
+                if left.ty.is_integer() && right.kind == TypedExprKind::IntConst(0) {
+                    return Err(TypeError::DivisionByZero { span });
+                }
+                (
+                    Target::Arith {
+                        op: ArithOp::Div,
+                        ty: left.ty,
+                    },
+                    left.ty,
+                )
+            }
             // Routed above: `^` is the one operator whose operands may
             // differ in type, so it never reaches the agreement check.
             BinOp::Pow => {

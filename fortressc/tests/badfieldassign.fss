@@ -1,0 +1,13 @@
+component badfieldassign
+
+export Executable
+
+object Box(x: ZZ32)
+end
+
+run():()=do
+   b = Box(5)
+   b.x = 7
+   println(b.x)
+end
+end

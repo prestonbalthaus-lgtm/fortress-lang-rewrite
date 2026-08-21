@@ -1,0 +1,19 @@
+component divquotients
+
+export Executable
+
+(* Through functions, so nothing is a compile-time constant: LLVM's builder
+   folds `fdiv double 1.0, 4.0` before the instruction is ever emitted, and an
+   assertion about the emitted shape would then be asserting nothing. *)
+qzz32(a: ZZ32, b: ZZ32): ZZ32 = a/b
+qzz64(a: ZZ64, b: ZZ64): ZZ64 = a/b
+qrr64(a: RR64, b: RR64): RR64 = a/b
+
+run():()=do
+   println(qzz32(17, 5))
+   println(qzz32(-17, 5))
+   println(qzz64(9000000000, 3))
+   println(qrr64(1.0, 4.0))
+   println(qrr64(1.0, 0.0))
+end
+end
