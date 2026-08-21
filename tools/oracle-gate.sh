@@ -121,8 +121,13 @@ if [[ ${1:-} == --mutate ]]; then
     # merge introduced and nobody has signed off were already unaccounted for,
     # so the mutation's own file was the eighth. The mutation was working; the
     # expectation was absolute where the quantity is a DELTA.
+    # BY NAME AND NOT BY LINE NUMBER. `5d` was Compiled0.p.fss, which the
+    # consolidation's export checking now REFUSES -- so dropping its line
+    # changed nothing and the row read as an escape. A row pinned to a position
+    # in a file the same commit is allowed to edit is a row that stops testing
+    # without saying so.
     base=$(gate | field 'len(d["newAcceptances"])')
-    apply tools/oracle-accepted-must-fail.txt '5d' || exit 2
+    apply tools/oracle-accepted-must-fail.txt '/Compiled9.z.fss/d' || exit 2
     got=$(gate | field 'len(d["newAcceptances"])')
     restore tools/oracle-accepted-must-fail.txt
     report 'a file dropped from the accepted-must-fail list' "$got" "$((base + 1))" \
@@ -144,8 +149,8 @@ if [[ ${1:-} == --mutate ]]; then
         's/^run_out_equals=pass/run_out_equals=nonesuch/' || exit 2
     got=$(gate | field 'd["outcomes"]["pass"]')
     restore ProjectFortress/compiler_tests/Compiled17.test
-    report 'a satisfied expectation corrupted' "$got" 290 \
-        'pass fell 291 -> 290, below the floor of 291; gate red'
+    report 'a satisfied expectation corrupted' "$got" 300 \
+        'pass fell 301 -> 300, below the floor of 301; gate red'
 
     # 4. Make `matches` a search rather than a full match, which is what Java
     #    String.matches is NOT.
@@ -153,9 +158,9 @@ if [[ ${1:-} == --mutate ]]; then
         's/^        return re.fullmatch(pattern, text, re.S) is not None$/        return re.search(pattern, text, re.S) is not None/' || exit 2
     got=$(gate | field 'str(d["outcomes"]["pass"]) + "/" + str(d["outcomes"]["fail"])')
     restore tools/oracle-gate.sh
-    if [[ $got == 291/48 ]]; then
+    if [[ $got == 301/39 ]]; then
         documented 'matches weakened from fullmatch to search' \
-            "nothing moved (291/48 either way). 36 cases carry a _matches or
+            "nothing moved (301/39 either way). 36 cases carry a _matches or
          _WImatches expectation and this compiler reaches only 5 of them; all
          5 are satisfied by both readings, so no assertion the suite can make
          separates them today.
@@ -163,7 +168,7 @@ if [[ ${1:-} == --mutate ]]; then
          prefix-matching case is reached, and it is 8 lines from a false
          green if the comparator is ever rewritten"
     else
-        report 'matches weakened from fullmatch to search' "$got" 291/48 \
+        report 'matches weakened from fullmatch to search' "$got" 301/39 \
             'a case changed verdict'
     fi
 
@@ -171,8 +176,8 @@ if [[ ${1:-} == --mutate ]]; then
     apply tools/oracle-gate.sh 's/^        if code == 1:$/        if code in (0, 1):/' || exit 2
     got=$(gate | field 'len(d["nowRefused"])')
     restore tools/oracle-gate.sh
-    report 'exit 0 read as a clean refusal' "$got" 41 \
-        'all 41 listed files reported as no longer refused'
+    report 'exit 0 read as a clean refusal' "$got" 38 \
+        'all 38 listed files reported as no longer refused'
 
     # 6. Break the Properties continuation so a wrapped `tests=` truncates.
     apply tools/oracle-gate.sh 's/^    return n % 2 == 1$/    return False/' || exit 2
@@ -231,7 +236,7 @@ RUN_TIMEOUT     = 20
 # neither list can see: the acceptance list only knows about must-fail
 # programs and the signal list only about binaries. Raise it when passes are
 # won; never lower it to make a red run green.
-PASS_FLOOR = 291
+PASS_FLOOR = 301
 
 args, opt = sys.argv[1:], {}
 i = 0
@@ -514,9 +519,23 @@ def verdict(case, idx):
     return 'pass', 'ran and matched the oracle'
 
 
+# THE LAST STDERR LINE IS A CARET, NOT A MESSAGE. The driver renders a source
+# excerpt under every diagnostic since the semantics lane's line:col work, and
+# `note:` lines carry excerpts of their own. This is the THIRD instrument in the
+# family -- tools/triage.sh:140-148 was fixed first and tools/api-census.sh
+# second -- and the symptom here was the blocked-reason histogram reporting
+# `|        ^^^^` 28 times as its most common cause. The regex is copied from
+# triage deliberately, so the three cannot disagree about what a file's
+# diagnostic was.
+HEADER = re.compile(r'^\S+?:\d+:\d+: (?!note: )')
+SPAN = re.compile(r'^\S+?:(?: \d+\.\.\d+|\d+:\d+): ')
+
+
 def _first_line(err):
-    line = (err.strip().splitlines() or [''])[-1]
-    return re.sub(r'^\S+?: \d+\.\.\d+: ', '', line)[:96]
+    lines = err.strip().splitlines()
+    header = next((l for l in lines if HEADER.match(l)), None)
+    line = header if header is not None else (lines[-1] if lines else '')
+    return SPAN.sub('', line)[:96]
 
 
 # ======================================================= C. the signal sweep

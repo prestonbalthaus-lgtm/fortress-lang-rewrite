@@ -82,11 +82,26 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # byte unchanged -- measured with the unconditional runtime `declare` lines
 # filtered, which is the only thing each leg adds to a module it does not
 # otherwise touch.
-# The floor is 306 rather than 307 for the reason it has always been one below:
-# ProjectFortress/tests/XXXimmutable0.fss is a must-FAIL test we still accept,
-# and refusing it properly must not break this floor. XXXLabel needed the same
-# slack on the codegen branch and no longer does.
-COMPILE_FLOOR=306
+# 2026-08-21, THE CONSOLIDATION: THE METRIC IS SPLIT, because one number stopped
+# meaning one thing. SPIKE-API-CHECK-MODE makes an api CHECKED instead of refused
+# as the first statement of `Checker::run`, and AN API EMITS NO OBJECT -- so the
+# single count went 308 -> 366 while the number of files that produce a `.o`
+# went DOWN by one. A floor on the sum would have read 58 newly-checked
+# signatures as feature growth and hidden the regression underneath it.
+#   OBJECT_FLOOR   .fss files that compile end to end AND EMIT AN OBJECT
+#   API_FLOOR      .fsi files whose headers resolve and whose bounds discharge
+# Measured on the consolidated tree: 290 objects, 60 apis, 350 together.
+#
+# THE SLACK IS 38 AND NOT 1, and that is the honest number rather than a
+# tradition: tools/oracle-accepted-must-fail.txt names 38 programs that MUST
+# FAIL and that this compiler still accepts, every one of them a `.fss` inside
+# the object count. Refusing any of them properly is a ratchet forward and must
+# not break this floor -- which is the same reason the floor was ever one below,
+# applied to the real population instead of to the one file that was known when
+# the rule was written. When that list shrinks, this floor rises with it, and
+# the two move in the same commit.
+OBJECT_FLOOR=252
+API_FLOOR=60
 
 passed=0
 failed=0
@@ -236,18 +251,30 @@ for d, ds, fs in os.walk('.'):
     files += [os.path.join(d, f) for f in fs if f.endswith(('.fss', '.fsi'))]
 files.sort()
 c = collections.Counter()
+objects = apis = 0
+cc = os.environ.get('FORTRESSC', 'fortressc/target/debug/fortressc')
 for p in files:
-    r = subprocess.run(['fortressc/target/debug/fortressc', p, '--emit-obj', '-o', '/dev/null'],
+    r = subprocess.run([cc, p, '--emit-obj', '-o', '/dev/null'],
                        capture_output=True, text=True)
     c[r.returncode] += 1
-print(c[0], sum(n for code, n in c.items() if code not in (0, 1)))
+    if r.returncode == 0:
+        if p.endswith('.fss'):
+            objects += 1
+        else:
+            apis += 1
+print(objects, apis, sum(n for code, n in c.items() if code not in (0, 1)))
 PY
 )
-    read -r compiled broken <<<"$report"
-    if [[ ${compiled:-0} -ge $COMPILE_FLOOR ]]; then
-        ok "$compiled corpus files compile end to end (floor $COMPILE_FLOOR)"
+    read -r objects apis broken <<<"$report"
+    if [[ ${objects:-0} -ge $OBJECT_FLOOR ]]; then
+        ok "$objects corpus .fss files compile AND EMIT AN OBJECT (floor $OBJECT_FLOOR)"
     else
-        bad "${compiled:-0} corpus files compile end to end" "floor is $COMPILE_FLOOR"
+        bad "${objects:-0} corpus .fss files emit an object" "floor is $OBJECT_FLOOR"
+    fi
+    if [[ ${apis:-0} -ge $API_FLOOR ]]; then
+        ok "$apis corpus .fsi files check (floor $API_FLOOR)"
+    else
+        bad "${apis:-0} corpus .fsi files check" "floor is $API_FLOOR"
     fi
     if [[ ${broken:-1} -eq 0 ]]; then
         ok 'no corpus file makes the compiler crash or report an internal error'
