@@ -1,0 +1,9 @@
+component badexportopen
+export badexportopen
+
+(* The SAME list, CLOSED. Only the open-marker comparison can see this: the two
+   `comprises` lists are equal element for element. *)
+trait T comprises { O } end
+object O extends T end
+
+end

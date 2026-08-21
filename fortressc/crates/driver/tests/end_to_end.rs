@@ -2104,6 +2104,35 @@ fn a_for_loop_over_something_that_is_not_an_array_is_refused() {
     assert!(message.contains("expected an array"), "{message}");
 }
 
+// ------------------------------------------- the exported hierarchy, clause by clause
+//
+// `source-code.tex:290-299` makes a trait's exported hierarchy a fact about the
+// api, and `conform.rs` compares all three topology clauses for it. TWO OF THE
+// THREE RULES HAD NO INDEPENDENT WITNESS: Compiled5.y.fss trips both the list
+// comparison and the open-marker one, so deleting either left the corpus
+// unchanged and the mutation table read both as escapes. These two fixtures
+// isolate them. The `excludes` rule has a corpus witness in Compiled3.g.fss.
+
+/// Both clauses CLOSED and the lists differ: only the list comparison sees it.
+#[test]
+fn a_component_that_widens_the_apis_comprises_list_is_refused() {
+    let message = refusal("badexportcomprises.fss");
+    assert!(
+        message.contains("to comprise exactly what the api declares"),
+        "{message}"
+    );
+}
+
+/// The SAME list, one OPEN and one closed: only the marker comparison sees it.
+#[test]
+fn a_component_that_closes_the_apis_open_comprises_clause_is_refused() {
+    let message = refusal("badexportopen.fss");
+    assert!(
+        message.contains("the same OPEN (`...`) `comprises` clause"),
+        "{message}"
+    );
+}
+
 // ------------------------------------------------ overloading inside an api
 //
 // M3c's ambiguity check is driven by the tuples a CALL SITE can produce, and an

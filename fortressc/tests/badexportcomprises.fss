@@ -1,0 +1,10 @@
+component badexportcomprises
+export badexportcomprises
+
+(* The component names TWO. Both clauses are CLOSED, so only the list
+   comparison can see this -- which is the point of the fixture. *)
+trait T comprises { O, P } end
+object O extends T end
+object P extends T end
+
+end
