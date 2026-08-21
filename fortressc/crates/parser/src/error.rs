@@ -39,6 +39,15 @@ pub enum ParseError {
         first: &'static str,
         second: &'static str,
     },
+    /// `object O(x: ZZ32...)`. `objects.tex:100` is
+    /// `ObjectVarargs ::= transient Varargs`, so an object's varargs parameter
+    /// must carry `transient`; :66 eliminates both from Basic Fortress
+    /// outright. Two corpus files write the modifier-less form and both are
+    /// must-FAIL tests.
+    ObjectVarargsParameter {
+        span: Span,
+        name: String,
+    },
 }
 
 impl ParseError {
@@ -50,7 +59,8 @@ impl ParseError {
             | Self::ReservedWord { span, .. }
             | Self::StaticParameterKindUnsupported { span, .. }
             | Self::LocalFunctionDeclarationUnsupported { span }
-            | Self::ChainedOperatorsDiffer { span, .. } => Some(*span),
+            | Self::ChainedOperatorsDiffer { span, .. }
+            | Self::ObjectVarargsParameter { span, .. } => Some(*span),
             Self::UnexpectedEndOfInput { .. } => None,
         }
     }
@@ -105,6 +115,12 @@ impl core::fmt::Display for ParseError {
                 f,
                 "{}..{}: a chain mixes `{first}` with `{second}`; \
                  chained ordering operators must have the same sense",
+                span.start, span.end
+            ),
+            Self::ObjectVarargsParameter { span, name } => write!(
+                f,
+                "{}..{}: the object value parameter `{name}` is varargs; an \
+                 object's varargs parameter must be declared `transient`",
                 span.start, span.end
             ),
         }

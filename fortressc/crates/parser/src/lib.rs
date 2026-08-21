@@ -228,6 +228,19 @@ impl<'t, 'a> Parser<'t, 'a> {
         self.glued_right(index).then_some(op)
     }
 
+    /// `...` after a parameter's type. `Symbol.rats:212` makes `ellipses` one
+    /// lexical token; this parser has three `Dot`s, so the three must be glued
+    /// to EACH OTHER -- the same trade `->`, `<-` and `+=` take, and no file in
+    /// the corpus lexes differently for it.
+    ///
+    /// `Parameter.rats:88` is `BindId w colon w Type w ellipses`, so the run is
+    /// NOT required to be glued to the type: `Any...` and `Any ...` are the
+    /// same declaration.
+    fn at_ellipsis(&self) -> bool {
+        let three = (0..3).all(|n| matches!(self.peek_ahead(n), Some(Kind::Dot)));
+        three && self.glued_right(self.pos) && self.glued_right(self.pos + 1)
+    }
+
     /// The four readings of an operator, from adjacency alone.
     fn fixity_at(&self, index: usize) -> OperatorShape {
         match (self.glued_left(index), self.glued_right(index)) {
@@ -470,6 +483,18 @@ impl<'t, 'a> Parser<'t, 'a> {
             self.pos += 1;
             let params = self.params()?;
             self.expect(&Kind::RParen, "`)`")?;
+            // `objects.tex:100` spells an object's varargs parameter
+            // `transient Varargs`, so the bare form is a static error rather
+            // than a declaration this parser has not got to yet. `transient`
+            // is not even a reserved word here, so the modifier-carrying form
+            // cannot be written at all -- which makes refusing the whole
+            // shape the honest reading.
+            if let Some(p) = params.iter().find(|p| p.varargs) {
+                return Err(ParseError::ObjectVarargsParameter {
+                    span: p.span,
+                    name: p.name.clone(),
+                });
+            }
             Some(params)
         } else {
             None
@@ -892,7 +917,8 @@ impl<'t, 'a> Parser<'t, 'a> {
         if let Some(Kind::Ident(word)) = self.peek_kind() {
             name.push_str(word);
             self.pos += 1;
-            return self.opr_tail(name, params);
+            let static_params = self.static_params()?;
+            return self.opr_tail(name, params, static_params);
         }
 
         let open = self.operator_run(usize::MAX);
@@ -900,14 +926,35 @@ impl<'t, 'a> Parser<'t, 'a> {
             return Err(self.error("an operator name after `opr`"));
         }
 
+        // An enclosing operator carries its static parameters BETWEEN the
+        // opener and the operand -- `opr <|[\E\] xs: E... |>` -- which is
+        // where the six library declarations of the list, set and prefix-set
+        // brackets put them. Reading them here rather than in `opr_tail` is
+        // what lets the branch below see the operand.
+        //
+        // The infix and prefix forms write them in the same place relative to
+        // the name (`opr +[\T\](a: T, b: T)`), so hoisting the call out of
+        // `opr_tail` moves no declaration that already parsed.
+        let static_params = self.static_params()?;
+
         // An operand written inside the brackets makes this an enclosing
         // operator: `|self|`, `|\self/|`, `|/self\|`, `[i: ZZ32]`.
-        if self.at(&Kind::KwSelf) || matches!(self.peek_kind(), Some(Kind::Ident(_))) {
-            let inner = self.params()?;
-            let close = self.operator_run(open.len());
-            if close.len() != open.len() {
-                return Err(self.error("the closing half of an enclosing operator"));
-            }
+        //
+        // The operand is OPTIONAL. `opr BIG <|[\T\]|>` is the comprehension
+        // bracket and writes none, so what identifies the form is the opener
+        // closing again rather than the operand being there. `operator_run`
+        // stops at `(`, `[\` and an identifier, so an infix declaration can
+        // never produce a non-empty run in that position.
+        let has_operand =
+            self.at(&Kind::KwSelf) || matches!(self.peek_kind(), Some(Kind::Ident(_)));
+        let mark = self.pos;
+        let inner = if has_operand {
+            self.params()?
+        } else {
+            Vec::new()
+        };
+        let close = self.closing_operator_run();
+        if !close.is_empty() {
             params.extend(inner);
             // `_` marks where the operand goes, and it is what keeps the
             // enclosing `|self|` from being given the name `||`, which is a
@@ -927,21 +974,30 @@ impl<'t, 'a> Parser<'t, 'a> {
             self.skip_throws()?;
             return Ok(OprSignature {
                 name,
-                static_params: Vec::new(),
+                static_params,
                 params,
                 return_type,
                 end,
             });
         }
+        if has_operand {
+            return Err(self.error("the closing half of an enclosing operator"));
+        }
 
+        // The run was the operator's own name after all.
+        self.pos = mark;
         name.push_str(&join(&open));
-        self.opr_tail(name, params)
+        self.opr_tail(name, params, static_params)
     }
 
     /// The part an operator declaration shares with a function's:
     /// `[\statics\] (params): T where {...} throws E`.
-    fn opr_tail(&mut self, name: String, mut params: Vec<Param>) -> Parsed<OprSignature> {
-        let static_params = self.static_params()?;
+    fn opr_tail(
+        &mut self,
+        name: String,
+        mut params: Vec<Param>,
+        static_params: Vec<StaticParam>,
+    ) -> Parsed<OprSignature> {
         self.expect(&Kind::LParen, "`(`")?;
         params.extend(self.params()?);
         let mut end = self.expect(&Kind::RParen, "`)`")?.span;
@@ -962,6 +1018,36 @@ impl<'t, 'a> Parser<'t, 'a> {
             return_type,
             end,
         })
+    }
+
+    /// The closing half of an enclosing operator, which is NOT the same run as
+    /// the opening half and cannot be read with the opener's length as a limit.
+    /// `Library/Map.fsi:100` writes `opr {|->[\Key,Val\] xs:(Key,Val)... }`:
+    /// four characters open it and one closes it.
+    ///
+    /// What bounds it instead is the three tokens that can only END a
+    /// declaration -- `:` before a return type, `=` before a body, `:=` -- none
+    /// of which is a bracket, and all three of which `operator_text` maps
+    /// because an INFIX operator may be named out of them.
+    fn closing_operator_run(&mut self) -> Vec<&'static str> {
+        let mut run = Vec::new();
+        loop {
+            if matches!(
+                self.peek_kind(),
+                Some(Kind::Colon | Kind::ColonEq | Kind::Eq)
+            ) {
+                break;
+            }
+            let Some(text) = self.peek_kind().and_then(operator_text) else {
+                break;
+            };
+            if !run.is_empty() && !self.glued_right(self.pos - 1) {
+                break;
+            }
+            run.push(text);
+            self.pos += 1;
+        }
+        run
     }
 
     /// Up to `limit` operator characters, glued to each other. Adjacency is what
@@ -1022,6 +1108,7 @@ impl<'t, 'a> Parser<'t, 'a> {
                         args: Vec::new(),
                         span,
                     },
+                    varargs: false,
                     span,
                 });
                 self.skip_newlines();
@@ -1035,8 +1122,19 @@ impl<'t, 'a> Parser<'t, 'a> {
             let (name, name_span) = self.identifier("a parameter name")?;
             self.expect(&Kind::Colon, "`:`")?;
             let ty = self.type_ref()?;
-            let span = Span::new(name_span.start, ty.span().end);
-            params.push(Param { name, ty, span });
+            let mut end = ty.span().end;
+            let varargs = self.at_ellipsis();
+            if varargs {
+                self.pos += 3;
+                end = self.previous_span().end;
+            }
+            let span = Span::new(name_span.start, end);
+            params.push(Param {
+                name,
+                ty,
+                varargs,
+                span,
+            });
             self.skip_newlines();
             if !self.at(&Kind::Comma) {
                 break;

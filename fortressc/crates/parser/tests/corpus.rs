@@ -103,6 +103,9 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
                     fortress_parser::ParseError::ChainedOperatorsDiffer { .. } => {
                         "chain mixes ordering senses".to_owned()
                     }
+                    fortress_parser::ParseError::ObjectVarargsParameter { .. } => {
+                        "object varargs parameter without `transient`".to_owned()
+                    }
                 };
                 *blockers.entry(label).or_default() += 1;
             }
@@ -140,8 +143,14 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
     // reserved words the lexer keeps out of the identifier namespace, and it is
     // intercepted in the parser rather than given a token, so no file in the
     // corpus lexes differently than it did.
+    // The floor then went unratcheted through M5, the `opr` spike and M6's
+    // declaration modifiers, which between them took the real number to 732.
+    // SPIKE-VARARGS took it 732 -> 749: `...` after a parameter type, static
+    // parameters between an enclosing operator's opener and its operand, an
+    // encloser with no operand at all, and a closing half that need not match
+    // the opening half in length.
     assert!(
-        parsed >= 637,
-        "parser corpus regressed: {parsed} files parse, floor is 637"
+        parsed >= 749,
+        "parser corpus regressed: {parsed} files parse, floor is 749"
     );
 }

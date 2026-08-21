@@ -152,6 +152,14 @@ pub struct MethodDecl {
 pub struct Param {
     pub name: String,
     pub ty: TypeRef,
+    /// `failMsg: Any...`. RECORDED AND NOT READ, and deliberately so: what a
+    /// varargs parameter lowers to is an open question. `functions.tex:174-182`
+    /// says `HeapSequence[\T\]`, a library type that does not exist, and the
+    /// only sequence this compiler has is `Array[\T\]`, whose allocator
+    /// REFUSES a reference element type by design. Until that is decided the
+    /// parameter is an ordinary one of type `T`, so a call with the wrong
+    /// arity is refused rather than silently accepted.
+    pub varargs: bool,
     pub span: Span,
 }
 

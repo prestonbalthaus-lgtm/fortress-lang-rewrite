@@ -1101,3 +1101,101 @@ fn an_object_carries_the_clause_lists_a_trait_does() {
     assert_eq!(o.excludes.len(), 1);
     assert!(o.comprises.is_empty());
 }
+
+// ------------------------------------------------------------------ varargs
+
+/// `Parameter.rats:88` is `BindId w colon w Type w ellipses`. There is no `...`
+/// token -- it is three `Dot`s -- so what makes them one is that they are glued
+/// to EACH OTHER, the same adjacency reading `->`, `<-` and `+=` already take.
+#[test]
+fn three_glued_dots_after_a_parameter_type_are_varargs() {
+    let c = component("api t\nassert(x: ZZ32, failMsg: String...): ()\nend\n");
+    let Some(Decl::Function(f)) = c.decls.into_iter().next() else {
+        panic!("expected a function");
+    };
+    assert_eq!(
+        f.params.iter().map(|p| p.varargs).collect::<Vec<_>>(),
+        [false, true]
+    );
+}
+
+/// The grammar's `w` before `ellipses` permits whitespace, so the run is not
+/// required to be glued to the type it follows.
+#[test]
+fn a_spaced_ellipsis_is_the_same_declaration_as_a_glued_one() {
+    let c = component("api t\nf(x: ZZ32 ...): ()\nend\n");
+    let Some(Decl::Function(f)) = c.decls.into_iter().next() else {
+        panic!("expected a function");
+    };
+    assert!(f.params.first().expect("a parameter").varargs);
+}
+
+/// Three dots that are not glued to each other are three `Dot`s, and a `Dot`
+/// after a parameter type is what it always was: not a parameter list.
+#[test]
+fn unglued_dots_are_not_an_ellipsis() {
+    let src = "api t\nf(x: ZZ32 . . .): ()\nend\n";
+    let tokens = fortress_lexer::lex(src).unwrap_or_else(|e| panic!("lex failed: {e}"));
+    assert!(parse(&tokens).is_err(), "`. . .` must not read as varargs");
+}
+
+/// `objects.tex:100` spells an object's varargs parameter `transient Varargs`,
+/// so the bare form is a static error. Two corpus files write it and both are
+/// must-FAIL tests -- accepting them would have grown the must-fail set by two
+/// while the corpus count went up by two, which is the exact trade this project
+/// refuses.
+#[test]
+fn an_object_value_parameter_may_not_be_varargs() {
+    let src = "component t\nobject O(x: ZZ32...) end\nrun() = ()\nend\n";
+    let tokens = fortress_lexer::lex(src).unwrap_or_else(|e| panic!("lex failed: {e}"));
+    match parse(&tokens) {
+        Err(ParseError::ObjectVarargsParameter { name, .. }) => assert_eq!(name, "x"),
+        other => panic!("expected an object-varargs refusal, got {other:?}"),
+    }
+}
+
+/// `Library/List.fsi:108`. An enclosing operator carries its static parameters
+/// BETWEEN the opener and the operand, which is nowhere `opr_tail` looks.
+#[test]
+fn an_enclosing_operator_carries_static_parameters_before_its_operand() {
+    let c = component("api t\nopr <|[\\E\\] xs: E... |>: List[\\E\\]\nend\n");
+    let Some(Decl::Function(f)) = c.decls.into_iter().next() else {
+        panic!("expected a function");
+    };
+    assert_eq!(f.name, "<|_|>");
+    assert_eq!(f.static_params.len(), 1);
+    assert!(f.params.first().expect("a parameter").varargs);
+}
+
+/// `Library/Set.fsi:56`. The comprehension bracket has static parameters and NO
+/// operand, so what identifies the form is the opener closing again.
+#[test]
+fn an_enclosing_operator_may_have_no_operand_at_all() {
+    let names = opr_names("api t\nopr BIG {[\\T\\]} : ZZ32\nend\n");
+    assert_eq!(names, ["BIG {_}"]);
+}
+
+/// `Library/Map.fsi:100`: four characters open it and one closes it. Reading the
+/// closer with the opener's length as a limit cannot parse that, and reading it
+/// unbounded would eat the `:` of the return type.
+#[test]
+fn the_closing_half_of_an_encloser_need_not_match_the_opening_half() {
+    let c = component("api t\nopr {|->[\\K,V\\] xs: K... }: Map[\\K,V\\]\nend\n");
+    let Some(Decl::Function(f)) = c.decls.into_iter().next() else {
+        panic!("expected a function");
+    };
+    assert_eq!(f.name, "{|->_}");
+    assert!(f.return_type.is_some(), "the return type must survive");
+}
+
+/// The three tokens the closing run stops at are the ones that END a
+/// declaration. `=` is the one that matters in a component: without it the
+/// closer swallows the `=` and the body becomes the operator's name.
+#[test]
+fn a_closing_run_does_not_swallow_the_body_marker() {
+    let c = component("component t\nobject O\nopr |self| = 0\nend\nend\n");
+    let Some(Decl::Object(o)) = c.decls.into_iter().next() else {
+        panic!("expected an object");
+    };
+    assert_eq!(method_names(&o.members), ["|_|"]);
+}

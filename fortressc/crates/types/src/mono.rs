@@ -555,6 +555,7 @@ impl<'a> Expander<'a> {
             out.push(Param {
                 name: p.name.clone(),
                 ty: self.ty(&p.ty, subst)?,
+                varargs: p.varargs,
                 span: p.span,
             });
         }
