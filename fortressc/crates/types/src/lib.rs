@@ -1069,6 +1069,8 @@ impl Checker {
             }
         }
 
+        self.api_overloads_are_unambiguous()?;
+
         Ok(TypedComponent {
             name: component.name.clone(),
             exports: component.exports.clone(),
@@ -1078,6 +1080,72 @@ impl Checker {
             uses_mpi: false,
             is_api: true,
         })
+    }
+
+    /// `overloading.tex` makes a valid overload set a property of the
+    /// DECLARATIONS, not of the calls that reach them -- and an api has no
+    /// calls at all, so M3c's check, which is driven by the tuples a call site
+    /// can produce, never runs on one. `Compiled3.w.fsi` is the witness: two
+    /// declarations `f(x:O,y:T)` and `f(x:T,y:O)` with `O extends T`, which are
+    /// ambiguous at `(O, O)` and which this compiler accepted in silence the
+    /// day api check mode landed.
+    ///
+    /// THE DOMAIN IS SYNTHESIZED FROM THE DECLARATIONS, since there is no call:
+    /// each column is every concrete type below any of the declared parameter
+    /// types in that position. A set too large to enumerate is SKIPPED rather
+    /// than refused -- the bound exists so a big library api cannot be made to
+    /// fail by a check that is new, and a missed ambiguity is the state this
+    /// replaces rather than a regression from it.
+    fn api_overloads_are_unambiguous(&self) -> Checked<()> {
+        for (name, sigs) in &self.functions {
+            let mut arities: Vec<usize> = sigs.iter().map(|s| s.params.len()).collect();
+            arities.sort_unstable();
+            arities.dedup();
+            for arity in arities {
+                let group: Vec<&Signature> =
+                    sigs.iter().filter(|s| s.params.len() == arity).collect();
+                if group.len() < 2 {
+                    continue;
+                }
+                let mut domain: Vec<Vec<Type>> = Vec::with_capacity(arity);
+                for column in 0..arity {
+                    let mut here: Vec<Type> = Vec::new();
+                    for sig in &group {
+                        let Some(param) = sig.params.get(column) else {
+                            continue;
+                        };
+                        match *param {
+                            Type::Trait(above) => here.extend(
+                                self.registry
+                                    .concretes_below(above)
+                                    .into_iter()
+                                    .map(Type::Object),
+                            ),
+                            concrete => here.push(concrete),
+                        }
+                    }
+                    here.sort_unstable_by_key(|t| format!("{t:?}"));
+                    here.dedup();
+                    domain.push(here);
+                }
+                let cells = domain
+                    .iter()
+                    .try_fold(1usize, |total, column| total.checked_mul(column.len()))
+                    .unwrap_or(usize::MAX);
+                if cells == 0 || cells > MAX_DISPATCH_CELLS {
+                    continue;
+                }
+                let span = group.first().map_or(Span::new(0, 0), |s| s.span);
+                for tuple in cartesian(&domain) {
+                    let applicable = self.typing_candidates(&group, &tuple);
+                    if applicable.len() < 2 {
+                        continue;
+                    }
+                    self.winner(name, &applicable, &tuple, span)?;
+                }
+            }
+        }
+        Ok(())
     }
 
     /// The obligations monomorphization recorded. They could not be settled

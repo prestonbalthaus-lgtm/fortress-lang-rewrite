@@ -193,16 +193,32 @@ pub fn violations(component: &Component, api: &Component, api_name: &str) -> Vec
                 };
                 // "IDENTICAL", not "compatible": `source-code.tex:290-299`
                 // makes a trait's exported hierarchy a fact about the api, so a
-                // component may not widen or narrow it.
-                if have.extends.len() != want.extends.len()
-                    || !have
-                        .extends
-                        .iter()
-                        .zip(&want.extends)
-                        .all(|(x, y)| same_type(x, y))
-                {
+                // component may not widen or narrow it. ALL THREE TOPOLOGY
+                // CLAUSES are the hierarchy, not just `extends` -- an api that
+                // declares `trait T excludes S` and a component that declares
+                // `trait T` describe different lattices, and the legacy says so
+                // by name ("due to different excludes clauses for traits").
+                for (clause, mine, theirs) in [
+                    ("extend", &have.extends, &want.extends),
+                    ("comprise", &have.comprises, &want.comprises),
+                    ("exclude", &have.excludes, &want.excludes),
+                ] {
+                    if mine.len() != theirs.len()
+                        || !mine.iter().zip(theirs).all(|(x, y)| same_type(x, y))
+                    {
+                        out.push(say(format!(
+                            "trait `{}` to {clause} exactly what the api declares",
+                            want.name
+                        )));
+                    }
+                }
+                // The open marker is part of the clause and not decoration: an
+                // api's `comprises { ... }` says the set is open, and a
+                // component that closes it has narrowed the exported hierarchy.
+                if have.comprises_open != want.comprises_open {
                     out.push(say(format!(
-                        "trait `{}` to extend exactly what the api declares",
+                        "trait `{}` to declare the same OPEN (`...`) `comprises` clause \
+                         as the api",
                         want.name
                     )));
                 }
@@ -216,6 +232,54 @@ pub fn violations(component: &Component, api: &Component, api_name: &str) -> Vec
                         "object `{}`, which is not declared",
                         want.name
                     )));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// `source-code.tex:326-330`: a component exporting several apis may not
+/// satisfy declarations in more than one of them with a SINGLE definition. Two
+/// apis that both declare `T` are two different types, and one `trait T end`
+/// cannot be both.
+///
+/// THE RULE IS ABOUT NAMES ACROSS APIS, not about any one api, which is why it
+/// cannot live in `violations` -- that function sees one api at a time and the
+/// offence is invisible from inside either of them.
+pub fn shared_definitions(component: &Component, apis: &[(&String, Component)]) -> Vec<Violation> {
+    let mut out = Vec::new();
+    if apis.len() < 2 {
+        return out;
+    }
+    let declared = |c: &Component, name: &str| {
+        c.decls.iter().any(|d| match d {
+            Decl::Function(f) => f.name == name && participates(f.modifiers),
+            Decl::Trait(t) => t.name == name,
+            Decl::Object(o) => o.name == name,
+        })
+    };
+    for (index, (first, api)) in apis.iter().enumerate() {
+        for decl in &api.decls {
+            let name = match decl {
+                Decl::Function(f) if participates(f.modifiers) => &f.name,
+                Decl::Trait(t) => &t.name,
+                Decl::Object(o) => &o.name,
+                Decl::Function(_) => continue,
+            };
+            if !declared(component, name) {
+                continue;
+            }
+            for (second, other) in apis.iter().skip(index + 1) {
+                if declared(other, name) {
+                    out.push(Violation {
+                        api: (*first).clone(),
+                        what: format!(
+                            "`{name}` to be a different definition from the `{name}` \
+                             that `{second}` declares -- one definition may not satisfy \
+                             two exported apis"
+                        ),
+                    });
                 }
             }
         }

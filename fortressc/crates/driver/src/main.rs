@@ -47,9 +47,14 @@ fn parse_args(args: &[String]) -> Option<Options> {
     // decision: accuracy over inflation. `--no-resolve-imports` is what the
     // census and the gates use to take the comparison.
     let mut resolve_imports = true;
-    // OFF by default, and the reason is measured rather than cautious: see the
-    // note in `conform`. Turning it on is a decision with a blast radius.
-    let mut check_exports = false;
+    // ON BY DEFAULT since the consolidation. The phase-2 lane left it off
+    // because three other agents were measuring against a baseline it moves;
+    // that reason expired with the merge, and the measured cost is TWO corpus
+    // files, both of them programs the legacy implementation refuses --
+    // Compiled0.p.fss, which exports Executable and declares `ran()`, and
+    // Compiled2.a.fss, which satisfies one member of a two-member overload set.
+    // The comparison is still TypeRef-level; see `conform.rs`.
+    let mut check_exports = true;
     let mut emit_obj = false;
     let mut cc = DEFAULT_CC.to_owned();
     let mut cpu = fortress_codegen::DEFAULT_CPU.to_owned();
@@ -62,6 +67,7 @@ fn parse_args(args: &[String]) -> Option<Options> {
             "--resolve-imports" => resolve_imports = true,
             "--no-resolve-imports" => resolve_imports = false,
             "--check-exports" => check_exports = true,
+            "--no-check-exports" => check_exports = false,
             "--emit-obj" => emit_obj = true,
             "--cc" => cc = rest.next()?.clone(),
             "--target-cpu" => cpu = rest.next()?.clone(),
@@ -89,7 +95,7 @@ fn main() -> ExitCode {
     let Some(options) = parse_args(&args) else {
         eprintln!(
             "usage: fortressc <source.fss> [-o <output>] [--emit-ir] [--emit-obj] \
-             [--no-resolve-imports] [--check-exports] \
+             [--no-resolve-imports] [--check-exports] [--no-check-exports] \
                   [--cc <driver>] [--target-cpu <{}>]",
             fortress_codegen::SUPPORTED_CPUS.join("|")
         );
@@ -286,30 +292,33 @@ fn compile(options: &Options) -> Result<(), Failure> {
                 &e.notes(),
             ))
         })?;
-    // An EXPORTED api is never merged -- it states the hierarchy the component
-    // must provide, and the component gives the definitions -- so it is checked
-    // as its own declaration set. It is reported without a caret, because the
-    // offending text is in a different file from the one being rendered.
-    for exported in &component.exports {
-        let Some(api) = resolve::find_api(exported, &options.source) else {
-            continue;
-        };
+    // RESOLVED ONCE, read three times. An exported api is never merged into
+    // the component -- it states the hierarchy the component must provide, and
+    // the component gives the definitions -- so each is its own declaration
+    // set, and finding the same file three times is three chances to disagree
+    // about which file it was.
+    let exported: Vec<(&String, fortress_ast::Component)> = component
+        .exports
+        .iter()
+        .filter_map(|name| resolve::find_api(name, &options.source).map(|api| (name, api)))
+        .collect();
+
+    // Its `comprises` clauses are checked as their own set, and reported
+    // WITHOUT a caret: the offending text is in a different file from the one
+    // being rendered.
+    for (name, api) in &exported {
         if let Err(e) = fortress_types::comprises::check(&api.decls, &[], true, api.span) {
-            return Err(Failure::User(format!(
-                "in the exported api `{exported}`: {e}"
-            )));
+            return Err(Failure::User(format!("in the exported api `{name}`: {e}")));
         }
     }
     // BEFORE the check, so a conformance failure is reported against what the
     // source says rather than against whatever the checker made of it.
     if options.check_exports {
         let mut violations = Vec::new();
-        for exported in &component.exports {
-            let Some(api) = resolve::find_api(exported, &options.source) else {
-                continue;
-            };
-            violations.extend(conform::violations(component, &api, exported));
+        for (name, api) in &exported {
+            violations.extend(conform::violations(component, api, name));
         }
+        violations.extend(conform::shared_definitions(component, &exported));
         if let Some(first) = violations.first() {
             return Err(Failure::User(format!(
                 "{first}{}",

@@ -2104,6 +2104,39 @@ fn a_for_loop_over_something_that_is_not_an_array_is_refused() {
     assert!(message.contains("expected an array"), "{message}");
 }
 
+// ------------------------------------------------ overloading inside an api
+//
+// M3c's ambiguity check is driven by the tuples a CALL SITE can produce, and an
+// api has no call sites, so an api's overload set was checked by nothing at all
+// from the day api check mode landed.
+
+/// `overloading.tex` -- `f(x:O,y:T)` and `f(x:T,y:O)` with `O extends T` are
+/// ambiguous at `(O, O)`.
+#[test]
+fn an_ambiguous_overload_set_in_an_api_is_refused() {
+    let message = refusal("badapioverload.fsi");
+    assert!(message.contains("`f` is ambiguous for (O, O)"), "{message}");
+}
+
+/// AND THE NEGATIVE, because a rule that refused every overloaded api would
+/// pass the test above and take the library with it.
+#[test]
+fn an_unambiguous_overload_set_in_an_api_is_accepted() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture("apioverloadok.fsi"))
+        .arg("--emit-obj")
+        .arg("-o")
+        .arg("/dev/null")
+        .output()
+        .expect("could not run fortressc");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 // ------------------------------------------------- `comprises` well-formedness
 //
 // The clause was PARSED AND DROPPED since M3c, so all four of these compiled
