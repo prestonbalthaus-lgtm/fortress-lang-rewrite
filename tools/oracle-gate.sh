@@ -660,6 +660,8 @@ for c in CS:
             and 'ACCEPTED a program' not in c['detail']:
         c['outcome'] = 'divergence'
 buckets = collections.Counter(c['outcome'] for c in CS)
+stale_diverge = sorted(known_diverge - {c['src'] for c in CS
+                                        if c['outcome'] == 'divergence'})
 must_fail = [c for c in CS if c['props'].get('compile_err_equals', '').strip() or
              c['props'].get('compile_err_contains', '').strip()]
 accepted = sorted(c['src'] for c in must_fail if c['outcome'] == 'fail')
@@ -752,8 +754,6 @@ blocked = collections.Counter(c['detail'] for c in CS if c['outcome'] == 'blocke
 for msg, n in blocked.most_common(12):
     print(f'{n:>7}  {msg}')
 
-stale_diverge = sorted(known_diverge - {c['src'] for c in CS
-                                        if c['outcome'] == 'divergence'})
 fails = [c for c in CS if c['outcome'] == 'fail']
 print(f'\n-- A, continued: the {len(fails)} disagreements, by kind --')
 for msg, n in collections.Counter(c['detail'] for c in fails).most_common(12):
