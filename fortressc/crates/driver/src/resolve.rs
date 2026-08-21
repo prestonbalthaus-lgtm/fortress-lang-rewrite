@@ -39,6 +39,16 @@ const REPOSITORY_PATH: [&str; 3] = [
     "ProjectFortress/test_library",
 ];
 
+/// Loads the api a component EXPORTS. Imports and exports read the same source
+/// path and the same files; what differs is the obligation -- an import puts
+/// names in scope, an export is a promise the component has to keep.
+pub fn find_api(name: &str, source: &Path) -> Option<Component> {
+    let file = find(name, &source_path(source))?;
+    let text = std::fs::read_to_string(file).ok()?;
+    let tokens = fortress_lexer::lex(&text).ok()?;
+    fortress_parser::parse(&tokens).ok()
+}
+
 /// What resolution found, for the diagnostic the driver prints.
 pub struct Resolution {
     pub component: Component,

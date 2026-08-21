@@ -23,6 +23,7 @@ struct Options {
     output: PathBuf,
     emit_ir: bool,
     resolve_imports: bool,
+    check_exports: bool,
     emit_obj: bool,
     cc: String,
     cpu: String,
@@ -32,7 +33,14 @@ fn parse_args(args: &[String]) -> Option<Options> {
     let mut source: Option<PathBuf> = None;
     let mut output: Option<PathBuf> = None;
     let mut emit_ir = false;
-    let mut resolve_imports = false;
+    // ON BY DEFAULT since phase 2. It costs seven api files that were reaching
+    // the terminus only because their imports were inert, and that is the
+    // decision: accuracy over inflation. `--no-resolve-imports` is what the
+    // census and the gates use to take the comparison.
+    let mut resolve_imports = true;
+    // OFF by default, and the reason is measured rather than cautious: see the
+    // note in `conform`. Turning it on is a decision with a blast radius.
+    let mut check_exports = false;
     let mut emit_obj = false;
     let mut cc = DEFAULT_CC.to_owned();
     let mut cpu = fortress_codegen::DEFAULT_CPU.to_owned();
@@ -43,6 +51,8 @@ fn parse_args(args: &[String]) -> Option<Options> {
             "-o" => output = Some(PathBuf::from(rest.next()?)),
             "--emit-ir" => emit_ir = true,
             "--resolve-imports" => resolve_imports = true,
+            "--no-resolve-imports" => resolve_imports = false,
+            "--check-exports" => check_exports = true,
             "--emit-obj" => emit_obj = true,
             "--cc" => cc = rest.next()?.clone(),
             "--target-cpu" => cpu = rest.next()?.clone(),
@@ -58,6 +68,7 @@ fn parse_args(args: &[String]) -> Option<Options> {
         output,
         emit_ir,
         resolve_imports,
+        check_exports,
         emit_obj,
         cc,
         cpu,
@@ -69,7 +80,7 @@ fn main() -> ExitCode {
     let Some(options) = parse_args(&args) else {
         eprintln!(
             "usage: fortressc <source.fss> [-o <output>] [--emit-ir] [--emit-obj] \
-             [--resolve-imports] \
+             [--no-resolve-imports] [--check-exports] \
                   [--cc <driver>] [--target-cpu <{}>]",
             fortress_codegen::SUPPORTED_CPUS.join("|")
         );
@@ -93,6 +104,7 @@ fn main() -> ExitCode {
     }
 }
 
+mod conform;
 mod resolve;
 
 enum Failure {
@@ -239,6 +251,27 @@ fn compile(options: &Options) -> Result<(), Failure> {
         None
     };
     let component = resolved.as_ref().map_or(&component, |r| &r.component);
+    // BEFORE the check, so a conformance failure is reported against what the
+    // source says rather than against whatever the checker made of it.
+    if options.check_exports {
+        let mut violations = Vec::new();
+        for exported in &component.exports {
+            let Some(api) = resolve::find_api(exported, &options.source) else {
+                continue;
+            };
+            violations.extend(conform::violations(component, &api, exported));
+        }
+        if let Some(first) = violations.first() {
+            return Err(Failure::User(format!(
+                "{first}{}",
+                if violations.len() > 1 {
+                    format!(" (and {} more)", violations.len() - 1)
+                } else {
+                    String::new()
+                }
+            )));
+        }
+    }
     let typed = fortress_types::check(component).map_err(|e| {
         Failure::Diagnostic(render(
             path,
@@ -249,12 +282,22 @@ fn compile(options: &Options) -> Result<(), Failure> {
         ))
     })?;
 
-    eprintln!(
-        "fortressc: lexed {} tokens, parsed and typechecked `{}` with {} function(s)",
-        tokens.len(),
-        typed.name,
-        typed.functions.len()
-    );
+    if typed.is_api {
+        eprintln!(
+            "fortressc: lexed {} tokens, checked the api `{}`: {} declaration(s), \
+             headers resolved and bounds discharged",
+            tokens.len(),
+            typed.name,
+            component.decls.len()
+        );
+    } else {
+        eprintln!(
+            "fortressc: lexed {} tokens, parsed and typechecked `{}` with {} function(s)",
+            tokens.len(),
+            typed.name,
+            typed.functions.len()
+        );
+    }
     if let Some(r) = resolved.as_ref() {
         eprintln!(
             "fortressc: resolved {} api(s){}{}",
@@ -270,6 +313,13 @@ fn compile(options: &Options) -> Result<(), Failure> {
                 format!("; found but unreadable: {}", r.unreadable.join(", "))
             }
         );
+    }
+
+    // AN API IS CHECKED AND NOT EMITTED. Signatures have no code, so there is
+    // no object, no IR and no link -- and exit 0 is the right answer, because
+    // nothing about the file was wrong.
+    if typed.is_api {
+        return Ok(());
     }
 
     if options.emit_ir {

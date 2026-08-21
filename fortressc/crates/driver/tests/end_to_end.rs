@@ -2114,6 +2114,8 @@ fn corpus(rel: &str) -> PathBuf {
         .join(rel)
 }
 
+/// Resolution is the default; the flag is passed anyway so these read as
+/// resolution tests rather than as ordinary compiles.
 fn resolve_output(rel: &str) -> Output {
     Command::new(env!("CARGO_BIN_EXE_fortressc"))
         .arg(corpus(rel))
@@ -2138,8 +2140,12 @@ fn a_type_declared_in_an_imported_api_is_in_scope() {
         "should compile with resolution:\n{}",
         String::from_utf8_lossy(&with.stderr)
     );
+    // Resolution is ON by default since phase 2, so the negative half of this
+    // test is what `--no-resolve-imports` is for: without it the assertion
+    // measures nothing.
     let without = Command::new(env!("CARGO_BIN_EXE_fortressc"))
         .arg(corpus(rel))
+        .arg("--no-resolve-imports")
         .arg("--emit-obj")
         .arg("-o")
         .arg("/dev/null")
@@ -2160,9 +2166,10 @@ fn a_type_declared_in_an_imported_api_is_in_scope() {
 fn the_source_path_order_decides_which_of_a_duplicated_api_is_meant() {
     let out = resolve_output("ProjectFortress/LibraryBuiltin/System.fsi");
     let message = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        message.contains("an `api` is a set of signatures"),
-        "the LibraryBuiltin api reaches the terminus:\n{message}"
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "the LibraryBuiltin api checks clean:\n{message}"
     );
     // `Library/System.fsi` names `ImmutableArray`, which nothing declares.
     let other = resolve_output("Library/System.fsi");
@@ -2191,5 +2198,78 @@ fn an_unresolvable_api_is_reported_rather_than_fatal() {
     assert!(
         !message.contains("internal error"),
         "an unresolvable api is never an internal error:\n{message}"
+    );
+}
+
+// ------------------------------------------------- component satisfies api
+
+fn conform_output(rel: &str) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(corpus(rel))
+        .arg("--check-exports")
+        .arg("--emit-obj")
+        .arg("-o")
+        .arg("/dev/null")
+        .output()
+        .expect("could not run fortressc")
+}
+
+/// `source-code.tex:313-320`: a component must satisfy every top-level
+/// declaration in any api it EXPORTS. Until this existed `Component::exports`
+/// had no readers at all -- `export Executable` was a token the parser stored
+/// and nobody asked about.
+///
+/// `Compiled0.p.fss` exports `Executable` and declares `ran()`. One letter, and
+/// nothing in the compiler had ever looked.
+#[test]
+fn a_component_that_does_not_implement_its_api_is_refused() {
+    let out = conform_output("ProjectFortress/compiler_tests/Compiled0.p.fss");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{message}");
+    assert!(
+        message.contains("`run`, which is not declared"),
+        "{message}"
+    );
+}
+
+/// An api may declare an OVERLOAD SET, and satisfying one member is not
+/// satisfying the api. `test_library/Compiled2.a.fsi` declares `f(): ()` and
+/// `f(s: String): ()`; the component declares only the first.
+#[test]
+fn every_member_of_an_exported_overload_set_must_be_declared() {
+    let out = conform_output("ProjectFortress/compiler_tests/Compiled2.a.fss");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{message}");
+    assert!(message.contains("`f/1`"), "{message}");
+}
+
+/// `Function.rats:18`'s `FnSig`: an api may declare a function as a NAME OF
+/// ARROW TYPE. `AbstractFunctionDecls.fsi` writes `foo: String -> ()` and the
+/// component writes `foo(s: String): () = ()`, and they are the same
+/// declaration. Fifteen corpus apis use the form, and the first cut of this
+/// check reported every one of them as a violation.
+#[test]
+fn an_arrow_typed_api_signature_is_the_same_declaration_as_a_function() {
+    let out = conform_output("ProjectFortress/compiler_tests/Compiled5.bc.fss");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// The corpus's own `Executable` apis all declare `run(): ()` -- NOT the
+/// specification's `run(args: String...)`. That is why turning this check on
+/// costs two files instead of the 1526 that export `Executable`, and it is
+/// worth a test because the spec would predict otherwise.
+#[test]
+fn the_executable_api_in_this_tree_takes_no_arguments() {
+    let out = conform_output("ProjectFortress/tests/atomic2.fss");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
     );
 }

@@ -420,6 +420,11 @@ pub struct TypedComponent {
     /// Set when any function resolved an MPI builtin. The driver reads it to
     /// decide whether the MPI shim goes into the link.
     pub uses_mpi: bool,
+    /// The source was an `api`. It was CHECKED -- headers resolved, bounds
+    /// discharged -- and there is nothing to emit, because an api declares
+    /// signatures and signatures have no code. The driver stops before codegen
+    /// on this flag rather than on the file extension.
+    pub is_api: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

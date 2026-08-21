@@ -92,7 +92,11 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
                     fortress_parser::ParseError::ReservedWord { word, .. } => {
                         format!("reserved word `{word}`")
                     }
-                    fortress_parser::ParseError::StaticParameterKindUnsupported {
+                    fortress_parser::ParseError::StaticParameterKindPendingDecision {
+                        kind,
+                        ..
+                    }
+                    | fortress_parser::ParseError::StaticParameterKindUnsupported {
                         kind, ..
                     } => {
                         format!("`{kind}` static parameter")

@@ -896,11 +896,43 @@ fn an_object_cannot_extend_an_object() {
     assert!(matches!(e, TypeError::NotATrait { .. }), "got {e}");
 }
 
+/// `SPIKE-API-CHECK-MODE`. An api used to be refused as the FIRST statement of
+/// `run`, before `discharge_bounds` and before anything was resolved -- a stub
+/// sitting exactly where phase 3 goes. It is CHECKED now: headers resolved,
+/// bounds discharged, no bodies, nothing emitted.
 #[test]
-fn an_api_is_parsed_and_refused() {
-    let src = "api t\nf(x: ZZ32): ZZ32\nend\n";
-    let e = type_error(src);
-    assert!(matches!(e, TypeError::ApiNotExecutable { .. }), "got {e}");
+fn an_api_is_checked_rather_than_refused() {
+    let c = typed("api t\ntrait A end\nf(x: ZZ32): A\nend\n");
+    assert!(c.is_api);
+    assert!(c.functions.is_empty(), "signatures are not code");
+    assert!(c.objects.is_empty());
+}
+
+/// And it is a REAL check, not an accept-everything path: the header types have
+/// to resolve. This is what the api census measures.
+#[test]
+fn an_api_whose_header_does_not_resolve_is_refused() {
+    let e = type_error("api t\nf(x: NoSuchType): ZZ32\nend\n");
+    assert!(matches!(e, TypeError::UnknownType { .. }), "got {e}");
+    let e = type_error("api t\ntrait A extends {Nowhere} end\nend\n");
+    assert!(matches!(e, TypeError::UnknownType { .. }), "got {e}");
+}
+
+/// `source-code.tex:313-320`: an api holds DECLARATIONS. A declaration with a
+/// body is a definition, and the diagnostic names the one that broke the rule
+/// rather than the whole file.
+#[test]
+fn an_api_declaration_may_not_have_a_body() {
+    let e = type_error("api t\nf(x: ZZ32): ZZ32 = x\nend\n");
+    match e {
+        TypeError::ApiDeclarationHasBody { name, .. } => assert_eq!(name, "f"),
+        other => panic!("got {other}"),
+    }
+    let e = type_error("api t\ntrait A\n  g(): ZZ32 = 1\nend\nend\n");
+    match e {
+        TypeError::ApiDeclarationHasBody { name, .. } => assert_eq!(name, "A.g"),
+        other => panic!("got {other}"),
+    }
 }
 
 #[test]
