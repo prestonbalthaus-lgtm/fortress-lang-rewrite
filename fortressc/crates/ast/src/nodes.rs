@@ -119,6 +119,12 @@ pub struct TraitDecl {
     pub static_params: Vec<StaticParam>,
     pub extends: Vec<TypeRef>,
     pub comprises: Vec<TypeRef>,
+    /// `comprises { ... }` and `comprises { O, ... }`: the set is OPEN, and the
+    /// names written are not all of it. The marker used to be dropped, which
+    /// made an open set and an unwritten one the same empty list -- and that is
+    /// the difference `traits.tex:180-186` turns into a static error, because
+    /// nothing may extend a trait whose comprises clause is open.
+    pub comprises_open: bool,
     pub excludes: Vec<TypeRef>,
     pub members: Vec<Member>,
     pub span: Span,
@@ -138,6 +144,9 @@ pub struct ObjectDecl {
     /// clauses are read by one loop shared with `trait` -- so `comprises` is
     /// carried rather than special-cased away at the parser.
     pub comprises: Vec<TypeRef>,
+    /// See `TraitDecl::comprises_open`. An object cannot legally write one,
+    /// and carrying it here is what lets one shared loop read both clauses.
+    pub comprises_open: bool,
     pub excludes: Vec<TypeRef>,
     pub members: Vec<Member>,
     pub span: Span,

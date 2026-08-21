@@ -12,6 +12,7 @@
 //! asks a type question.
 
 mod closure;
+pub mod comprises;
 mod error;
 mod mono;
 mod registry;

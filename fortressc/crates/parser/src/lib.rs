@@ -161,6 +161,14 @@ struct Parser<'t, 'a> {
     chain_temps: usize,
 }
 
+#[derive(Default)]
+struct Topology {
+    extends: Vec<TypeRef>,
+    comprises: Vec<TypeRef>,
+    comprises_open: bool,
+    excludes: Vec<TypeRef>,
+}
+
 impl<'t, 'a> Parser<'t, 'a> {
     // ----------------------------------------------------------- primitives
 
@@ -908,7 +916,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         let (name, _) = self.identifier("a trait name")?;
         self.skip_newlines_before(&Kind::LGeneric);
         let mut static_params = self.static_params()?;
-        let (extends, comprises, excludes) = self.topology_clauses()?;
+        let topology = self.topology_clauses()?;
         self.where_clause(&mut static_params)?;
         let members = self.members()?;
         let end = self.named_end(&Kind::KwTrait, &name)?;
@@ -916,9 +924,10 @@ impl<'t, 'a> Parser<'t, 'a> {
             modifiers,
             name,
             static_params,
-            extends,
-            comprises,
-            excludes,
+            extends: topology.extends,
+            comprises: topology.comprises,
+            comprises_open: topology.comprises_open,
+            excludes: topology.excludes,
             members,
             span: Span::new(start.start, end.end),
         })
@@ -951,7 +960,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         } else {
             None
         };
-        let (extends, comprises, excludes) = self.topology_clauses()?;
+        let topology = self.topology_clauses()?;
         self.where_clause(&mut static_params)?;
         let members = self.members()?;
         let end = self.named_end(&Kind::KwObject, &name)?;
@@ -960,9 +969,10 @@ impl<'t, 'a> Parser<'t, 'a> {
             name,
             static_params,
             params,
-            extends,
-            comprises,
-            excludes,
+            extends: topology.extends,
+            comprises: topology.comprises,
+            comprises_open: topology.comprises_open,
+            excludes: topology.excludes,
             members,
             span: Span::new(start.start, end.end),
         })
@@ -992,6 +1002,10 @@ impl<'t, 'a> Parser<'t, 'a> {
         }
     }
 
+    /// One declaration's three topology clauses, plus whether the `comprises`
+    /// one carried the open marker. A four-tuple would read at the call sites
+    /// as three lists and a mystery bool.
+    ///
     /// `extends`, `comprises` and `excludes`, in ANY order and each ON ITS OWN
     /// LINE if the source puts it there.
     ///
@@ -1009,25 +1023,37 @@ impl<'t, 'a> Parser<'t, 'a> {
     /// Reading them in a loop rather than in a fixed order costs nothing and
     /// removes a second way to be wrong; `members()` opens with `skip_newlines`
     /// either way, so the position is restored when no clause follows.
-    fn topology_clauses(&mut self) -> Parsed<(Vec<TypeRef>, Vec<TypeRef>, Vec<TypeRef>)> {
-        let (mut extends, mut comprises, mut excludes) = (Vec::new(), Vec::new(), Vec::new());
+    fn topology_clauses(&mut self) -> Parsed<Topology> {
+        let mut found = Topology::default();
+        let (mut had_ext, mut had_comp, mut had_excl) = (false, false, false);
         loop {
             let save = self.pos;
             self.skip_newlines();
-            let slot = match self.peek_kind() {
-                Some(Kind::KwExtends) => &mut extends,
-                Some(Kind::KwComprises) => &mut comprises,
-                Some(Kind::KwExcludes) => &mut excludes,
+            // A clause written twice is the error, and an EMPTY clause is legal
+            // -- `comprises { ... }` names nothing at all -- so the check
+            // cannot ask whether the list is already non-empty.
+            let (slot, seen, is_comprises) = match self.peek_kind() {
+                Some(Kind::KwExtends) => (&mut found.extends, &mut had_ext, false),
+                Some(Kind::KwComprises) => (&mut found.comprises, &mut had_comp, true),
+                Some(Kind::KwExcludes) => (&mut found.excludes, &mut had_excl, false),
                 _ => {
                     self.pos = save;
-                    return Ok((extends, comprises, excludes));
+                    return Ok(found);
                 }
             };
-            if !slot.is_empty() {
+            if *seen {
                 return Err(self.error("one `extends`, `comprises` or `excludes` clause each"));
             }
+            *seen = true;
             self.pos += 1;
-            *slot = self.type_set()?;
+            let (types, open) = self.type_set()?;
+            *slot = types;
+            // The open marker is only meaningful on `comprises`; no corpus file
+            // writes one on either of the other two, and reading it there would
+            // invent a rule the specification does not state.
+            if is_comprises {
+                found.comprises_open = open;
+            }
         }
     }
 
@@ -1039,35 +1065,37 @@ impl<'t, 'a> Parser<'t, 'a> {
             return Ok(Vec::new());
         }
         self.pos += 1;
-        self.type_set()
+        Ok(self.type_set()?.0)
     }
 
     /// The type list a topology clause names: one type, or a braced set.
-    fn type_set(&mut self) -> Parsed<Vec<TypeRef>> {
+    fn type_set(&mut self) -> Parsed<(Vec<TypeRef>, bool)> {
         self.skip_newlines();
         if !self.at(&Kind::LBrace) {
-            return Ok(vec![self.type_ref()?]);
+            return Ok((vec![self.type_ref()?], false));
         }
         self.pos += 1;
         self.skip_newlines();
         let mut out = Vec::new();
         if self.at(&Kind::RBrace) {
             self.pos += 1;
-            return Ok(out);
+            return Ok((out, false));
         }
-        // `comprises { ... }` -- 32 corpus sites -- says the set is open rather
-        // than naming it. There is no `...` token, so it is three `Dot`s. The
-        // marker is DROPPED, which is honest while nothing reads `comprises`:
-        // an open set and an unwritten one are the same empty list today.
-        if self.at(&Kind::Dot) {
-            while self.at(&Kind::Dot) {
-                self.pos += 1;
-            }
-            self.skip_newlines();
-            self.expect(&Kind::RBrace, "`}`")?;
-            return Ok(out);
-        }
+        // `comprises { ... }` says the set is OPEN rather than naming it, and
+        // `comprises { O, ... }` names part of it. There is no `...` token; it
+        // is three `Dot`s. THE MARKER IS RECORDED: it used to be dropped, and
+        // only the LEADING form was even accepted, so `{ O, ... }` reached
+        // `type_ref` on a `Dot` and the api it was written in did not parse.
+        let mut open = false;
         loop {
+            if self.at(&Kind::Dot) {
+                while self.at(&Kind::Dot) {
+                    self.pos += 1;
+                }
+                open = true;
+                self.skip_newlines();
+                break;
+            }
             out.push(self.type_ref()?);
             self.skip_newlines();
             if !self.at(&Kind::Comma) {
@@ -1077,7 +1105,7 @@ impl<'t, 'a> Parser<'t, 'a> {
             self.skip_newlines();
         }
         self.expect(&Kind::RBrace, "`}`")?;
-        Ok(out)
+        Ok((out, open))
     }
 
     /// `where {T extends U}`. Consumed and discarded: there are no static

@@ -1,0 +1,9 @@
+component comprisesok
+export Executable
+
+trait T comprises { O, P } end
+object O extends T end
+object P extends T end
+
+run():() = println("ok")
+end

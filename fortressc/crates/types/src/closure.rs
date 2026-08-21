@@ -239,6 +239,7 @@ impl Pass {
                 static_params: Vec::new(),
                 extends: Vec::new(),
                 comprises: Vec::new(),
+                comprises_open: false,
                 excludes: Vec::new(),
                 members: vec![Member::Method(MethodDecl {
                     modifiers: Modifiers::default(),
@@ -573,6 +574,7 @@ impl Pass {
                 span,
             }],
             comprises: Vec::new(),
+            comprises_open: false,
             excludes: Vec::new(),
             members: vec![Member::Method(MethodDecl {
                 modifiers: Modifiers::default(),
@@ -693,6 +695,7 @@ impl Pass {
                 span,
             }],
             comprises: Vec::new(),
+            comprises_open: false,
             excludes: Vec::new(),
             members: vec![Member::Method(MethodDecl {
                 modifiers: Modifiers::default(),

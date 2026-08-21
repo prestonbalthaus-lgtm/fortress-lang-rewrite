@@ -60,6 +60,29 @@ pub enum TypeError {
         span: Span,
         name: String,
     },
+    /// `traits.tex:161-162`: "In an API (but not a component), a `comprises`
+    /// clause may include `...`". The marker was DROPPED by the parser until
+    /// the clause gained a reader, so an open set and an unwritten one were
+    /// the same empty list and a component could write either.
+    OpenComprisesInComponent {
+        span: Span,
+        name: String,
+    },
+    /// `traits.tex:232-235`: the traits a `comprises` clause lists "are exactly
+    /// the traits that immediately extend T and they must explicitly extend T".
+    ComprisesNameDoesNotExtend {
+        span: Span,
+        trait_name: String,
+        listed: String,
+    },
+    /// `traits.tex:236-241`: when a `comprises` clause includes `...`, a
+    /// component exporting the api may extend the trait, "but these traits may
+    /// not be declared or imported by the API".
+    ExtendsOpenComprises {
+        span: Span,
+        trait_name: String,
+        extender: String,
+    },
     /// A type form the parser accepts and this subset does not implement.
     /// `form` names it: "a tuple type", "an arrow type", "a tuple expression".
     TypeNotImplemented {
@@ -534,6 +557,9 @@ impl TypeError {
             | Self::BooleanNotOrdered { span, .. }
             | Self::UnknownName { span, .. }
             | Self::UnknownType { span, .. }
+            | Self::OpenComprisesInComponent { span, .. }
+            | Self::ComprisesNameDoesNotExtend { span, .. }
+            | Self::ExtendsOpenComprises { span, .. }
             | Self::TypeNotImplemented { span, .. }
             | Self::VoidNotStorable { span, .. }
             | Self::EntryPointTakesArguments { span, .. }
@@ -669,6 +695,30 @@ impl core::fmt::Display for TypeError {
             ),
             Self::UnknownName { name, .. } => write!(f, "unknown name `{name}`"),
             Self::UnknownType { name, .. } => write!(f, "unknown type `{name}`"),
+            Self::OpenComprisesInComponent { name, .. } => write!(
+                f,
+                "the `comprises` clause of `{name}` is open (`...`), which an api may \
+                 write and a component may not"
+            ),
+            Self::ComprisesNameDoesNotExtend {
+                trait_name,
+                listed,
+                ..
+            } => write!(
+                f,
+                "`{listed}` is listed in the `comprises` clause of `{trait_name}` but does \
+                 not explicitly extend `{trait_name}`"
+            ),
+            Self::ExtendsOpenComprises {
+                trait_name,
+                extender,
+                ..
+            } => write!(
+                f,
+                "`{extender}` extends `{trait_name}`, whose `comprises` clause is open \
+                 (`...`) -- an api may not declare a trait that extends one of its own \
+                 open-comprises traits"
+            ),
             Self::TypeNotImplemented { form, .. } => {
                 write!(f, "{form} is not implemented in this subset")
             }

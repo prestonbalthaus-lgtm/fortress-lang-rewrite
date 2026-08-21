@@ -2104,6 +2104,56 @@ fn a_for_loop_over_something_that_is_not_an_array_is_refused() {
     assert!(message.contains("expected an array"), "{message}");
 }
 
+// ------------------------------------------------- `comprises` well-formedness
+//
+// The clause was PARSED AND DROPPED since M3c, so all four of these compiled
+// and ran before this existed. Each cites the rule it is testing, because the
+// three are separate sentences in `traits.tex` and collapsing them into one
+// "invalid comprises clause" is how a diagnostic stops naming a mechanism.
+
+/// `traits.tex:161-162` -- an api may write `comprises { ... }`; a component
+/// may not. The marker used to be discarded by the parser, so an open set and
+/// an unwritten one were the same empty list.
+#[test]
+fn an_open_comprises_clause_in_a_component_is_refused() {
+    let message = refusal("badcomprisesopen.fss");
+    assert!(message.contains("is open (`...`)"), "{message}");
+}
+
+/// `traits.tex:232-235` -- the traits a `comprises` clause lists "must
+/// explicitly extend T".
+#[test]
+fn a_comprises_name_that_does_not_extend_the_trait_is_refused() {
+    let message = refusal("badcomprisesnoextend.fss");
+    assert!(
+        message.contains("`P` is listed in the `comprises` clause of `T`"),
+        "{message}"
+    );
+}
+
+/// `traits.tex:236-241` -- a component exporting the api may extend an
+/// open-comprises trait, but the api may not declare something that does.
+#[test]
+fn an_api_extending_its_own_open_comprises_trait_is_refused() {
+    let message = refusal("badcomprisesextendsopen.fsi");
+    assert!(
+        message.contains("whose `comprises` clause is open"),
+        "{message}"
+    );
+}
+
+/// AND THE POSITIVE CASE, which is the one that says the rule is not simply
+/// refusing every `comprises` clause it sees -- 28 corpus files carry one and
+/// a blanket refusal would have taken all of them.
+#[test]
+fn a_well_formed_comprises_clause_still_compiles_and_runs() {
+    let binary = compile_fixture("comprisesok.fss", "comprisesok");
+    let out = run(&binary);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "ok\n");
+    assert_eq!(out.status.code(), Some(0));
+    let _ = std::fs::remove_file(&binary);
+}
+
 // ------------------------------------------------------- api resolution
 
 /// A corpus file, by path from the repository root. Resolution's whole subject

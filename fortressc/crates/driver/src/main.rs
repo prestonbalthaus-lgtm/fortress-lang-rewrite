@@ -29,6 +29,15 @@ struct Options {
     cpu: String,
 }
 
+impl Options {
+    /// A `.fsi` is an api, whether or not it writes the `api Name ... end`
+    /// header: 26 of the corpus's 229 do not, and the parser's `is_api` reads
+    /// the header. `source-code.tex:246` is what makes the extension the fact.
+    fn is_api_file(&self) -> bool {
+        self.source.extension().is_some_and(|e| e == "fsi")
+    }
+}
+
 fn parse_args(args: &[String]) -> Option<Options> {
     let mut source: Option<PathBuf> = None;
     let mut output: Option<PathBuf> = None;
@@ -251,6 +260,46 @@ fn compile(options: &Options) -> Result<(), Failure> {
         None
     };
     let component = resolved.as_ref().map_or(&component, |r| &r.component);
+    // `comprises` WELL-FORMEDNESS, before anything reads the hierarchy it
+    // describes. The split is what keeps the caret honest: resolution PREPENDS
+    // an api's declarations and their spans index that api's text, so the
+    // merged half is read and never pointed at. See `fortress_types::comprises`.
+    //
+    // A `.fsi` IS an api whether or not it writes the header -- 26 of the
+    // corpus's 229 do not -- and only the driver knows the file name, which is
+    // why the permission is passed in rather than read off `is_api`.
+    let is_api_file = options.is_api_file() || component.is_api;
+    // `split_at` and not a range index: the count comes from another module and
+    // a slice that cannot panic is worth one line.
+    let cut = resolved
+        .as_ref()
+        .map_or(0, |r| r.merged)
+        .min(component.decls.len());
+    let (merged_decls, own_decls) = component.decls.split_at(cut);
+    fortress_types::comprises::check(own_decls, merged_decls, is_api_file, component.span)
+        .map_err(|e| {
+            Failure::Diagnostic(render(
+                path,
+                &source,
+                Some(e.span()),
+                &e.to_string(),
+                &e.notes(),
+            ))
+        })?;
+    // An EXPORTED api is never merged -- it states the hierarchy the component
+    // must provide, and the component gives the definitions -- so it is checked
+    // as its own declaration set. It is reported without a caret, because the
+    // offending text is in a different file from the one being rendered.
+    for exported in &component.exports {
+        let Some(api) = resolve::find_api(exported, &options.source) else {
+            continue;
+        };
+        if let Err(e) = fortress_types::comprises::check(&api.decls, &[], true, api.span) {
+            return Err(Failure::User(format!(
+                "in the exported api `{exported}`: {e}"
+            )));
+        }
+    }
     // BEFORE the check, so a conformance failure is reported against what the
     // source says rather than against whatever the checker made of it.
     if options.check_exports {

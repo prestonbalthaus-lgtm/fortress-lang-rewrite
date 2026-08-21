@@ -60,6 +60,10 @@ pub struct Resolution {
     /// cannot read yet is not the importing component's fault, so it is
     /// reported and skipped rather than being made fatal.
     pub unreadable: Vec<String>,
+    /// How many declarations were PREPENDED. `component.decls[..merged]` came
+    /// out of another file and their spans index THAT file's text, so anything
+    /// reporting a position has to know where the component's own start.
+    pub merged: usize,
 }
 
 /// The repository root: the nearest ancestor of `source` that holds both
@@ -193,6 +197,7 @@ pub fn resolve(component: &Component, source: &Path) -> Resolution {
     }
 
     let mut component = component.clone();
+    let count = merged.len();
     merged.append(&mut component.decls);
     component.decls = merged;
     Resolution {
@@ -200,5 +205,6 @@ pub fn resolve(component: &Component, source: &Path) -> Resolution {
         loaded,
         missing,
         unreadable,
+        merged: count,
     }
 }

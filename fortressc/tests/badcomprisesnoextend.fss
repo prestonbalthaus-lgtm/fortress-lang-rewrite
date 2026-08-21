@@ -1,0 +1,10 @@
+component badcomprisesnoextend
+export Executable
+
+(* traits.tex:232-235 -- P is listed and does not list T in its extends. *)
+trait T comprises { O, P } end
+object O extends T end
+object P end
+
+run():() = ()
+end
