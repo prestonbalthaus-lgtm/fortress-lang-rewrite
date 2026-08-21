@@ -106,6 +106,9 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
                     fortress_parser::ParseError::ObjectVarargsParameter { .. } => {
                         "object varargs parameter without `transient`".to_owned()
                     }
+                    fortress_parser::ParseError::ClosingNameDiffers { .. } => {
+                        "`end` names a different declaration".to_owned()
+                    }
                 };
                 *blockers.entry(label).or_default() += 1;
             }
@@ -149,8 +152,9 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
     // parameters between an enclosing operator's opener and its operand, an
     // encloser with no operand at all, and a closing half that need not match
     // the opening half in length.
+    // The named `end` took it 749 -> 758.
     assert!(
-        parsed >= 749,
-        "parser corpus regressed: {parsed} files parse, floor is 749"
+        parsed >= 758,
+        "parser corpus regressed: {parsed} files parse, floor is 758"
     );
 }

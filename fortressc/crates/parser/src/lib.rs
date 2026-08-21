@@ -306,8 +306,10 @@ impl<'t, 'a> Parser<'t, 'a> {
 
         let end = if headerless {
             self.span_here()
+        } else if is_api {
+            self.named_end(&Kind::KwApi, &name)?
         } else {
-            self.expect(&Kind::KwEnd, "`end`")?.span
+            self.named_end(&Kind::KwComponent, &name)?
         };
         Ok(Component {
             name,
@@ -460,7 +462,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         let (extends, comprises, excludes) = self.topology_clauses()?;
         self.skip_where()?;
         let members = self.members()?;
-        let end = self.expect(&Kind::KwEnd, "`end`")?.span;
+        let end = self.named_end(&Kind::KwTrait, &name)?;
         Ok(TraitDecl {
             modifiers,
             name,
@@ -502,7 +504,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         let (extends, comprises, excludes) = self.topology_clauses()?;
         self.skip_where()?;
         let members = self.members()?;
-        let end = self.expect(&Kind::KwEnd, "`end`")?.span;
+        let end = self.named_end(&Kind::KwObject, &name)?;
         Ok(ObjectDecl {
             modifiers,
             name,
@@ -764,6 +766,40 @@ impl<'t, 'a> Parser<'t, 'a> {
             self.pos += 1;
         }
         Ok(name)
+    }
+
+    /// `end`, `end Stream`, `end trait Stream`. `TraitObject.rats:13` writes
+    /// the tail as `((s "trait")? s Id)?`, and `s` -- space WITHOUT a line
+    /// terminator -- is the whole disambiguation: `end` then a NEWLINE then a
+    /// name is the end of this declaration followed by the next one, and only a
+    /// name on the SAME LINE belongs to the `end`. The newline is a token here,
+    /// so "same line" is just "the next token is not `Newline`".
+    ///
+    /// Only the three declaration forms the grammar gives the tail to reach
+    /// this. `do ... end`, `if ... end` and `while ... end` deliberately do not:
+    /// `end out` and `end loop` in the corpus close a LABELLED BLOCK, which is
+    /// a different production and a feature this compiler does not have.
+    fn named_end(&mut self, keyword: &Kind<'_>, own: &str) -> Parsed<Span> {
+        let end = self.expect(&Kind::KwEnd, "`end`")?.span;
+        // Only step over the keyword when a name actually follows it, so a
+        // stray `end trait` cannot consume a token and then fail elsewhere.
+        if self.at(keyword) && matches!(self.peek_ahead(1), Some(Kind::Ident(_))) {
+            self.pos += 1;
+        }
+        if !matches!(self.peek_kind(), Some(Kind::Ident(_))) {
+            return Ok(end);
+        }
+        let start = self.span_here();
+        let name = self.dotted_name()?;
+        let span = Span::new(start.start, self.previous_span().end);
+        if name != own {
+            return Err(ParseError::ClosingNameDiffers {
+                span,
+                found: name,
+                expected: own.to_owned(),
+            });
+        }
+        Ok(Span::new(end.start, span.end))
     }
 
     fn peek_ahead(&self, n: usize) -> Option<&'t Kind<'a>> {

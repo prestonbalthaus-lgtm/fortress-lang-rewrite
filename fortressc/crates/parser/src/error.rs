@@ -48,6 +48,15 @@ pub enum ParseError {
         span: Span,
         name: String,
     },
+    /// `trait Stream ... end WriteStream`. `TraitObject.rats:13` permits the
+    /// declaration's own name after `end`; a DIFFERENT name is a static error,
+    /// and accepting one silently would be a new wrong acceptance rather than
+    /// a new feature.
+    ClosingNameDiffers {
+        span: Span,
+        found: String,
+        expected: String,
+    },
 }
 
 impl ParseError {
@@ -60,7 +69,8 @@ impl ParseError {
             | Self::StaticParameterKindUnsupported { span, .. }
             | Self::LocalFunctionDeclarationUnsupported { span }
             | Self::ChainedOperatorsDiffer { span, .. }
-            | Self::ObjectVarargsParameter { span, .. } => Some(*span),
+            | Self::ObjectVarargsParameter { span, .. }
+            | Self::ClosingNameDiffers { span, .. } => Some(*span),
             Self::UnexpectedEndOfInput { .. } => None,
         }
     }
@@ -121,6 +131,15 @@ impl core::fmt::Display for ParseError {
                 f,
                 "{}..{}: the object value parameter `{name}` is varargs; an \
                  object's varargs parameter must be declared `transient`",
+                span.start, span.end
+            ),
+            Self::ClosingNameDiffers {
+                span,
+                found,
+                expected,
+            } => write!(
+                f,
+                "{}..{}: `end {found}` closes a declaration named `{expected}`",
                 span.start, span.end
             ),
         }

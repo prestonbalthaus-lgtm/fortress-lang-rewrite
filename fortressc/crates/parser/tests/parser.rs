@@ -1199,3 +1199,60 @@ fn a_closing_run_does_not_swallow_the_body_marker() {
     };
     assert_eq!(method_names(&o.members), ["|_|"]);
 }
+
+// -------------------------------------------------------------- named `end`
+
+/// `TraitObject.rats:13` writes the tail as `((s "trait")? s Id)?`. All four
+/// spellings close the same declaration.
+#[test]
+fn a_declaration_may_be_closed_by_its_own_name() {
+    for src in [
+        "component t\ntrait A end\nend\n",
+        "component t\ntrait A end A\nend\n",
+        "component t\ntrait A end trait A\nend\n",
+        "component t\nobject O end O\nend\n",
+        "component t\nobject O end object O\nend\n",
+        "component t\ntrait A end\nend t\n",
+        "component t\ntrait A end\nend component t\n",
+        "api t.u\ntrait A end\nend t.u\n",
+    ] {
+        let tokens = fortress_lexer::lex(src).unwrap_or_else(|e| panic!("lex failed: {e}"));
+        assert!(parse(&tokens).is_ok(), "should parse:\n{src}");
+    }
+}
+
+/// `s`, not `w`. `end` then a NEWLINE then a name is the end of one declaration
+/// followed by the next, and reading the name would silently merge them.
+#[test]
+fn a_name_on_the_next_line_does_not_close_the_declaration() {
+    let c = component("component t\ntrait A end\nB() = 0\nend\n");
+    assert_eq!(c.decls.len(), 2, "`B` is a declaration, not a closing name");
+}
+
+/// `ProjectFortress/parser_tests/XXXending.Name.fss` writes
+/// `end XxXending.Name` for a component called `XXXending.Name` and is a
+/// must-FAIL test. Accepting the tail without comparing it would have turned
+/// that file green.
+#[test]
+fn a_closing_name_that_differs_is_refused() {
+    let src = "component t\ntrait A end B\nend\n";
+    let tokens = fortress_lexer::lex(src).unwrap_or_else(|e| panic!("lex failed: {e}"));
+    match parse(&tokens) {
+        Err(ParseError::ClosingNameDiffers {
+            found, expected, ..
+        }) => {
+            assert_eq!(found, "B");
+            assert_eq!(expected, "A");
+        }
+        other => panic!("expected a closing-name refusal, got {other:?}"),
+    }
+}
+
+/// A block's `end` is a different production. `end out` and `end loop` in the
+/// corpus close a LABELLED BLOCK, so reading a name there would consume a
+/// juxtaposed operand.
+#[test]
+fn a_block_end_takes_no_name() {
+    let c = component("component t\nf() = do 1 end\ng() = 2\nend\n");
+    assert_eq!(c.decls.len(), 2);
+}
