@@ -183,7 +183,12 @@ exponent() {
     out=$("$build/exponent" 2>&1)
     # 2^3^2 is 64 under LEFT association and 512 under right. Stating both is
     # the point: the number is what distinguishes them.
-    want=$(printf '1024\n64\n18\n18\n5\n0.00390625\n256\n0.00390625\n256\n')
+    # THE LAST ONE IS `256.0` AND NOT `256`: it is an RR64, and an RR64 shows
+    # that it is one. It read `256` until `rr64_needs_point` landed in
+    # runtime/shims.c -- C's "%g" drops a trailing ".0", which
+    # compiler_tests/Compiled7.Print17.fss asserts is wrong. Two Rust tests
+    # pinned the same old answer and this gate was the third.
+    want=$(printf '1024\n64\n18\n18\n5\n0.00390625\n256\n0.00390625\n256.0\n')
     if [[ $out == "$want" ]]; then
         ok "left associative, above juxtaposition, all four pairs: $(printf '%s' "$out" | tr '\n' ' ')"
     else
