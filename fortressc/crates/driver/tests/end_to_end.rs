@@ -2104,6 +2104,37 @@ fn a_for_loop_over_something_that_is_not_an_array_is_refused() {
     assert!(message.contains("expected an array"), "{message}");
 }
 
+/// A COMPONENT IS NOT RESPONSIBLE FOR AN API'S INTERNAL WELL-FORMEDNESS.
+/// `comprises` rule three -- an api may not declare a trait extending one of
+/// its own open-comprises traits -- must read only declarations THIS FILE
+/// WROTE, not the ones resolution merged in.
+///
+/// THE MUTATION TABLE IS WHY THIS FIXTURE EXISTS. Making
+/// `Library/FortressLibrary.fsi` parse in full took
+/// `SpecData/examples/advanced/Overloading.fss` from compiling to refused, with
+/// its caret on the component header, for `trait AnyIntegral extends { QQ }`
+/// written in a file it merely imports. Scoping the rule fixed it -- and then
+/// that file started failing on MAX_INSTANTIATIONS instead, so the corpus
+/// witness disappeared and the mutation ESCAPED. This is its replacement.
+#[test]
+fn a_component_is_not_punished_for_an_imported_apis_comprises_defect() {
+    let binary = compile_fixture("importsopencomprises.fss", "importsopencomprises");
+    let out = run(&binary);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "ok\n");
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// AND THE API ITSELF IS STILL REFUSED, which is what makes the test above a
+/// scoping assertion rather than the rule being switched off.
+#[test]
+fn the_api_with_that_defect_is_still_refused_on_its_own() {
+    let message = refusal("openapicomprises.fsi");
+    assert!(
+        message.contains("an api may not declare a trait that extends"),
+        "{message}"
+    );
+}
+
 // ------------------------------------------ operator declarations (SPIKE-OPEXPR)
 //
 // THE BOOTSTRAP ROOT'S TWO WALLS. `Library/FortressLibrary.fsi` died at byte

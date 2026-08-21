@@ -1,0 +1,11 @@
+component importsopencomprises
+import openapicomprises.{Q}
+export Executable
+
+(* A COMPONENT IS NOT RESPONSIBLE FOR AN API'S INTERNAL WELL-FORMEDNESS. The
+   offence is in a file this one merely imports, nobody editing this file can
+   fix it, and the api is refused on its own when compiled. Without the `own`
+   scoping in comprises::check this refuses, with the caret on the component
+   header, for a trait written somewhere else. *)
+run():() = println("ok")
+end
