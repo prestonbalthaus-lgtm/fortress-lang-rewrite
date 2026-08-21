@@ -20,16 +20,11 @@ pub enum ParseError {
         span: Span,
         word: String,
     },
-    /// `[\nat n\]`. M3d is type parameters only: mixing static integers with
-    /// type parameters is a dependent type system, and this is not one.
-    /// A static parameter kind D7 OPENS but that nothing parses yet:
-    /// `nat`, `int`, `bool`. Separate from the deferred kinds because the
-    /// answer is different -- these are waiting on a decision that is written,
-    /// and those are waiting on a sub-phase.
-    StaticParameterKindPendingDecision {
-        span: Span,
-        kind: String,
-    },
+    /// `[\unit u\]`, `[\dim d\]`, `[\opr PLUS\]`. THE THREE KINDS D7 DID NOT
+    /// OPEN -- `nat`, `int` and `bool` parse now, so this variant no longer
+    /// speaks for them. `unit` and `dim` are D7 §3.3, sub-phase 4d, gated on
+    /// SPIKE-COMPOSITE-TYPE; `opr` is D7 §4 and is SPIKE-OPEXPR's, because a
+    /// name in OPERATOR position is not arithmetic.
     StaticParameterKindUnsupported {
         span: Span,
         kind: String,
@@ -170,7 +165,6 @@ impl ParseError {
             Self::UnexpectedToken { span, .. }
             | Self::PostfixOperatorUnsupported { span }
             | Self::ReservedWord { span, .. }
-            | Self::StaticParameterKindPendingDecision { span, .. }
             | Self::StaticParameterKindUnsupported { span, .. }
             | Self::StaticValueParameterBound { span, .. }
             | Self::StaticExpressionOutOfRange { span, .. }
@@ -209,14 +203,11 @@ impl core::fmt::Display for ParseError {
             Self::ReservedWord { word, .. } => {
                 write!(f, "reserved word `{word}` is not in the implemented subset")
             }
-            Self::StaticParameterKindPendingDecision { kind, .. } => write!(
-                f,
-                "`{kind}` static parameters are not implemented yet; D7 puts them in v1 \
-                 with statically-known arguments and is drafted, not adopted"
-            ),
             Self::StaticParameterKindUnsupported { kind, .. } => write!(
                 f,
-                "`{kind}` static parameters are not implemented; M3d is type parameters only"
+                "`{kind}` static parameters are not implemented; `nat`, `int` and `bool` \
+                 are, and `unit`/`dim` wait on composite types while `opr` waits on the \
+                 operator grammar"
             ),
             Self::StaticValueParameterBound { name, .. } => write!(
                 f,
