@@ -96,11 +96,19 @@ def corpus(base):
         out += [os.path.join(d, f) for f in fs if f.endswith(('.fss', '.fsi'))]
     return sorted(out)
 
+# A rendered diagnostic is `path:LINE:COL: message` followed by a source
+# excerpt and, for two variants, `note:` lines with excerpts of their own. So
+# the last stderr line is a CARET, not a message. Take the first HEADER line
+# instead -- the one that carries a position and is not a note.
+HEADER = re.compile(r'^\S+?:\d+:\d+: (?!note: )')
+
 def compile_one(path):
     r = subprocess.run([FORTRESSC, path, '--emit-obj', '-o', '/dev/null'],
                        capture_output=True, text=True)
     lines = r.stderr.strip().splitlines()
-    return {'path': path, 'code': r.returncode, 'last': lines[-1] if lines else ''}
+    header = next((l for l in lines if HEADER.match(l)), None)
+    return {'path': path, 'code': r.returncode,
+            'last': header if header is not None else (lines[-1] if lines else '')}
 
 def results(base):
     if opt.get('reuse') and os.path.exists(CACHE):
@@ -119,9 +127,15 @@ def results(base):
             json.dump(out, f)
     return out
 
-# `file: 123..456: the message` -> `the message`. The span is what makes 340
-# messages out of what is really a few dozen shapes.
-SPAN = re.compile(r'^\S+?: \d+\.\.\d+: ')
+# `file:12:7: the message` -> `the message`. The position is what makes 340
+# messages out of what is really a few dozen shapes, so stripping it is what
+# makes the fold work at all -- leaving it in gives one bucket per FILE and
+# fails green, with no exception and a garbage map.
+#
+# The old `file: 123..456: ` form is still matched, because the cache at
+# fortressc/build/triage.json carries whatever format wrote it and `--reuse`
+# re-parses it with no version check.
+SPAN = re.compile(r'^\S+?:(?: \d+\.\.\d+|\d+:\d+): ')
 def diagnostic(rec):
     return SPAN.sub('', rec['last']) or '<no diagnostic>'
 

@@ -14,7 +14,8 @@
 # That last part is asserted here on purpose: every halt case checks that the
 # line printed BEFORE the division still reaches the terminal.
 #
-# 1.0 throws DivideByZero (`Specification/library/*`). This subset has no
+# 1.0 throws DivisionByZero (opr-overview.tex:164-170, declared at
+# Library/FortressLibrary.fss:1459 as an UncheckedException). This subset has no
 # exceptions, so division halts the way a bad subscript does -- exit 1 with a
 # diagnostic naming the mechanism. That is a named deviation, not an oversight.
 #

@@ -2852,6 +2852,19 @@ impl Checker {
                 t
             } else {
                 let from = t.ty;
+                // The same guard `println` has, and for the same reason it
+                // gives: there is one `to_string` shim per scalar and none for
+                // anything else, so saying so HERE is a diagnostic and leaving
+                // it to codegen is `no runtime symbol to_string_Shape` at exit
+                // 70 -- a compiler internal error raised by ordinary source.
+                // `Elem::of` is the scalar test; it is `None` for a trait, an
+                // object, an array and Void.
+                if Elem::of(from).is_none() {
+                    return Err(TypeError::NotConcatenable {
+                        span: t.span,
+                        found: from,
+                    });
+                }
                 TypedExpr {
                     kind: TypedExprKind::Apply {
                         target: Target::ToString { from },

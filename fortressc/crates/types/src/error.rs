@@ -91,6 +91,15 @@ pub enum TypeError {
         span: Span,
         ty: Type,
     },
+    /// A juxtaposition with a String whose other operand has no `to_string`
+    /// shim. Its own variant rather than `NotPrintable`, because a
+    /// concatenation need not be inside a `println` -- and a diagnostic that
+    /// names the wrong mechanism is the class this project has already lost an
+    /// hour to twice.
+    NotConcatenable {
+        span: Span,
+        found: Type,
+    },
     /// An integer division whose divisor is the literal `0`. There is no
     /// quotient, and without this the program builds: LLVM's own constant
     /// folder turns the division into `poison` and the callee prints whatever
@@ -394,6 +403,7 @@ impl TypeError {
             | Self::EntryPointTakesArguments { span, .. }
             | Self::ArityMismatch { span, .. }
             | Self::LiteralOutOfRange { span, .. }
+            | Self::NotConcatenable { span, .. }
             | Self::DivisionByZero { span }
             | Self::LiteralNotApplicable { span, .. }
             | Self::ConditionNotBoolean { span, .. }
@@ -444,10 +454,28 @@ impl TypeError {
     }
 }
 
+impl TypeError {
+    /// Secondary spans, for a renderer that has the source. Two variants point
+    /// at a SECOND declaration, and their byte offsets used to be written into
+    /// the message itself -- which is the one thing a `Display` with no source
+    /// and no path cannot turn into a position.
+    #[must_use]
+    pub fn notes(&self) -> Vec<(Span, &'static str)> {
+        match self {
+            Self::AmbiguousDispatch { first, second, .. } => vec![
+                (*first, "one declaration is here"),
+                (*second, "and the other is here"),
+            ],
+            Self::OverloadSetStaticParamsDiffer { first, .. } => {
+                vec![(*first, "the other declaration is here")]
+            }
+            _ => Vec::new(),
+        }
+    }
+}
+
 impl core::fmt::Display for TypeError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let span = self.span();
-        write!(f, "{}..{}: ", span.start, span.end)?;
         match self {
             Self::ImplicitWideningRejected { from, to, .. } => write!(
                 f,
@@ -510,6 +538,12 @@ impl core::fmt::Display for TypeError {
             Self::LiteralOutOfRange { ty, .. } => {
                 write!(f, "integer literal does not fit in {}", ty.name())
             }
+            Self::NotConcatenable { found, .. } => write!(
+                f,
+                "a juxtaposition with a String converts its other operands to String, \
+                 and {} has no conversion",
+                found.name()
+            ),
             Self::DivisionByZero { .. } => {
                 write!(f, "this division has a literal zero divisor")
             }
@@ -634,16 +668,11 @@ impl core::fmt::Display for TypeError {
                 name, arguments, ..
             } => write!(f, "no declaration of `{name}` applies to ({arguments})"),
             Self::AmbiguousDispatch {
-                name,
-                arguments,
-                first,
-                second,
-                ..
+                name, arguments, ..
             } => write!(
                 f,
-                "`{name}` is ambiguous for ({arguments}): the declarations at {}..{} and {}..{} \
-                 are both most specific, and neither is more specific than the other",
-                first.start, first.end, second.start, second.end
+                "`{name}` is ambiguous for ({arguments}): the declarations below are both \
+                 most specific, and neither is more specific than the other"
             ),
             Self::ReturnTypeNotCovariant {
                 name,
@@ -721,11 +750,10 @@ impl core::fmt::Display for TypeError {
                 "instantiating `{name}` would pass {limit} instantiations in one component; \
                  this is what a generic that instantiates itself at a larger type looks like"
             ),
-            Self::OverloadSetStaticParamsDiffer { name, first, .. } => write!(
+            Self::OverloadSetStaticParamsDiffer { name, .. } => write!(
                 f,
-                "declarations of `{name}` differ in their static parameters (the other is at \
-                 {}..{}); an overload set is uniformly generic or uniformly ground",
-                first.start, first.end
+                "declarations of `{name}` differ in their static parameters; an overload set \
+                 is uniformly generic or uniformly ground"
             ),
             Self::BoundNotSatisfied {
                 parameter,

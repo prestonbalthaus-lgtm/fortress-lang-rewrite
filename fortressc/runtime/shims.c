@@ -460,9 +460,16 @@ static void fortress_halt(const char *what, long long a, long long b) {
  * than producing a value -- a zero divisor, and the minimum value over -1,
  * whose quotient is not representable -- and both raise SIGFPE. That is a core
  * dump with no diagnostic, and it takes whatever stdio had buffered with it, so
- * a program loses output it had already produced. 1.0 throws DivideByZero;
+ * a program loses output it had already produced. 1.0 throws DivisionByZero;
  * this subset has no exceptions, so division halts the way a bad subscript
  * does. RR64 division is NOT routed here: 1.0/0.0 is `inf` and that is right.
+ *
+ * The exception is spelled DivisionByZero -- `opr-overview.tex:164-170` and
+ * `Library/FortressLibrary.fss:1459`, an UncheckedException. `DivideByZero`
+ * appears nowhere in either spec tree, and `IntegerDivisionByZero`
+ * (`basic-integers.tex:459`) is declared nowhere at all. Note also that 1.0's
+ * `/` on integers yields a RATIONAL and does not throw; the throw belongs to
+ * the division that stays in the integers, which is what fortressc's `/` is.
  */
 long long fortress_div_zz64(long long a, long long b) {
     if (b == 0) {

@@ -618,8 +618,12 @@ fn an_ambiguous_call_is_refused_at_compile_time_and_names_both_declarations() {
         "an ambiguity is a user diagnostic, not a compiler bug:\n{message}"
     );
     assert!(message.contains("is ambiguous for (OL, OR)"), "{message}");
+    // The two declarations are secondary spans now, placed by the driver's
+    // renderer as `note:` lines, because a `Display` with no source and no path
+    // cannot turn a byte offset into a position.
     assert!(
-        message.contains("the declarations at"),
+        message.contains("note: one declaration is here")
+            && message.contains("note: and the other is here"),
         "the diagnostic must name both declarations:\n{message}"
     );
 }
@@ -1463,4 +1467,40 @@ fn a_juxtaposed_array_literal_has_one_element_per_operand() {
     assert_eq!(out.status.code(), Some(0));
     assert_eq!(String::from_utf8_lossy(&out.stdout), "3\n1\n3\n3\n4\n8\n");
     let _ = std::fs::remove_file(&binary);
+}
+
+/// `"a " x` with a trait- or object-typed `x` reached codegen as
+/// `to_string_Shape` and came out as `fortressc: internal error`, exit 70 --
+/// a compiler bug raised by ordinary source. `println` had the guard all along
+/// and said why; `concatenation` did not.
+#[test]
+fn a_concatenation_with_no_conversion_is_a_diagnostic_and_not_an_internal_error() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture("badconcat.fss"))
+        .arg("--emit-ir")
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "70 is a compiler bug, not a diagnostic:\n{message}"
+    );
+    assert!(message.contains("has no conversion"), "{message}");
+    // It must NOT name `println`: the fixture has none on that line.
+    assert!(!message.contains("println` does not accept"), "{message}");
+}
+
+/// Diagnostics carry `line:col` and a source excerpt, not byte offsets.
+#[test]
+fn a_diagnostic_names_a_line_and_column_and_shows_the_source() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture("badconcat.fss"))
+        .arg("--emit-ir")
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert!(message.contains("badconcat.fss:11:40:"), "{message}");
+    assert!(message.contains("11 | describe(s: Shape)"), "{message}");
+    assert!(message.contains('^'), "{message}");
 }

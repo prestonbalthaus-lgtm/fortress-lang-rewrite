@@ -60,52 +60,30 @@ impl core::fmt::Display for ParseError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::UnexpectedToken {
-                span,
-                expected,
-                found,
+                expected, found, ..
             } => {
-                write!(
-                    f,
-                    "{}..{}: expected {expected}, found {found}",
-                    span.start, span.end
-                )
+                write!(f, "expected {expected}, found {found}")
             }
             Self::UnexpectedEndOfInput { expected } => {
                 write!(f, "unexpected end of input, expected {expected}")
             }
-            Self::PostfixOperatorUnsupported { span } => write!(
-                f,
-                "{}..{}: a postfix operator followed by a juxtaposition is not in the M1 subset",
-                span.start, span.end
+            Self::PostfixOperatorUnsupported { .. } => f.write_str(
+                "a postfix operator followed by a juxtaposition is not in the M1 subset",
             ),
-            Self::ReservedWord { span, word } => {
-                write!(
-                    f,
-                    "{}..{}: reserved word `{word}` is not in the implemented subset",
-                    span.start, span.end
-                )
+            Self::ReservedWord { word, .. } => {
+                write!(f, "reserved word `{word}` is not in the implemented subset")
             }
-            Self::StaticParameterKindUnsupported { span, kind } => write!(
+            Self::StaticParameterKindUnsupported { kind, .. } => write!(
                 f,
-                "{}..{}: `{kind}` static parameters are not implemented; \
-                 M3d is type parameters only",
-                span.start, span.end
+                "`{kind}` static parameters are not implemented; M3d is type parameters only"
             ),
-            Self::LocalFunctionDeclarationUnsupported { span } => write!(
-                f,
-                "{}..{}: a local function declaration is not implemented; \
-                 declare it at component level",
-                span.start, span.end
+            Self::LocalFunctionDeclarationUnsupported { .. } => f.write_str(
+                "a local function declaration is not implemented; declare it at component level",
             ),
-            Self::ChainedOperatorsDiffer {
-                span,
-                first,
-                second,
-            } => write!(
+            Self::ChainedOperatorsDiffer { first, second, .. } => write!(
                 f,
-                "{}..{}: a chain mixes `{first}` with `{second}`; \
-                 chained ordering operators must have the same sense",
-                span.start, span.end
+                "a chain mixes `{first}` with `{second}`; \
+                 chained ordering operators must have the same sense"
             ),
         }
     }
