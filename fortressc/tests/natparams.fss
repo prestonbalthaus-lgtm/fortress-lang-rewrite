@@ -1,0 +1,29 @@
+component natparams
+export Executable
+
+object Buf[\T, nat n\](fill: T)
+  size(): ZZ64 = n
+end
+
+sized[\nat k\](): ZZ64 = k + k
+flagged[\bool b\](): String = if b then "yes" else "no" end
+signed[\int i\](): ZZ64 = i
+
+(* A static expression over an ENCLOSING value parameter: the form
+   Library/Generator22D.fss writes, and the reason D7 says the rule is
+   `statically evaluable` and not `literal`. *)
+wrap[\T, nat k\](v: T): ZZ64 = do
+  p = Buf[\T, k + 1\](v)
+  p.size()
+end
+
+run(): () = do
+  println(Buf[\ZZ32, 4\](7).size())
+  println(sized[\ 2 + 3 \]())
+  println(sized[\5\]())
+  println(flagged[\true\]())
+  println(signed[\ 0 - 9 \]())
+  println(wrap[\ZZ32, 6\](0))
+  println(sized[\ 2 3 \]())
+end
+end

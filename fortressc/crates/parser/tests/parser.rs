@@ -1328,14 +1328,16 @@ fn a_where_clause_binder_form_is_refused_by_name() {
     }
 }
 
-/// One rule, one answer. `[\nat n\]` is refused by M3d at the parser and
-/// `where [\nat n\]` must not be the hole it slips through -- which it was
-/// while the clause was a token skip. The binder form is refused whole now, so
-/// the acceptance is closed from the outside; the KIND refusal is still what
-/// answers the bracket list, and both are asserted here because it is the pair
-/// that matters, not either one alone.
+/// THE PAIR THIS TEST EXISTS FOR HAS FLIPPED, AND IT IS STILL A PAIR. Before
+/// D7, `[\nat n\]` was refused and the question was whether `where [\nat n\]`
+/// was the hole it slipped through. D7 opens the bracket list, so the two
+/// answers are now ACCEPT and REFUSE -- and they must be, for different
+/// reasons: D6 section 1 cuts where-VARIABLES from v1 whatever their kind, so
+/// the binder form is refused because it is a BINDER and not because of `nat`.
+/// Asserting both halves is what stops the where refusal quietly following the
+/// bracket list open.
 #[test]
-fn a_where_binding_refuses_the_kinds_a_static_parameter_list_refuses() {
+fn a_where_binder_is_refused_whatever_kind_it_binds() {
     let src = "api t\ntrait T where [\\ nat n \\]\nend\nend\n";
     let tokens = fortress_lexer::lex(src).unwrap_or_else(|e| panic!("lex failed: {e}"));
     match parse(&tokens) {
@@ -1343,21 +1345,16 @@ fn a_where_binding_refuses_the_kinds_a_static_parameter_list_refuses() {
         other => panic!("`where [\\nat n\\]` must be refused, got {other:?}"),
     }
 
+    // The same kind in the BRACKET LIST is accepted now, and it is a value
+    // parameter. One rule, two answers, and each names its own reason.
     let src = "api t\ntrait T[\\ nat n \\]\nend\nend\n";
     let tokens = fortress_lexer::lex(src).unwrap_or_else(|e| panic!("lex failed: {e}"));
-    // Either refusal keeps the rule this test exists for: a static-parameter
-    // kind the compiler locks out may not slip through a `where`. D6 section 1
-    // cut where-VARIABLES from v1 outright, so the merged parser may refuse the
-    // whole form before it reads the kind, and the D7 scaffold splits the kind
-    // refusal in two. What must never happen is that it parses.
-    match parse(&tokens) {
-        Err(
-            ParseError::StaticParameterKindUnsupported { .. }
-            | ParseError::StaticParameterKindPendingDecision { .. }
-            | ParseError::WhereClauseFormUnsupported { .. },
-        ) => {}
-        other => panic!("a `nat` binding must not slip through a `where`, got {other:?}"),
-    }
+    let parsed = parse(&tokens).unwrap_or_else(|e| panic!("`[\\nat n\\]` must parse now: {e}"));
+    let Some(fortress_ast::Decl::Trait(t)) = parsed.decls.first() else {
+        panic!("expected a trait, got {:?}", parsed.decls.first());
+    };
+    let param = t.static_params.first().expect("one static parameter");
+    assert!(param.kind.is_value());
 }
 
 // ------------------------------------------------------------ the `=` guard
@@ -1794,19 +1791,36 @@ fn a_compound_assignment_operator_is_refused_by_its_own_name() {
 
 // ------------------------------------------------- the `nat` scaffold (D7)
 
-/// ALL SIX STILL REFUSE. `2026-08-21-d7-reconcile-nat.md` §3.4 is explicit that
-/// the decision comes BEFORE the parser change -- "doing (2) before (1) means
-/// the parser accepts a shape nobody has decided the meaning of" -- and D7's
-/// own header says drafted, not adopted. This test is the proof that the
-/// scaffold changed diagnostics and nothing else.
+/// D7 IS ADOPTED AND THE SIX HAVE SPLIT THREE AND THREE. This test was
+/// `every_static_parameter_kind_still_refuses` and asserted all six; keeping it
+/// whole after the decision landed would have meant deleting it, which loses
+/// the half that is still true.
 #[test]
-fn every_static_parameter_kind_still_refuses() {
-    for kind in ["nat", "int", "bool", "unit", "dim", "opr"] {
+fn the_three_kinds_d7_opens_now_parse() {
+    for kind in ["nat", "int", "bool"] {
+        let src = format!("api t\ntrait T[\\{kind} n\\] end\nend\n");
+        let tokens = fortress_lexer::lex(&src).unwrap_or_else(|e| panic!("lex failed: {e}"));
+        let parsed = parse(&tokens).unwrap_or_else(|e| panic!("`{kind}` must parse now: {e}"));
+        let Some(fortress_ast::Decl::Trait(t)) = parsed.decls.first() else {
+            panic!("expected a trait, got {:?}", parsed.decls.first());
+        };
+        let param = t.static_params.first().expect("one static parameter");
+        assert_eq!(param.kind.spelling(), kind);
+        assert!(param.kind.is_value(), "`{kind}` is a VALUE parameter");
+    }
+}
+
+/// AND THE THREE THAT DID NOT OPEN STILL REFUSE. D7 §3.3 defers `unit` and
+/// `dim` to sub-phase 4d, gated on SPIKE-COMPOSITE-TYPE rather than on D7; §4
+/// keeps `opr` refused when the others open, because a name in OPERATOR
+/// position is SPIKE-OPEXPR territory and not arithmetic.
+#[test]
+fn the_three_kinds_d7_defers_still_refuse() {
+    for kind in ["unit", "dim", "opr"] {
         let src = format!("api t\ntrait T[\\{kind} n\\] end\nend\n");
         let tokens = fortress_lexer::lex(&src).unwrap_or_else(|e| panic!("lex failed: {e}"));
         match parse(&tokens) {
-            Err(ParseError::StaticParameterKindPendingDecision { kind: k, .. })
-            | Err(ParseError::StaticParameterKindUnsupported { kind: k, .. }) => {
+            Err(ParseError::StaticParameterKindUnsupported { kind: k, .. }) => {
                 assert_eq!(k, kind);
             }
             other => panic!("`{kind}` must still refuse, got {other:?}"),
@@ -1814,32 +1828,23 @@ fn every_static_parameter_kind_still_refuses() {
     }
 }
 
-/// The three groups answer to different owners, and the diagnostic says which:
-/// `nat`/`int`/`bool` are waiting on a DECISION that is already written,
-/// `unit`/`dim` on sub-phase 4d, `opr` on the operator-property traits. A
-/// reader who hits one needs to know which door to knock on.
+/// A VALUE PARAMETER MAY NOT CARRY A BOUND. D7 leaves the constraint solver
+/// out of v1 and its own census is the reason: NOT ONE `where { k < n }` exists
+/// in 1956 files. Refusing rather than dropping is what keeps that honest.
 #[test]
-fn the_static_parameter_kinds_split_into_the_three_groups_d7_names() {
-    for kind in ["nat", "int", "bool"] {
-        let src = format!("api t\ntrait T[\\{kind} n\\] end\nend\n");
-        let tokens = fortress_lexer::lex(&src).unwrap_or_else(|e| panic!("lex failed: {e}"));
-        assert!(
-            matches!(
-                parse(&tokens),
-                Err(ParseError::StaticParameterKindPendingDecision { .. })
-            ),
-            "`{kind}` is D7's group"
-        );
+fn a_bound_on_a_value_static_parameter_is_refused_at_the_parser() {
+    let src = "api t\ntrait T[\\nat n extends ZZ32\\] end\nend\n";
+    let tokens = fortress_lexer::lex(src).unwrap_or_else(|e| panic!("lex failed: {e}"));
+    match parse(&tokens) {
+        Err(ParseError::StaticValueParameterBound { name, .. }) => assert_eq!(name, "n"),
+        other => panic!("a bound on `nat n` must be refused, got {other:?}"),
     }
-    for kind in ["unit", "dim", "opr"] {
-        let src = format!("api t\ntrait T[\\{kind} n\\] end\nend\n");
-        let tokens = fortress_lexer::lex(&src).unwrap_or_else(|e| panic!("lex failed: {e}"));
-        assert!(
-            matches!(
-                parse(&tokens),
-                Err(ParseError::StaticParameterKindUnsupported { .. })
-            ),
-            "`{kind}` stays refused when D7's group opens"
-        );
-    }
+}
+
+/// A TYPE parameter's bound is untouched by that rule.
+#[test]
+fn a_bound_on_a_type_static_parameter_still_parses() {
+    let src = "api t\ntrait T[\\X extends ZZ32\\] end\nend\n";
+    let tokens = fortress_lexer::lex(src).unwrap_or_else(|e| panic!("lex failed: {e}"));
+    parse(&tokens).unwrap_or_else(|e| panic!("a type bound must still parse: {e}"));
 }

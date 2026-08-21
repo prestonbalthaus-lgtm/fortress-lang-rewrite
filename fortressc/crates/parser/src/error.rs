@@ -34,6 +34,21 @@ pub enum ParseError {
         span: Span,
         kind: String,
     },
+    /// A bound on a `nat`/`int`/`bool` parameter. D7 leaves the constraint
+    /// solver out of v1 and its own census is the reason: NOT ONE
+    /// `where { k < n }` exists in 1956 files.
+    StaticValueParameterBound {
+        span: Span,
+        name: String,
+    },
+    /// An integer literal in static-argument position that does not fit `i64`.
+    /// Arbitrary-precision `ZZ` is its own spike -- it needs a heap
+    /// representation and runtime shims -- so this is a diagnostic and not a
+    /// silent wrap.
+    StaticExpressionOutOfRange {
+        span: Span,
+        digits: String,
+    },
     /// `f(x) = e` in block position. `=` is an equality operator in expression
     /// position, so without this the declaration would parse as a discarded
     /// comparison rather than fail.
@@ -157,6 +172,8 @@ impl ParseError {
             | Self::ReservedWord { span, .. }
             | Self::StaticParameterKindPendingDecision { span, .. }
             | Self::StaticParameterKindUnsupported { span, .. }
+            | Self::StaticValueParameterBound { span, .. }
+            | Self::StaticExpressionOutOfRange { span, .. }
             | Self::LocalFunctionDeclarationUnsupported { span }
             | Self::WhereClauseFormUnsupported { span, .. }
             | Self::ChainedOperatorsDiffer { span, .. }
@@ -200,6 +217,16 @@ impl core::fmt::Display for ParseError {
             Self::StaticParameterKindUnsupported { kind, .. } => write!(
                 f,
                 "`{kind}` static parameters are not implemented; M3d is type parameters only"
+            ),
+            Self::StaticValueParameterBound { name, .. } => write!(
+                f,
+                "`{name}` is a value static parameter and carries a bound; there is no \
+                 constraint solver, and no corpus file writes one"
+            ),
+            Self::StaticExpressionOutOfRange { digits, .. } => write!(
+                f,
+                "the static argument `{digits}` does not fit a 64 bit integer; \
+                 arbitrary-precision `ZZ` is a separate milestone"
             ),
             Self::LocalFunctionDeclarationUnsupported { .. } => f.write_str(
                 "a local function declaration is not implemented; declare it at component level",

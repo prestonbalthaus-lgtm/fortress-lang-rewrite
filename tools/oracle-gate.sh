@@ -149,8 +149,8 @@ if [[ ${1:-} == --mutate ]]; then
         's/^run_out_equals=pass/run_out_equals=nonesuch/' || exit 2
     got=$(gate | field 'd["outcomes"]["pass"]')
     restore ProjectFortress/compiler_tests/Compiled17.test
-    report 'a satisfied expectation corrupted' "$got" 300 \
-        'pass fell 301 -> 300, below the floor of 301; gate red'
+    report 'a satisfied expectation corrupted' "$got" 302 \
+        'pass fell 303 -> 302, below the floor of 303; gate red'
 
     # 4. Make `matches` a search rather than a full match, which is what Java
     #    String.matches is NOT.
@@ -158,9 +158,9 @@ if [[ ${1:-} == --mutate ]]; then
         's/^        return re.fullmatch(pattern, text, re.S) is not None$/        return re.search(pattern, text, re.S) is not None/' || exit 2
     got=$(gate | field 'str(d["outcomes"]["pass"]) + "/" + str(d["outcomes"]["fail"])')
     restore tools/oracle-gate.sh
-    if [[ $got == 301/39 ]]; then
+    if [[ $got == 303/39 ]]; then
         documented 'matches weakened from fullmatch to search' \
-            "nothing moved (301/39 either way). 36 cases carry a _matches or
+            "nothing moved (303/39 either way). 36 cases carry a _matches or
          _WImatches expectation and this compiler reaches only 5 of them; all
          5 are satisfied by both readings, so no assertion the suite can make
          separates them today.
@@ -168,7 +168,7 @@ if [[ ${1:-} == --mutate ]]; then
          prefix-matching case is reached, and it is 8 lines from a false
          green if the comparator is ever rewritten"
     else
-        report 'matches weakened from fullmatch to search' "$got" 301/39 \
+        report 'matches weakened from fullmatch to search' "$got" 303/39 \
             'a case changed verdict'
     fi
 
@@ -242,7 +242,7 @@ RUN_TIMEOUT     = 20
 # neither list can see: the acceptance list only knows about must-fail
 # programs and the signal list only about binaries. Raise it when passes are
 # won; never lower it to make a red run green.
-PASS_FLOOR = 301
+PASS_FLOOR = 303
 
 args, opt = sys.argv[1:], {}
 i = 0

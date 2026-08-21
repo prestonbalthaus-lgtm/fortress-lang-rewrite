@@ -1,0 +1,5 @@
+component badnatbound
+export Executable
+sized[\nat k extends ZZ32\](): ZZ64 = k
+run(): () = println(sized[\4\]())
+end

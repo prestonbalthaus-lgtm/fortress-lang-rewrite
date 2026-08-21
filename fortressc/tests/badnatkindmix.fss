@@ -1,0 +1,6 @@
+component badnatkindmix
+export Executable
+f[\T\](x: T): ZZ64 = 1
+f[\nat n\](x: ZZ32): ZZ64 = n
+run(): () = println(1)
+end

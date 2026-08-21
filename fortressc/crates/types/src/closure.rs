@@ -357,7 +357,8 @@ impl Pass {
                     self.rewrite_type(e)?;
                 }
             }
-            TypeRef::Unit { .. } => {}
+            // Nothing to rewrite: a static value contains no type at all.
+            TypeRef::Unit { .. } | TypeRef::Static { .. } => {}
         }
         Ok(())
     }
@@ -378,6 +379,10 @@ impl Pass {
                 self.undeclared_in(from).or_else(|| self.undeclared_in(to))
             }
             TypeRef::Tuple { elems, .. } => elems.iter().find_map(|e| self.undeclared_in(e)),
+            // A static VALUE names no type, so there is no type name in it to
+            // be undeclared. Whether the names INSIDE it resolve to value
+            // parameters is expansion's question and it answers it by name.
+            TypeRef::Static { .. } => None,
             TypeRef::Unit { .. } => None,
         }
     }
@@ -976,7 +981,8 @@ impl Pass {
                     && args.iter().all(|a| self.liftable(a))
             }
             TypeRef::Arrow { from, to, .. } => self.liftable_domain(from) && self.liftable(to),
-            TypeRef::Tuple { .. } | TypeRef::Unit { .. } => false,
+            // A static value is not a type and there is nothing to lift.
+            TypeRef::Tuple { .. } | TypeRef::Unit { .. } | TypeRef::Static { .. } => false,
         }
     }
 

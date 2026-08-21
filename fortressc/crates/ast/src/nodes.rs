@@ -225,6 +225,17 @@ pub enum TypeRef {
         to: Box<TypeRef>,
         span: Span,
     },
+    /// A VALUE in static-argument position: `Array[\ZZ64, 5\]`,
+    /// `[\T, s0 + s2\]`. It lives in `TypeRef` because that is what a static
+    /// ARGUMENT is in this AST, and because monomorphization's `Subst` is
+    /// already `BTreeMap<String, TypeRef>` -- so a value argument costs the
+    /// substitution machinery nothing.
+    ///
+    /// A BARE NAME IS NOT THIS. `[\n\]` parses as `Named` whether `n` is a
+    /// type or a value parameter, and expansion classifies it against the
+    /// callee's declared kinds. That is what keeps demand SYNTACTIC and lets
+    /// expansion keep running before `Checker::new`.
+    Static { expr: StaticExpr, span: Span },
 }
 
 impl TypeRef {
@@ -234,7 +245,8 @@ impl TypeRef {
             Self::Named { span, .. }
             | Self::Unit { span }
             | Self::Tuple { span, .. }
-            | Self::Arrow { span, .. } => *span,
+            | Self::Arrow { span, .. }
+            | Self::Static { span, .. } => *span,
         }
     }
 
@@ -253,6 +265,7 @@ impl TypeRef {
                 format!("({})", inner.join(", "))
             }
             Self::Arrow { from, to, .. } => format!("{} -> {}", from.written(), to.written()),
+            Self::Static { expr, .. } => expr.written(),
         }
     }
 }
@@ -263,8 +276,97 @@ impl TypeRef {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StaticParam {
     pub name: String,
+    /// D7 §3.1. `Type` is the M3d language; `Nat`, `Int` and `Bool` are VALUE
+    /// parameters, and a value parameter is substituted with a number rather
+    /// than with a type. `unit`, `dim` and `opr` are still refused at the
+    /// parser and have no variant here on purpose -- a kind that cannot be
+    /// written cannot be represented, and inventing one invites a reader to
+    /// think it is handled.
+    pub kind: StaticKind,
     pub bounds: Vec<TypeRef>,
     pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StaticKind {
+    Type,
+    Nat,
+    Int,
+    Bool,
+}
+
+impl StaticKind {
+    /// A VALUE parameter is substituted with a number, not a type. That one
+    /// question is asked in five places and is worth a name.
+    #[must_use]
+    pub const fn is_value(self) -> bool {
+        matches!(self, Self::Nat | Self::Int | Self::Bool)
+    }
+
+    #[must_use]
+    pub const fn spelling(self) -> &'static str {
+        match self {
+            Self::Type => "type",
+            Self::Nat => "nat",
+            Self::Int => "int",
+            Self::Bool => "bool",
+        }
+    }
+}
+
+/// A `nat`/`int`/`bool` static ARGUMENT. `D7 §3.1`: it must be STATICALLY
+/// EVALUABLE -- "the rule is *statically evaluable*, not *literal*" -- because
+/// `Library/Generator22D.fss` writes `[\T, 0, s0 + s2, 0, s1 + s3\]` and a
+/// literals-only rule cannot compile the library's own array generators.
+///
+/// THE SUBLANGUAGE IS WHAT THE CORPUS WRITES AND NOTHING MORE, counted rather
+/// than guessed: integer literals, references to an enclosing value parameter,
+/// `+`, `-`, and JUXTAPOSITION AS PRODUCT (`(imax jmax kmax) + (2 jmax imax)`,
+/// 13 sites). No `*`, no `/`, no comparison -- none is written anywhere, and a
+/// form nobody writes is a refusal rather than a guess.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StaticExpr {
+    Int(i64),
+    Bool(bool),
+    /// A name. Whether it is an enclosing value parameter or nothing at all is
+    /// a question for expansion, which is where the parameter kinds are known.
+    Ref(String),
+    Bin {
+        op: StaticOp,
+        left: Box<StaticExpr>,
+        right: Box<StaticExpr>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StaticOp {
+    Add,
+    Sub,
+    /// Juxtaposition. `2 jmax imax` is a product in Fortress and the corpus
+    /// writes it that way inside a static argument thirteen times.
+    Mul,
+}
+
+impl StaticExpr {
+    /// As the user wrote it, for diagnostics. Fully parenthesised, because a
+    /// diagnostic that re-prints `a + b c` unbracketed invites the reader to
+    /// check the precedence rather than the value.
+    #[must_use]
+    pub fn written(&self) -> String {
+        match self {
+            Self::Int(v) => v.to_string(),
+            Self::Bool(v) => v.to_string(),
+            Self::Ref(name) => name.clone(),
+            Self::Bin { op, left, right } => {
+                let sym = match op {
+                    StaticOp::Add => " + ",
+                    StaticOp::Sub => " - ",
+                    StaticOp::Mul => " ",
+                };
+                format!("({}{sym}{})", left.written(), right.written())
+            }
+        }
+    }
 }
 
 /// Recorded by monomorphization, discharged by the type checker. A bound cannot

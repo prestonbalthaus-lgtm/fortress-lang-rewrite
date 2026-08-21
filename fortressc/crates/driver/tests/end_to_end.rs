@@ -2104,6 +2104,107 @@ fn a_for_loop_over_something_that_is_not_an_array_is_refused() {
     assert!(message.contains("expected an array"), "{message}");
 }
 
+// ------------------------------------------------------- `nat`/`int`/`bool`
+//
+// D7 §3.1. A value static parameter is substituted with a NUMBER, and the
+// argument must be STATICALLY EVALUABLE -- "the rule is *statically evaluable*,
+// not *literal*", because `Library/Generator22D.fss` writes
+// `[\T, 0, s0 + s2, 0, s1 + s3\]` and a literals-only rule cannot compile the
+// library's own array generators.
+
+/// All three kinds, a static expression over an enclosing parameter, and
+/// JUXTAPOSITION AS PRODUCT -- `[\2 3\]` is 6, which is 13 corpus sites'
+/// spelling and the reason there is no `*` in the sublanguage.
+#[test]
+fn value_static_parameters_are_substituted_with_their_values() {
+    let binary = compile_fixture("natparams.fss", "natparams");
+    let out = run(&binary);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "4\n10\n10\nyes\n-9\n7\n12\n"
+    );
+    assert_eq!(out.status.code(), Some(0));
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// `[\2 + 3\]` AND `[\5\]` ARE ONE STAMP. That is only true because the
+/// VALUE is what gets mangled, and the value only exists after evaluation --
+/// mangle the expression instead and MAX_INSTANTIATIONS counts the spelling.
+#[test]
+fn two_spellings_of_one_value_are_one_instantiation() {
+    let ir = emitted_ir("natparams.fss");
+    let stamps = ir.matches("define i64 @\"sized$$10$e\"").count()
+        + ir.matches("define i64 @\"sized$$5$e\"").count();
+    assert_eq!(stamps, 1, "one stamp for 2+3 and 5:\n{ir}");
+}
+
+/// A type where a value was declared.
+#[test]
+fn a_type_in_a_value_static_argument_is_refused() {
+    let message = refusal("badnattype.fss");
+    assert!(
+        message.contains("must be known at compile time"),
+        "{message}"
+    );
+}
+
+/// And a value where a type was declared -- "unknown type `3`" would send the
+/// reader looking for a declaration that was never meant to exist.
+#[test]
+fn a_value_in_a_type_static_argument_is_refused() {
+    let message = refusal("badnatvalue.fss");
+    assert!(
+        message.contains("is a static VALUE and this parameter is declared as a type"),
+        "{message}"
+    );
+}
+
+/// D7 leaves the constraint solver out of v1, and its own census is the reason:
+/// NOT ONE `where { k < n }` exists in 1956 files.
+#[test]
+fn a_bound_on_a_value_static_parameter_is_refused() {
+    let message = refusal("badnatbound.fss");
+    assert!(
+        message.contains("there is no constraint solver"),
+        "{message}"
+    );
+}
+
+/// KIND IS PART OF THE SHAPE. An overload set mixing `f[\T\]` and
+/// `f[\nat n\]` has one parameter each with no bounds either side, so the
+/// count comparison alone accepts it and then one member wants a type and the
+/// other a number at the same position.
+#[test]
+fn an_overload_set_mixing_a_type_and_a_value_parameter_is_refused() {
+    let message = refusal("badnatkindmix.fss");
+    assert!(
+        message.contains("differ in their static parameters"),
+        "{message}"
+    );
+}
+
+/// D7 §3.2, a NAMED DEVIATION. `NatReflect.reflect` turns a RUN-TIME integer
+/// into a static parameter, and a monomorphizing compiler cannot stamp a
+/// specialisation for a value it does not know. The diagnostic has to name the
+/// mechanism or the failure surfaces as an unrelated mismatch deep inside
+/// `ChunkedSparseArray`.
+#[test]
+fn the_natreflect_runtime_path_is_refused_by_name() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(corpus("ProjectFortress/LibraryBuiltin/NatReflect.fsi"))
+        .arg("--emit-obj")
+        .arg("-o")
+        .arg("/dev/null")
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{message}");
+    assert!(
+        message.contains("`NatReflect.reflect` produces one at run time"),
+        "{message}"
+    );
+}
+
 // ------------------------------------------- the exported hierarchy, clause by clause
 //
 // `source-code.tex:290-299` makes a trait's exported hierarchy a fact about the

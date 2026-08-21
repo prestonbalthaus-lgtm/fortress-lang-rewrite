@@ -91,6 +91,10 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 #   OBJECT_FLOOR   .fss files that compile end to end AND EMIT AN OBJECT
 #   API_FLOOR      .fsi files whose headers resolve and whose bounds discharge
 # Measured on the consolidated tree: 290 objects, 60 apis, 350 together.
+# D7 ADOPTED, `nat`/`int`/`bool` OPEN: 297 objects, 61 apis, 358 together. The
+# eight are genericTest1/2, tparams0/1/2, Compiled1.av, Compiled6.af and
+# test_library/TestNative.fsi, and genericTest1 checks its own arithmetic --
+# `f[\1\]() + g[\2,3\]() = 6` prints `pass`.
 #
 # THE SLACK IS 38 AND NOT 1, and that is the honest number rather than a
 # tradition: tools/oracle-accepted-must-fail.txt names 38 programs that MUST
@@ -100,8 +104,8 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # applied to the real population instead of to the one file that was known when
 # the rule was written. When that list shrinks, this floor rises with it, and
 # the two move in the same commit.
-OBJECT_FLOOR=252
-API_FLOOR=60
+OBJECT_FLOOR=259
+API_FLOOR=61
 
 passed=0
 failed=0

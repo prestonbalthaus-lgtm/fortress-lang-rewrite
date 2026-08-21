@@ -6,9 +6,39 @@ STATICALLY KNOWN arguments. The runtime-instantiation half of
 `unit` and `dim` move to sub-phase 4d. `opr` is a fourth kind and is scoped
 separately below.**
 
-Status: **drafted, not adopted.** Written against master `f81f41ace` on
-2026-08-21; every measurement reproduced by hand with a sha256-pinned driver
-(`7e103205cb54`).
+Status: **ADOPTED AND IMPLEMENTED, 2026-08-21, at the consolidation.** Written
+against master `f81f41ace`; every measurement reproduced by hand with a
+sha256-pinned driver (`7e103205cb54`).
+
+**What landing it cost and bought, measured on the consolidated tree:**
+
+* corpus **350 → 358**, zero lost. genericTest1, genericTest2, tparams0/1/2,
+  Compiled1.av, Compiled6.af and `test_library/TestNative.fsi`.
+  `genericTest1.fss` checks its own arithmetic — `f[\1\]() + g[\2,3\]() = 6`
+  prints `pass`.
+* oracle pass **301 → 303**, gate green, zero new must-fail acceptances.
+* **`Library/FortressLibrary.fsi` MOVED FROM BYTE 37399 TO BYTE 44522** and its
+  next wall is `abstract opr[i:I]:=(v:E) : ()` — an operator DECLARATION form,
+  which is `SPIKE-OPEXPR` and not this decision. That is §3.4's predicted "wall
+  behind the wall", and it is the honest measure of progress on the bootstrap
+  root: 7,123 more bytes of the library's own api, and the blocker is now a
+  different owner's.
+* the api census moved by ONE file (42 → 43 over the 183-file `all` group; the
+  114-file census set itself held at 14). The corpus moved eight. Both numbers
+  are here because quoting either alone overstates or understates it.
+
+**What was NOT built, and the reason is measurement rather than scope:** the
+constraint solver. §4's census found ZERO `where { k < n }` in 1956 files, so a
+bound on a value parameter is REFUSED BY NAME rather than dropped in silence.
+Re-open it when a corpus file writes one.
+
+**The sublanguage as implemented** is exactly what the corpus writes: integer
+and Boolean literals, a reference to an enclosing value parameter, `+`, `-`, and
+JUXTAPOSITION AS PRODUCT (`(imax jmax kmax) + (2 jmax imax)`, 13 sites). No `*`
+and no `/` — neither is written anywhere in static-argument position, and a form
+nobody writes is a refusal rather than a guess. Evaluation happens AT THE
+SUBSTITUTION, which is what makes `[\2 + 3\]` and `[\5\]` one stamp against
+`MAX_INSTANTIATIONS` rather than two.
 
 ---
 

@@ -101,6 +101,12 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
                     } => {
                         format!("`{kind}` static parameter")
                     }
+                    fortress_parser::ParseError::StaticValueParameterBound { .. } => {
+                        "bound on a value static parameter".to_owned()
+                    }
+                    fortress_parser::ParseError::StaticExpressionOutOfRange { .. } => {
+                        "static argument out of i64 range".to_owned()
+                    }
                     fortress_parser::ParseError::WhereClauseFormUnsupported { .. } => {
                         "where clause form".to_owned()
                     }

@@ -17,7 +17,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use fortress_ast::{
     Assign, BlockItem, BoundObligation, CaseArm, Component, Decl, Expr, FieldDecl, FnDecl, Member,
-    MethodDecl, ObjectDecl, Param, Span, StaticParam, TraitDecl, TypeCaseArm, TypeRef,
+    MethodDecl, ObjectDecl, Param, Span, StaticExpr, StaticOp, StaticParam, TraitDecl, TypeCaseArm,
+    TypeRef,
 };
 
 use crate::error::TypeError;
@@ -253,9 +254,7 @@ impl<'a> Expander<'a> {
             // applied in one walk. The method's parameters win, which is what
             // makes `trait T[\S\] ... g[\S\]()` shadow rather than collide.
             let mut subst = template.subst.clone();
-            for (param, arg) in template.decl.static_params.iter().zip(&request.args) {
-                subst.insert(param.name.clone(), arg.clone());
-            }
+            bind_static(&template.decl.static_params, &request.args, &mut subst)?;
             let key = (tkey.0.clone(), tkey.1, request.mangled.clone());
             // Reserved before the body is walked, so a generic method that
             // calls itself at its own arguments is a memo hit rather than an
@@ -331,9 +330,7 @@ impl<'a> Expander<'a> {
                     });
                 }
                 let mut subst = Subst::new();
-                for (param, arg) in params.iter().zip(&job.args) {
-                    subst.insert(param.name.clone(), arg.clone());
-                }
+                bind_static(params, &job.args, &mut subst)?;
                 let key = (job.mangled.clone(), member);
                 // Reserve the key before substituting, so a declaration that
                 // mentions itself -- which every F-bound does -- is a memo hit
@@ -470,6 +467,16 @@ impl<'a> Expander<'a> {
         let (name, args, span) = match t {
             TypeRef::Named { name, args, span } => (name, args, *span),
             TypeRef::Unit { .. } => return Ok(t.clone()),
+            // A STATIC VALUE IS EVALUATED HERE, at the substitution, and never
+            // later. `[\ 2 + 3 \]` and `[\ 5 \]` must be ONE stamp against
+            // MAX_INSTANTIATIONS, and they are only one if the value and not
+            // the expression is what gets mangled.
+            TypeRef::Static { expr, span } => {
+                return Ok(TypeRef::Static {
+                    expr: eval_static(expr, subst, *span)?,
+                    span: *span,
+                })
+            }
             TypeRef::Tuple { elems, span } => {
                 let mut out = Vec::with_capacity(elems.len());
                 for e in elems {
@@ -691,6 +698,13 @@ impl<'a> Expander<'a> {
             | Expr::BoolLit { .. } => e.clone(),
 
             Expr::Var { name, span } => {
+                // A VALUE STATIC PARAMETER READ AS A VALUE. The substitution
+                // already holds the number, so this is the whole mechanism --
+                // the checker downstream sees an ordinary literal and needed no
+                // change at all.
+                if let Some(literal) = value_parameter_literal(name, subst, *span) {
+                    return Ok(literal);
+                }
                 if self.generics.contains_key(name) {
                     return Err(TypeError::StaticArgumentsRequired {
                         span: *span,
@@ -1072,12 +1086,141 @@ pub fn mangle_static(name: &str, args: &[TypeRef]) -> String {
     out
 }
 
+/// Bind one instantiation's arguments to its parameters, CHECKING THE KIND.
+/// Two things are decided here and nowhere else: that a value parameter got a
+/// value, and that a type parameter did not.
+///
+/// A BARE NAME REACHING A VALUE PARAMETER HAS ALREADY FAILED. `ty` substitutes
+/// an enclosing parameter before the argument gets here, so a name that is
+/// still a `Named` is one that resolved to nothing -- which is precisely what
+/// "must be known at compile time" refuses. That is why the classification can
+/// live here, after substitution, and demand can stay syntactic.
+fn bind_static(params: &[StaticParam], args: &[TypeRef], out: &mut Subst) -> Result<(), TypeError> {
+    for (param, arg) in params.iter().zip(args) {
+        let bound = match (param.kind.is_value(), arg) {
+            (true, TypeRef::Static { .. }) => arg.clone(),
+            (true, TypeRef::Named { name, args, span }) if args.is_empty() => {
+                return Err(TypeError::StaticArgumentNotConstant {
+                    span: *span,
+                    name: name.clone(),
+                })
+            }
+            (true, other) => {
+                return Err(TypeError::TypeWhereStaticValueRequired {
+                    span: other.span(),
+                    param: param.name.clone(),
+                    kind: param.kind.spelling(),
+                    written: other.written(),
+                })
+            }
+            (false, TypeRef::Static { expr, span }) => {
+                return Err(TypeError::StaticValueWhereTypeRequired {
+                    span: *span,
+                    written: expr.written(),
+                })
+            }
+            (false, _) => arg.clone(),
+        };
+        out.insert(param.name.clone(), bound);
+    }
+    Ok(())
+}
+
+/// A value parameter READ AS A VALUE in the body it parameterises:
+/// `ImmutableArray1[\T, nat b0, nat s0\]` uses `s0` as a size. The
+/// substitution already holds the number, so this is a rewrite and not an
+/// evaluation, and what the checker sees afterwards is an ordinary literal.
+fn value_parameter_literal(name: &str, subst: &Subst, span: Span) -> Option<Expr> {
+    match subst.get(name) {
+        Some(TypeRef::Static {
+            expr: StaticExpr::Int(v),
+            ..
+        }) => Some(Expr::IntLit {
+            digits: v.to_string(),
+            span,
+        }),
+        Some(TypeRef::Static {
+            expr: StaticExpr::Bool(v),
+            ..
+        }) => Some(Expr::BoolLit { value: *v, span }),
+        _ => None,
+    }
+}
+
+/// D7 §3.1's "statically evaluable". Substitutes every name from the
+/// enclosing substitution and folds the arithmetic, so what comes out is a
+/// literal or a diagnostic and never a half-folded expression.
+///
+/// EVALUATING AT THE SUBSTITUTION IS WHAT MAKES THE BUDGET HONEST: `[\2 + 3\]`
+/// and `[\5\]` are ONE stamp against MAX_INSTANTIATIONS only because the
+/// VALUE is what gets mangled, and the value only exists here.
+fn eval_static(expr: &StaticExpr, subst: &Subst, span: Span) -> Result<StaticExpr, TypeError> {
+    match expr {
+        StaticExpr::Int(_) | StaticExpr::Bool(_) => Ok(expr.clone()),
+        StaticExpr::Ref(name) => match subst.get(name) {
+            // A value parameter substituted with a value: the ordinary case.
+            Some(TypeRef::Static { expr, .. }) => eval_static(expr, subst, span),
+            // A value parameter substituted with a TYPE. The caller wrote a
+            // type where a value was declared, and the mismatch is reported
+            // where the kinds are known rather than here.
+            Some(other) => Err(TypeError::TypeWhereStaticValueRequired {
+                span,
+                param: name.clone(),
+                kind: "nat",
+                written: other.written(),
+            }),
+            // Not in the substitution at all. At the point a stamp is cut every
+            // enclosing parameter is bound, so this is a name that names
+            // nothing -- which is exactly what "must be known at compile time"
+            // refuses.
+            None => Err(TypeError::StaticArgumentNotConstant {
+                span,
+                name: name.clone(),
+            }),
+        },
+        StaticExpr::Bin { op, left, right } => {
+            let (l, r) = (
+                eval_static(left, subst, span)?,
+                eval_static(right, subst, span)?,
+            );
+            match (l, r) {
+                (StaticExpr::Int(a), StaticExpr::Int(b)) => {
+                    // WRAPPING, for the same reason ZZ32/ZZ64 arithmetic wraps
+                    // at run time -- see the 2026-08-21 arithmetic ruling. A
+                    // static expression that trapped would make the SUCCESS of
+                    // a compile depend on an intermediate nobody wrote down.
+                    let v = match op {
+                        StaticOp::Add => a.wrapping_add(b),
+                        StaticOp::Sub => a.wrapping_sub(b),
+                        StaticOp::Mul => a.wrapping_mul(b),
+                    };
+                    Ok(StaticExpr::Int(v))
+                }
+                _ => Err(TypeError::StaticExpressionForm {
+                    span,
+                    form: "arithmetic on a Boolean static argument",
+                }),
+            }
+        }
+    }
+}
+
 /// `$` cannot appear in a source identifier, so the three non-nominal forms
 /// take a `$`-led name and no user type can collide with one.
 fn mangle_type(t: &TypeRef) -> String {
     match t {
         TypeRef::Named { name, args, .. } => mangle_static(name, args),
         TypeRef::Unit { .. } => "$unit".to_owned(),
+        // The VALUE, not the expression it was written as. A negative is `n`
+        // rather than `-`, because `-` is not legal in a symbol.
+        TypeRef::Static { expr, .. } => match expr {
+            StaticExpr::Int(v) if *v < 0 => format!("$n{}", v.unsigned_abs()),
+            StaticExpr::Int(v) => format!("${v}"),
+            StaticExpr::Bool(v) => format!("${v}"),
+            // Unreachable through `ty`, which evaluates before it mangles; a
+            // name here would silently make two stamps of one instantiation.
+            other => format!("$unevaluated${}", other.written()),
+        },
         TypeRef::Tuple { elems, .. } => {
             let mut out = String::from("$tuple");
             for e in elems {
@@ -1109,11 +1252,18 @@ fn check_uniformity(component: &Component) -> Result<(), TypeError> {
                 seen.insert(&f.name, (params, f.span));
             }
             Some((first, first_span)) => {
+                // KIND IS PART OF THE SHAPE, not just count and bound-count.
+                // An overload set mixing `f[\T\]` and `f[\nat n\]` has one
+                // parameter each with no bounds either side, so the length
+                // comparison alone accepts it -- and then one member wants a
+                // type and the other a number at the same position. That is
+                // the GenFun6 coarseness class on a new axis, and it is the
+                // axis this milestone created.
                 let same = first.len() == params.len()
                     && first
                         .iter()
                         .zip(params)
-                        .all(|(a, b)| a.bounds.len() == b.bounds.len());
+                        .all(|(a, b)| a.bounds.len() == b.bounds.len() && a.kind == b.kind);
                 if !same {
                     return Err(TypeError::OverloadSetStaticParamsDiffer {
                         span: f.span,
@@ -1192,7 +1342,10 @@ fn check_header_type(
             }
             Ok(())
         }
-        TypeRef::Unit { .. } => Ok(()),
+        // A static VALUE names no type. Whether the names inside it resolve to
+        // value parameters is `eval_static`'s question, at the substitution,
+        // where the kinds are known.
+        TypeRef::Static { .. } | TypeRef::Unit { .. } => Ok(()),
         TypeRef::Tuple { elems, .. } => {
             for e in elems {
                 check_header_type(e, known, params)?;

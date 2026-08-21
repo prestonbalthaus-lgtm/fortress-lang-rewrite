@@ -282,6 +282,15 @@ fn compile(options: &Options) -> Result<(), Failure> {
         .map_or(0, |r| r.merged)
         .min(component.decls.len());
     let (merged_decls, own_decls) = component.decls.split_at(cut);
+    fortress_types::deviations::check(own_decls, merged_decls, component.span).map_err(|e| {
+        Failure::Diagnostic(render(
+            path,
+            &source,
+            Some(e.span()),
+            &e.to_string(),
+            &e.notes(),
+        ))
+    })?;
     fortress_types::comprises::check(own_decls, merged_decls, is_api_file, component.span)
         .map_err(|e| {
             Failure::Diagnostic(render(

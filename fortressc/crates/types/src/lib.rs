@@ -13,6 +13,7 @@
 
 mod closure;
 pub mod comprises;
+pub mod deviations;
 mod error;
 mod mono;
 mod registry;
@@ -390,6 +391,8 @@ fn overload_counts(component: &Component) -> HashMap<String, usize> {
 /// `Self` is the run-time type of the receiver.
 fn substitute_self(t: &TypeRef, owner: &str) -> TypeRef {
     match t {
+        // A static value holds no type name, so `Self` cannot occur in one.
+        TypeRef::Static { .. } => t.clone(),
         TypeRef::Named { name, args, span } if name == "Self" && args.is_empty() => {
             TypeRef::Named {
                 name: owner.to_owned(),

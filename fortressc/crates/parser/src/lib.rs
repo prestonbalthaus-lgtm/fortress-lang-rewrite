@@ -17,7 +17,7 @@ pub use error::ParseError;
 use fortress_ast::{
     Assign, BinOp, Binding, BlockItem, CaseArm, Component, Decl, Expr, FieldDecl, Fixity, FnDecl,
     ImportDecl, ImportItems, ImportedName, Member, MethodDecl, Modifiers, ObjectDecl, Param, Span,
-    StaticParam, TraitDecl, TypeCaseArm, TypeRef, UnOp,
+    StaticExpr, StaticKind, StaticOp, StaticParam, TraitDecl, TypeCaseArm, TypeRef, UnOp,
 };
 use fortress_lexer::{Kind, Token};
 
@@ -57,6 +57,9 @@ fn widen(t: TypeRef, span: Span) -> TypeRef {
         TypeRef::Unit { .. } => TypeRef::Unit { span },
         TypeRef::Tuple { elems, .. } => TypeRef::Tuple { elems, span },
         TypeRef::Arrow { from, to, .. } => TypeRef::Arrow { from, to, span },
+        // A static VALUE argument cannot be parenthesised into this function:
+        // `widen` is only ever called on a parsed TYPE.
+        TypeRef::Static { expr, .. } => TypeRef::Static { expr, span },
     }
 }
 
@@ -1851,7 +1854,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         let mut args = Vec::new();
         self.skip_newlines();
         loop {
-            args.push(self.type_ref()?);
+            args.push(self.static_arg()?);
             self.skip_newlines();
             if !self.at(&Kind::Comma) {
                 break;
@@ -1922,29 +1925,169 @@ impl<'t, 'a> Parser<'t, 'a> {
     ///                      operator-property traits, which begin by WRITING
     ///                      declarations that exist only as commented LaTeX.
     fn static_param(&mut self) -> Parsed<StaticParam> {
+        let mut kind = StaticKind::Type;
         if let Some(Kind::Reserved(word)) = self.peek_kind() {
-            // The D7 group. When D7 is adopted, THIS is the arm that goes: the
-            // kind is recorded on `StaticParam` and `mono::expand` learns to
-            // stamp on a value. Nothing else here moves.
-            if matches!(*word, "nat" | "int" | "bool") {
-                return Err(ParseError::StaticParameterKindPendingDecision {
-                    span: self.span_here(),
-                    kind: (*word).to_owned(),
-                });
-            }
-            // `unit` and `dim` wait for 4d; `opr` waits for the
-            // operator-property traits. Both stay refused when the group above
-            // opens.
-            if matches!(*word, "unit" | "dim" | "opr") {
-                return Err(ParseError::StaticParameterKindUnsupported {
-                    span: self.span_here(),
-                    kind: (*word).to_owned(),
-                });
+            // THE D7 GROUP IS OPEN. `nat`, `int` and `bool` are v1 with every
+            // static ARGUMENT statically evaluable; this is the arm the
+            // scaffold said would go when D7 was adopted, and it has.
+            kind = match *word {
+                "nat" => StaticKind::Nat,
+                "int" => StaticKind::Int,
+                "bool" => StaticKind::Bool,
+                // `unit` and `dim` wait for 4d; `opr` waits for the
+                // operator-property traits, which begin by WRITING
+                // declarations that exist only as commented LaTeX. All three
+                // stay refused now that the group above has opened, which is
+                // D7 §3.3 and §4 respectively.
+                "unit" | "dim" | "opr" => {
+                    return Err(ParseError::StaticParameterKindUnsupported {
+                        span: self.span_here(),
+                        kind: (*word).to_owned(),
+                    })
+                }
+                _ => StaticKind::Type,
+            };
+            if kind.is_value() {
+                self.pos += 1;
             }
         }
         let (name, span) = self.identifier("a static parameter name")?;
         let bounds = self.extends_clause()?;
-        Ok(StaticParam { name, bounds, span })
+        // D7 leaves the constraint solver out of v1 and its own census is the
+        // reason: NOT ONE `where { k < n }` exists in 1956 files. A bound on a
+        // value parameter would have to be discharged by something that does
+        // not exist, so it is refused rather than dropped in silence.
+        if kind.is_value() && !bounds.is_empty() {
+            return Err(ParseError::StaticValueParameterBound { span, name });
+        }
+        Ok(StaticParam {
+            name,
+            kind,
+            bounds,
+            span,
+        })
+    }
+
+    /// One static ARGUMENT. A type, or -- D7 §3.1 -- a statically evaluable
+    /// VALUE.
+    ///
+    /// THE TYPE IS TRIED FIRST AND THE POSITION IS RESTORED IF IT DOES NOT
+    /// REACH THE END OF THE ARGUMENT, which is what makes `imax jmax kmax`
+    /// work: `type_ref` happily parses `imax` and stops, and only the fact
+    /// that the next token is neither `,` nor `\]` says it was a product.
+    /// A BARE NAME IS LEFT AS A TYPE. `[\n\]` is `Named` whether `n` is a
+    /// type or a value parameter, and expansion classifies it against the
+    /// callee's declared kinds -- which is what keeps demand SYNTACTIC and
+    /// lets expansion keep running before `Checker::new`.
+    fn static_arg(&mut self) -> Parsed<TypeRef> {
+        let save = self.pos;
+        if let Ok(t) = self.type_ref() {
+            let after = self.pos;
+            self.skip_newlines();
+            if self.at(&Kind::Comma) || self.at(&Kind::RGeneric) {
+                self.pos = after;
+                return Ok(t);
+            }
+        }
+        self.pos = save;
+        let start = self.span_here();
+        let expr = self.static_expr()?;
+        let end = self.previous_span();
+        Ok(TypeRef::Static {
+            expr,
+            span: Span::new(start.start, end.end),
+        })
+    }
+
+    /// `a + b`, `a - b`, left associative, loosest.
+    fn static_expr(&mut self) -> Parsed<StaticExpr> {
+        let mut left = self.static_product()?;
+        loop {
+            let op = match self.peek_kind() {
+                Some(Kind::Plus) => StaticOp::Add,
+                Some(Kind::Minus) => StaticOp::Sub,
+                _ => return Ok(left),
+            };
+            self.pos += 1;
+            self.skip_newlines();
+            let right = self.static_product()?;
+            left = StaticExpr::Bin {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
+        }
+    }
+
+    /// JUXTAPOSITION IS THE PRODUCT. `2 jmax imax` is a product in Fortress and
+    /// the corpus writes it that way inside a static argument at thirteen
+    /// sites. There is no `*` here because no corpus file writes one.
+    fn static_product(&mut self) -> Parsed<StaticExpr> {
+        let mut left = self.static_atom()?;
+        loop {
+            if !matches!(
+                self.peek_kind(),
+                Some(Kind::IntLit { .. } | Kind::Ident(_) | Kind::LParen)
+            ) {
+                return Ok(left);
+            }
+            let right = self.static_atom()?;
+            left = StaticExpr::Bin {
+                op: StaticOp::Mul,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
+        }
+    }
+
+    fn static_atom(&mut self) -> Parsed<StaticExpr> {
+        let span = self.span_here();
+        match self.peek_kind() {
+            Some(Kind::IntLit { digits, .. }) => {
+                let digits = digits.clone();
+                self.pos += 1;
+                digits
+                    .parse::<i64>()
+                    .map(StaticExpr::Int)
+                    .map_err(|_| ParseError::StaticExpressionOutOfRange { span, digits })
+            }
+            Some(Kind::True) => {
+                self.pos += 1;
+                Ok(StaticExpr::Bool(true))
+            }
+            Some(Kind::False) => {
+                self.pos += 1;
+                Ok(StaticExpr::Bool(false))
+            }
+            Some(Kind::Minus) => {
+                self.pos += 1;
+                // `-n` is `0 - n`, so negation needs no node of its own and the
+                // evaluator needs no unary case.
+                let inner = self.static_atom()?;
+                Ok(StaticExpr::Bin {
+                    op: StaticOp::Sub,
+                    left: Box::new(StaticExpr::Int(0)),
+                    right: Box::new(inner),
+                })
+            }
+            Some(Kind::Ident(name)) => {
+                let name = (*name).to_owned();
+                self.pos += 1;
+                Ok(StaticExpr::Ref(name))
+            }
+            Some(Kind::LParen) => {
+                self.pos += 1;
+                self.skip_newlines();
+                let inner = self.static_expr()?;
+                self.skip_newlines();
+                self.expect(&Kind::RParen, "`)`")?;
+                Ok(inner)
+            }
+            _ => Err(self.error(
+                "a static argument: a type, a literal, or arithmetic over \
+                                 the enclosing static parameters",
+            )),
+        }
     }
 
     // --------------------------------------------------------- expressions

@@ -169,6 +169,17 @@ impl Registry {
                     form: "a tuple type",
                 })
             }
+            // A VALUE where a TYPE is required. This is reachable from real
+            // source -- `Cell[\ 3 \]` where `Cell`'s parameter is a type --
+            // and the diagnostic has to say which of the two it got, because
+            // "unknown type `3`" would send the reader looking for a
+            // declaration.
+            TypeRef::Static { expr, span } => {
+                return Err(TypeError::StaticValueWhereTypeRequired {
+                    span: *span,
+                    written: expr.written(),
+                })
+            }
             TypeRef::Arrow { span, .. } => {
                 return Err(TypeError::TypeNotImplemented {
                     span: *span,

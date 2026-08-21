@@ -60,6 +60,49 @@ pub enum TypeError {
         span: Span,
         name: String,
     },
+    /// A value written where a TYPE parameter was declared: `Cell[\ 3 \]`.
+    /// Named separately because "unknown type `3`" sends the reader looking for
+    /// a declaration that was never meant to exist.
+    StaticValueWhereTypeRequired {
+        span: Span,
+        written: String,
+    },
+    /// A type written where a `nat`/`int`/`bool` parameter was declared.
+    TypeWhereStaticValueRequired {
+        span: Span,
+        param: String,
+        kind: &'static str,
+        written: String,
+    },
+    /// `D7 §3.1`: a static argument must be STATICALLY EVALUABLE. This is the
+    /// name that did not resolve to an enclosing value parameter.
+    StaticArgumentNotConstant {
+        span: Span,
+        name: String,
+    },
+    /// `D7 §3.1` again, from the other side: a form the static-expression
+    /// sublanguage does not contain. The sublanguage is what the corpus writes
+    /// -- literals, names, `+`, `-` and juxtaposition -- and nothing else.
+    StaticExpressionForm {
+        span: Span,
+        form: &'static str,
+    },
+    /// `D7 §3.2`, a NAMED DEVIATION. `NatReflect.reflect(z:ZZ32):NatParam`
+    /// turns a RUN-TIME value into a static parameter, and a monomorphizing
+    /// compiler cannot stamp a specialisation for a value it does not know.
+    /// It must name the mechanism: the failure otherwise surfaces as an
+    /// unrelated mismatch deep inside `ChunkedSparseArray`.
+    NatReflectRuntimeArgument {
+        span: Span,
+    },
+    /// A bound written on a value-kinded static parameter: `[\nat n extends
+    /// Foo\]`. There is no constraint solver -- D7's own census found ZERO
+    /// `where { k < n }` in 1956 files -- so a bound there is refused rather
+    /// than silently dropped.
+    StaticValueParameterBound {
+        span: Span,
+        name: String,
+    },
     /// `traits.tex:161-162`: "In an API (but not a component), a `comprises`
     /// clause may include `...`". The marker was DROPPED by the parser until
     /// the clause gained a reader, so an open set and an unwritten one were
@@ -557,6 +600,12 @@ impl TypeError {
             | Self::BooleanNotOrdered { span, .. }
             | Self::UnknownName { span, .. }
             | Self::UnknownType { span, .. }
+            | Self::StaticValueWhereTypeRequired { span, .. }
+            | Self::TypeWhereStaticValueRequired { span, .. }
+            | Self::StaticArgumentNotConstant { span, .. }
+            | Self::StaticExpressionForm { span, .. }
+            | Self::NatReflectRuntimeArgument { span }
+            | Self::StaticValueParameterBound { span, .. }
             | Self::OpenComprisesInComponent { span, .. }
             | Self::ComprisesNameDoesNotExtend { span, .. }
             | Self::ExtendsOpenComprises { span, .. }
@@ -695,6 +744,42 @@ impl core::fmt::Display for TypeError {
             ),
             Self::UnknownName { name, .. } => write!(f, "unknown name `{name}`"),
             Self::UnknownType { name, .. } => write!(f, "unknown type `{name}`"),
+            Self::StaticValueWhereTypeRequired { written, .. } => write!(
+                f,
+                "`{written}` is a static VALUE and this parameter is declared as a type"
+            ),
+            Self::TypeWhereStaticValueRequired {
+                param,
+                kind,
+                written,
+                ..
+            } => write!(
+                f,
+                "`{written}` is a type and `{param}` is declared `{kind}`, which takes a \
+                 statically-known value"
+            ),
+            Self::StaticArgumentNotConstant { name, .. } => write!(
+                f,
+                "a static argument must be known at compile time, and `{name}` is not an \
+                 enclosing static parameter"
+            ),
+            Self::StaticExpressionForm { form, .. } => write!(
+                f,
+                "{form} is not part of the static-expression sublanguage; a static \
+                 argument is a literal, an enclosing static parameter, or `+`, `-` and \
+                 juxtaposition over those"
+            ),
+            Self::NatReflectRuntimeArgument { .. } => write!(
+                f,
+                "a `nat` static argument must be known at compile time, and \
+                 `NatReflect.reflect` produces one at run time -- a monomorphizing \
+                 compiler cannot stamp a specialisation for a value it does not know"
+            ),
+            Self::StaticValueParameterBound { name, .. } => write!(
+                f,
+                "`{name}` is a value static parameter and carries a bound; there is no \
+                 constraint solver, and no corpus file writes one"
+            ),
             Self::OpenComprisesInComponent { name, .. } => write!(
                 f,
                 "the `comprises` clause of `{name}` is open (`...`), which an api may \

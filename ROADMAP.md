@@ -249,6 +249,25 @@ in the same checker, and unit algebra in particular has to survive inference
 rather than being checked after it. Split phase 4 before starting it and give
 each part its own exit criterion.
 
+**AMENDED 2026-08-21, D7 ADOPTED.** Two of those four have answers now and the
+line above bundles two items with OPPOSITE demand, which is what D7 §4 found:
+
+* **`nat`/`int`/`bool` static parameters and arguments ARE IMPLEMENTED.** A value
+  parameter is substituted with a number; a static argument must be statically
+  evaluable — a literal, an enclosing value parameter, or `+`, `-` and
+  juxtaposition-as-product over those. Evaluation happens at the substitution, so
+  `[\2 + 3\]` and `[\5\]` are one stamp against `MAX_INSTANTIATIONS`.
+* **"Constraint solving for `nat` parameters" HAS ZERO DEMAND AND IS NOT BUILT.**
+  Measured: not one `where { k < n }` exists in 1956 corpus files, while `nat`
+  PARAMETERS have 61 files and 842 sites. A bound on a value parameter is refused
+  by name rather than dropped. Re-open it when a corpus file writes one.
+* `unit` and `dim` stay in v1 and stay deferred to sub-phase 4d, gated on
+  `SPIKE-COMPOSITE-TYPE` rather than on D7 — `unit` is 6 corpus files and zero
+  library files, `dim` has no corpus witness at all.
+* `NatReflect.reflect`, which turns a run-time `ZZ32` into a static parameter, is
+  a **named deviation** refused by name: a monomorphizing compiler cannot stamp a
+  specialisation for a value it does not know.
+
 Unicode names are now scoped by decision 3 rather than contradicting it. The item
 means Unicode spellings drawn from a curated allowlist, aliased to ASCII names in
 the library. It does not mean Sun's full `ID_Start` and `ID_Continue` sets, and

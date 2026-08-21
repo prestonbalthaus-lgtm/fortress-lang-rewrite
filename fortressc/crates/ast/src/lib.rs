@@ -6,7 +6,8 @@ mod nodes;
 pub use nodes::{
     Assign, BinOp, Binding, BlockItem, BoundObligation, CaseArm, Component, Decl, Expr, FieldDecl,
     Fixity, FnDecl, ImportDecl, ImportItems, ImportedName, Member, MethodDecl, Modifiers,
-    ObjectDecl, Param, StaticParam, TraitDecl, TypeCaseArm, TypeRef, UnOp,
+    ObjectDecl, Param, StaticExpr, StaticKind, StaticOp, StaticParam, TraitDecl, TypeCaseArm,
+    TypeRef, UnOp,
 };
 
 /// Byte offsets into the source. Line and column are derived on demand by the
