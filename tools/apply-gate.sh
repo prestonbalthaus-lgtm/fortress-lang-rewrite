@@ -71,7 +71,17 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # Compiled12.b0, Go0b and Library/TypeProxy.fss, a quarter of the Library files
 # that compile at all -- and that is the Object/Any seeding decision, not this
 # one. See docs/superpowers/specs/2026-08-21-template-wellformedness.md.
-COMPILE_FLOOR=284
+# 2026-08-21, SPIKE-OBJECT-ANY-REMEASURE: 285 -> 293, floor 284 to 292. The
+# first count in this file's history to go UP for a semantics change rather than
+# down for an honesty one. `Object` and `Any` are seeded as root traits; the
+# recorded +7 was stale and the number on today's tree is +8 on the full corpus
+# and +7 on `triage --real` (227 -> 234), which is where the old figure came
+# from. Zero lost, zero crashes, and the IR body of all 285 that already
+# compiled is byte for byte unchanged. Four of the eight are verified against
+# the legacy implementation's own recorded output, not merely against exit 0:
+# Compiled9.{Diamond,Multiple,,Redundant}Overriding all print `O.m` and their
+# .test files all say run_out_equals=O.m.
+COMPILE_FLOOR=292
 
 passed=0
 failed=0

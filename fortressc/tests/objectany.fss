@@ -1,0 +1,17 @@
+component objectany
+
+export Executable
+
+(* `Object` and `Any` are 1.0's root traits. Nothing declares them here: they are
+   seeded in Checker::new, so a user trait extends one without importing it. *)
+trait Shape extends Object end
+object Dot extends {Shape} end
+
+describe(x: Object): ZZ32 = 1
+anything(x: Any): ZZ32 = 2
+
+run():()=do
+   println(describe(Dot))
+   println(anything(Dot))
+end
+end

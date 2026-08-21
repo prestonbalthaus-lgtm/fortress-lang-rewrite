@@ -1041,13 +1041,12 @@ fn decl_name(decl: &Decl) -> &str {
 /// The names a declaration header may write: everything the component
 /// declares, plus the builtins.
 ///
-/// `Object` and `Any` are TOLERATED and neither is a type this compiler has.
-/// They are 1.0's root traits, the seeding of them is a queued item that
-/// belongs to somebody else, and refusing them here would take that decision
-/// out of their hands. The cost of the tolerance is measured, not assumed:
-/// refusing the two names costs FOUR more corpus files -- Compiled12.a0,
-/// Compiled12.b0, Go0b and Library/TypeProxy.fss, the last of which is one of
-/// the four Library files that compile end to end at all.
+/// `Object` and `Any` are here because they ARE types now -- SPIKE-OBJECT-ANY-
+/// REMEASURE seeded them as root traits in `Checker::new`. This pass cannot ask
+/// the registry, because it runs BEFORE `Checker::new` builds one, so the two
+/// names are listed rather than looked up. They come out of this list on the
+/// day import resolution can supply them from `LibraryBuiltin/AnyType.fss` and
+/// `CompilerBuiltin.fsi` and the seed is deleted with them.
 fn declared_type_names(component: &Component) -> BTreeSet<String> {
     let mut names: BTreeSet<String> = [
         "ZZ32", "ZZ64", "RR64", "Boolean", "String", "Array", "Any", "Object",

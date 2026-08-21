@@ -379,6 +379,22 @@ impl Checker {
         let mut registry = Registry::default();
         let mut declared: HashMap<&'static str, Span> = HashMap::new();
 
+        // SPIKE-OBJECT-ANY-REMEASURE. TEMPORARY -- a measurement, not a landing.
+        // Seeded into `registry.traits` only and NOT into `declared`: a corpus
+        // file declares `trait Any end` itself and would become "defined twice".
+        registry.traits.insert(
+            intern("Any"),
+            TraitInfo {
+                supertraits: BTreeSet::new(),
+            },
+        );
+        registry.traits.insert(
+            intern("Object"),
+            TraitInfo {
+                supertraits: [intern("Any")].into_iter().collect(),
+            },
+        );
+
         for decl in &component.decls {
             let (name, span) = match decl {
                 Decl::Trait(t) => (intern(&t.name), t.span),
@@ -487,6 +503,22 @@ impl Checker {
                 info.supertraits = closed;
             }
         }
+        // SPIKE: every user trait sits under Object, which sits under Any.
+        let root_any = intern("Any");
+        let root_object = intern("Object");
+        let user_traits: Vec<&'static str> = self
+            .registry
+            .traits
+            .keys()
+            .copied()
+            .filter(|n| *n != root_any && *n != root_object)
+            .collect();
+        for name in user_traits {
+            if let Some(info) = self.registry.traits.get_mut(name) {
+                info.supertraits.insert(root_object);
+                info.supertraits.insert(root_any);
+            }
+        }
 
         for decl in &component.decls {
             let Decl::Object(o) = decl else { continue };
@@ -499,6 +531,9 @@ impl Checker {
                     supertraits.extend(info.supertraits.iter().copied());
                 }
             }
+            // SPIKE: trait closure cannot reach an object with no extends clause.
+            supertraits.insert(intern("Object"));
+            supertraits.insert(intern("Any"));
             let fields = self.object_fields(o)?;
             if let Some(info) = self.registry.objects.get_mut(name) {
                 info.supertraits = supertraits;
