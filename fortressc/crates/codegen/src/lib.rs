@@ -1001,6 +1001,9 @@ impl<'ctx> Lowering<'ctx> {
         let env_type = self.context.struct_type(&field_types, false);
 
         let partials = self.reduction_alloc(loop_.reductions)?;
+        if let Some(block) = partials {
+            self.reduction_init(block, loop_.reductions)?;
+        }
 
         // Scanned, not atomic: a capture may be a String or an Array, and the
         // collector has to see through the environment to it while a worker is
@@ -1161,6 +1164,105 @@ impl<'ctx> Lowering<'ctx> {
     /// the gate pins FORTRESS_WORKERS rather than asserting an equality that is
     /// not true. ZZ32 and ZZ64 are unaffected: two's-complement addition is
     /// associative whatever the grouping, overflow included.
+    /// Every slot to its reduction's identity, before the loop runs.
+    ///
+    /// The runtime memsets the block to zero, which is the identity for `+` and
+    /// `-` on all three reducible types and is NOT the identity for `*`. Doing
+    /// it here instead of there is what lets the identity be a fact about the
+    /// operator rather than about the allocator -- and the allocator has no
+    /// type knowledge to decide it with.
+    fn reduction_init(
+        &mut self,
+        block: PointerValue<'ctx>,
+        reductions: &[TypedReduction],
+    ) -> Result<(), CodegenError> {
+        if reductions.iter().all(|r| r.op == ArithOp::Add) {
+            // The runtime's memset already wrote this one, and emitting a loop
+            // to write zeroes over zeroes would change the IR of every program
+            // that already had a reduction.
+            return Ok(());
+        }
+        let i64t = self.context.i64_type();
+        let workers = self
+            .call_runtime(REDUCTION_WORKERS, &[], true)?
+            .ok_or_else(|| CodegenError::internal("no worker count returned".to_owned()))?
+            .into_int_value();
+        let function = self.current_function()?;
+        let cond_bb = self.context.append_basic_block(function, "init.cond");
+        let body_bb = self.context.append_basic_block(function, "init.body");
+        let end_bb = self.context.append_basic_block(function, "init.end");
+
+        let counter = self.entry_alloca("init.w", i64t.into())?;
+        self.builder
+            .build_store(counter, i64t.const_zero())
+            .map_err(CodegenError::from_builder)?;
+        self.branch_to(cond_bb)?;
+
+        self.builder.position_at_end(cond_bb);
+        let w = self
+            .builder
+            .build_load(i64t, counter, "init.w")
+            .map_err(CodegenError::from_builder)?
+            .into_int_value();
+        let more = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, w, workers, "init.more")
+            .map_err(CodegenError::from_builder)?;
+        self.builder
+            .build_conditional_branch(more, body_bb, end_bb)
+            .map_err(CodegenError::from_builder)?;
+
+        self.builder.position_at_end(body_bb);
+        for (k, reduction) in reductions.iter().enumerate() {
+            let slot = self.reduction_slot(block, w, reductions.len(), k)?;
+            let identity = self.identity_of(reduction)?;
+            self.builder
+                .build_store(slot, identity)
+                .map_err(CodegenError::from_builder)?;
+        }
+        let next = self
+            .builder
+            .build_int_add(w, i64t.const_int(1, false), "init.next")
+            .map_err(CodegenError::from_builder)?;
+        self.builder
+            .build_store(counter, next)
+            .map_err(CodegenError::from_builder)?;
+        self.branch_to(cond_bb)?;
+        self.builder.position_at_end(end_bb);
+        Ok(())
+    }
+
+    /// 0 for `+` and `-`, 1 for `*`, at the reduction's own type.
+    fn identity_of(
+        &self,
+        reduction: &TypedReduction,
+    ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+        let one = reduction.op == ArithOp::Mul;
+        Ok(match reduction.ty {
+            Type::ZZ32 => self
+                .context
+                .i32_type()
+                .const_int(u64::from(one), false)
+                .into(),
+            Type::ZZ64 => self
+                .context
+                .i64_type()
+                .const_int(u64::from(one), false)
+                .into(),
+            Type::RR64 => self
+                .context
+                .f64_type()
+                .const_float(if one { 1.0 } else { 0.0 })
+                .into(),
+            other => {
+                return Err(CodegenError::internal(format!(
+                    "`{}` is not a reducible type",
+                    other.name()
+                )))
+            }
+        })
+    }
+
     fn reduction_merge(
         &mut self,
         block: PointerValue<'ctx>,
@@ -1218,10 +1320,11 @@ impl<'ctx> Lowering<'ctx> {
                 .builder
                 .build_load(ty, target, &reduction.name)
                 .map_err(CodegenError::from_builder)?;
-            // `+` for both operators: `-=` accumulated `Identity - e`, so the
-            // group inverse is already inside the partial and there is no
-            // second accumulator kind.
-            let merged = self.arith(ArithOp::Add, reduction.ty, current, partial)?;
+            // The reduction's OWN operator. `+=` and `-=` share `Add` -- `-=`
+            // accumulated `Identity - e`, so the group inverse is already
+            // inside the partial -- and `*=` folds with `Mul`, because adding
+            // the partials of a product is not a product.
+            let merged = self.arith(reduction.op, reduction.ty, current, partial)?;
             self.builder
                 .build_store(target, merged)
                 .map_err(CodegenError::from_builder)?;

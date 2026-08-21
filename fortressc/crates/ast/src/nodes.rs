@@ -444,6 +444,27 @@ pub enum Expr {
         body: Box<Expr>,
         span: Span,
     },
+    /// `SUM[i <- lo:hi] e`, and the same for `PROD`. A BIG reduction over a
+    /// RANGE, which `reductions.tex:60-77` desugars to
+    /// `do var r = identity; for i <- lo:hi do r OP= e end; r end` -- a shape
+    /// M5's reduction pipeline already implements, so this needs no `Reduction`
+    /// trait, no generator protocol and no closure.
+    ///
+    /// It is a NODE rather than a parser desugaring for one reason: the
+    /// accumulator's type is the BODY's type, and the parser does not know it.
+    /// `SUM[i <- 1:10] i` accumulates ZZ64, because a loop binder is ZZ64.
+    BigReduction {
+        /// `Add` for SUM, `Mul` for PROD. The identity and the merge both come
+        /// from it.
+        op: BinOp,
+        binder: String,
+        lo: Box<Expr>,
+        hi: Box<Expr>,
+        inclusive: bool,
+        sequential: bool,
+        body: Box<Expr>,
+        span: Span,
+    },
     /// `fn (x: T): R => e`. An anonymous function, and the FIRST expression in
     /// this language whose value is a function.
     ///
@@ -551,6 +572,7 @@ impl Expr {
             | Self::TypeCase { span, .. }
             | Self::Label { span, .. }
             | Self::Lambda { span, .. }
+            | Self::BigReduction { span, .. }
             | Self::Exit { span, .. }
             | Self::Instantiate { span, .. } => *span,
         }

@@ -758,6 +758,21 @@ impl Pass {
             // written return type is the only other source, and `lambda` is
             // where that is decided.
             Expr::Lambda { .. } => self.lambda(e, None, scope),
+            Expr::BigReduction {
+                binder,
+                lo,
+                hi,
+                body,
+                ..
+            } => {
+                self.rewrite_expr(lo, scope)?;
+                self.rewrite_expr(hi, scope)?;
+                scope.push();
+                scope.declare_opaque(binder);
+                let result = self.rewrite_expr(body, scope);
+                scope.pop();
+                result
+            }
             Expr::Exit { value, .. } => match value {
                 Some(e) => self.rewrite_expr(e, scope),
                 None => Ok(()),
@@ -1015,6 +1030,19 @@ fn free_names(e: &Expr, bound: &mut Vec<BTreeSet<String>>, out: &mut BTreeSet<St
             free_names(else_arm, bound, out);
         }
         Expr::Label { body, .. } => free_names(body, bound, out),
+        Expr::BigReduction {
+            binder,
+            lo,
+            hi,
+            body,
+            ..
+        } => {
+            free_names(lo, bound, out);
+            free_names(hi, bound, out);
+            bound.push([binder.clone()].into_iter().collect());
+            free_names(body, bound, out);
+            bound.pop();
+        }
         Expr::Exit { value, .. } => {
             if let Some(e) = value {
                 free_names(e, bound, out);

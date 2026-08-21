@@ -53,6 +53,12 @@ pub enum ParseError {
         span: Span,
         form: &'static str,
     },
+    /// `MAX[i <- a:b] e` and `MIN` likewise. Recognised so that they are
+    /// refused by name rather than read as a subscript.
+    BigReductionUnsupported {
+        span: Span,
+        name: String,
+    },
 }
 
 impl ParseError {
@@ -66,7 +72,8 @@ impl ParseError {
             | Self::LocalFunctionDeclarationUnsupported { span }
             | Self::ChainedOperatorsDiffer { span, .. }
             | Self::CaseFormUnsupported { span, .. }
-            | Self::LambdaFormUnsupported { span, .. } => Some(*span),
+            | Self::LambdaFormUnsupported { span, .. }
+            | Self::BigReductionUnsupported { span, .. } => Some(*span),
             Self::UnexpectedEndOfInput { .. } => None,
         }
     }
@@ -127,6 +134,14 @@ impl core::fmt::Display for ParseError {
                 f,
                 "{}..{}: `fn` with {form} is not implemented; write \
                  `fn (x: T): R => ...` with every parameter typed",
+                span.start, span.end
+            ),
+            Self::BigReductionUnsupported { span, name } => write!(
+                f,
+                "{}..{}: `{name}` over a range needs an identity element that \
+                 is the type's own extremum rather than zero, and a merge \
+                 operator the accumulator does not carry; only `SUM` and \
+                 `PROD` are lowered",
                 span.start, span.end
             ),
             Self::CaseFormUnsupported { span, form } => write!(

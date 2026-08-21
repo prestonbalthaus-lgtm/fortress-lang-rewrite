@@ -668,6 +668,12 @@ pub struct TypedCapture {
 pub struct TypedReduction {
     pub name: String,
     pub ty: Type,
+    /// What the partials are folded with, and what each slot is initialised to.
+    /// `+` and `-` share `Add` -- `-=` accumulates `Identity - e`, so the group
+    /// inverse is already inside the partial -- and `*` is its own, because 0
+    /// is not the identity for it and adding the partials of a product is not
+    /// a product.
+    pub op: ArithOp,
 }
 
 #[derive(Debug, Clone, PartialEq)]

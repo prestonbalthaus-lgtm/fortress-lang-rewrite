@@ -1,0 +1,41 @@
+component bigreduction
+
+export Executable
+
+(* SPIKE-BIG-OVER-RANGES. `reductions.tex:60-77` desugars `SUM[v <- g] e` into
+   `do var r = identity; for v <- g do r += e end; r end` -- which is EXACTLY the
+   shape M5's recogniser already turns into a per-worker private accumulator. So
+   these sites need no `Reduction` trait, no generator protocol and no closure,
+   which is why the gap analysis calls this the one separable part of the
+   generator chain.
+
+   THE ACCUMULATOR'S TYPE IS THE BODY'S. `SUM[i <- 1:10] i` accumulates ZZ64,
+   because a loop binder is ZZ64 -- and that is why the desugaring is in the
+   checker rather than the parser, which cannot know it. A context supplies it
+   instead when there is one, which is the `total: ZZ32` line below. *)
+
+run(): () = do
+    println(SUM[i <- 1:10] i)
+    println(SUM[i <- 0#5] i i)
+
+    (* `seq(...)` is the corpus's most common spelling. It takes the same
+       generator parser `for` does, and a sequential loop writes the
+       accumulator directly rather than through per-worker slots -- the
+       recogniser only fires on a parallel loop. Both answers are the same. *)
+    println(SUM[i <- seq(1:10)] i)
+
+    (* `BIG` is optional and the corpus writes both. *)
+    println(BIG SUM[i <- 1:100] 1)
+
+    (* PROD is the operator that proves the accumulator carries its own: the
+       identity is 1 and the partials fold with `*`. With the `+` merge and a
+       zero identity this line printed 1. *)
+    println(PROD[i <- 1:5] i)
+    println(PROD[i <- seq(1:5)] i)
+
+    total: ZZ32 = SUM[i <- 1:10] 1
+    println(total)
+
+    println(SUM[i <- 0#1000000] i)
+end
+end

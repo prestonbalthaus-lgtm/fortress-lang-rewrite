@@ -1669,3 +1669,42 @@ fn a_lambda_may_not_capture_self() {
     let message = refusal("badlambdaself.fss");
     assert!(message.contains("may not close over `self`"), "{message}");
 }
+
+// -------------------------------------------------- BIG over ranges
+
+/// SPIKE-BIG-OVER-RANGES. `reductions.tex:60-77` desugars `SUM[v <- g] e` into
+/// `do var r = identity; for v <- g do r += e end; r end`, which is EXACTLY the
+/// shape M5's recogniser already turns into a per-worker private accumulator.
+/// No `Reduction` trait, no generator protocol, no closure.
+///
+/// EXACT AT EVERY WORKER COUNT, which is the whole assertion: a reduction that
+/// is right at one worker and wrong at sixteen is the signature this project
+/// has measured twice, and the PROD line is the one that had it -- with the
+/// zero identity and the `+` merge it printed 1.
+#[test]
+fn a_big_reduction_over_a_range_is_exact_at_every_worker_count() {
+    let binary = compile_fixture("bigreduction.fss", "bigreduction");
+    for workers in ["1", "2", "8", "16"] {
+        let out = Command::new(&binary)
+            .env("FORTRESS_WORKERS", workers)
+            .output()
+            .expect("could not run the produced binary");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "55\n30\n55\n100\n120\n120\n10\n499999500000\n",
+            "at FORTRESS_WORKERS={workers}"
+        );
+        assert_eq!(out.status.code(), Some(0));
+    }
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// MAX and MIN are recognised so that they are refused BY NAME rather than read
+/// as a subscript. Their identity is the type's own extremum rather than a zero
+/// bit pattern, and the accumulator carries no operator that could fold them --
+/// guessing zero would make a MAX over negative numbers quietly wrong.
+#[test]
+fn a_big_max_is_refused_by_name_rather_than_read_as_a_subscript() {
+    let message = refusal("badbigmax.fss");
+    assert!(message.contains("identity element"), "{message}");
+}

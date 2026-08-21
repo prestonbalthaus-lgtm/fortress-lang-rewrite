@@ -23,6 +23,20 @@ use fortress_lexer::{Kind, Token};
 
 type Parsed<T> = Result<T, ParseError>;
 
+/// The BIG reduction operators this lowering recognises at all. `MAX` and
+/// `MIN` are here so that they are refused BY NAME rather than read as a
+/// subscript, which is what they are today.
+const BIG_OPERATORS: [&str; 4] = ["SUM", "PROD", "MAX", "MIN"];
+
+/// One `i <- lo:hi` clause. `for` and a BIG reduction share the parser for it.
+struct Generator {
+    binder: String,
+    lo: Expr,
+    hi: Expr,
+    inclusive: bool,
+    sequential: bool,
+}
+
 /// A parenthesised type is the type itself, but its span covers the
 /// parentheses, so a diagnostic points at what was written.
 fn widen(t: TypeRef, span: Span) -> TypeRef {
@@ -1451,16 +1465,76 @@ impl<'t, 'a> Parser<'t, 'a> {
         }
     }
 
-    /// `for i <- generator do body end`.
+    /// Whether a BIG reduction starts `offset` tokens ahead: one of the four
+    /// operator names, then a `[` GLUED to it.
     ///
-    /// `<-` is NOT a token and does not need to be: it is `Lt` glued to
-    /// `Minus`, decided by span adjacency exactly as `->` already is in
-    /// `type_ref`. Adding a token would change how every file in the corpus
-    /// lexes, for nothing.
-    fn for_expr(&mut self) -> Parsed<Expr> {
+    /// The glue is what separates `SUM[i <- 1:10]` from `SUM [i]`, which is a
+    /// juxtaposition, exactly as `f(x)` is separated from `f (x)`. And `[\` is
+    /// its own token, so `SUM[\Number\]` -- the static-argument form, 58 corpus
+    /// sites -- cannot be mistaken for one of these.
+    fn big_reduction_here(&self, offset: usize) -> bool {
+        let named = matches!(
+            self.peek_ahead(offset),
+            Some(Kind::Ident(name)) if BIG_OPERATORS.contains(name)
+        );
+        named
+            && matches!(self.peek_ahead(offset + 1), Some(Kind::LBracket))
+            && self.glued_left(self.pos + offset + 1)
+    }
+
+    /// `SUM[i <- lo:hi] e`, and `PROD` likewise.
+    ///
+    /// `MAX` and `MIN` are recognised and REFUSED by name. Their identity is
+    /// the type's own extremum rather than a zero bit pattern, and the merge
+    /// would need an operator the accumulator does not carry; guessing zero
+    /// there would make `MAX` over negative numbers quietly wrong, which is the
+    /// class this compiler refuses to join.
+    fn big_reduction(&mut self) -> Parsed<Expr> {
         let start = self.span_here();
-        self.pos += 1; // `for`
+        if self.at(&Kind::Reserved("BIG")) {
+            self.pos += 1;
+        }
+        let (name, name_span) = self.identifier("a reduction operator")?;
+        let op = match name.as_str() {
+            "SUM" => BinOp::Add,
+            "PROD" => BinOp::Mul,
+            other => {
+                return Err(ParseError::BigReductionUnsupported {
+                    span: name_span,
+                    name: other.to_owned(),
+                })
+            }
+        };
+        self.expect(&Kind::LBracket, "`[`")?;
         self.skip_newlines();
+        let Generator {
+            binder,
+            lo,
+            hi,
+            inclusive,
+            sequential,
+        } = self.generator_clause()?;
+        self.skip_newlines();
+        self.expect(&Kind::RBracket, "`]` to close the generator")?;
+        self.skip_newlines();
+        let body = self.expr()?;
+        let span = Span::new(start.start, body.span().end);
+        Ok(Expr::BigReduction {
+            op,
+            binder,
+            lo: Box::new(lo),
+            hi: Box::new(hi),
+            inclusive,
+            sequential,
+            body: Box::new(body),
+            span,
+        })
+    }
+
+    /// `i <- lo:hi`, `i <- lo#n`, and either wrapped in `seq(...)`. ONE
+    /// implementation, because `for` and a BIG reduction accept exactly the
+    /// same generator and a second copy is a second place for them to drift.
+    fn generator_clause(&mut self) -> Parsed<Generator> {
         let (binder, _) = self.identifier("a loop variable")?;
         self.skip_newlines();
         if !self.at_left_arrow() {
@@ -1494,6 +1568,32 @@ impl<'t, 'a> Parser<'t, 'a> {
         if sequential {
             self.expect(&Kind::RParen, "`)` to close `seq(`")?;
         }
+        Ok(Generator {
+            binder,
+            lo,
+            hi,
+            inclusive,
+            sequential,
+        })
+    }
+
+    /// `for i <- generator do body end`.
+    ///
+    /// `<-` is NOT a token and does not need to be: it is `Lt` glued to
+    /// `Minus`, decided by span adjacency exactly as `->` already is in
+    /// `type_ref`. Adding a token would change how every file in the corpus
+    /// lexes, for nothing.
+    fn for_expr(&mut self) -> Parsed<Expr> {
+        let start = self.span_here();
+        self.pos += 1; // `for`
+        self.skip_newlines();
+        let Generator {
+            binder,
+            lo,
+            hi,
+            inclusive,
+            sequential,
+        } = self.generator_clause()?;
         self.skip_newlines();
         self.expect(&Kind::KwDo, "`do`")?;
         let body = self.block_body(&[Kind::KwEnd])?;
@@ -1685,6 +1785,9 @@ impl<'t, 'a> Parser<'t, 'a> {
                 self.pos += 1;
                 Ok(Expr::BoolLit { value: false, span })
             }
+            // Before the plain name arm: `SUM[i <- 1:10] e` is a reduction and
+            // `SUM[i]` is a subscript, and only the guard tells them apart.
+            Kind::Ident(_) if self.big_reduction_here(0) => self.big_reduction(),
             Kind::Ident(name) => {
                 let name = (*name).to_owned();
                 self.pos += 1;
@@ -1749,6 +1852,9 @@ impl<'t, 'a> Parser<'t, 'a> {
             Kind::Reserved("label") => self.label_expr(),
             Kind::Reserved("exit") => self.exit_expr(),
             Kind::Reserved("fn") => self.lambda_expr(),
+            // `BIG SUM[i <- 1:10] e`. `BIG` is a reserved word and optional in
+            // the corpus, which writes both spellings.
+            Kind::Reserved("BIG") if self.big_reduction_here(1) => self.big_reduction(),
             Kind::Reserved(word) => Err(ParseError::ReservedWord {
                 span,
                 word: (*word).to_owned(),

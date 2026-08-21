@@ -93,6 +93,7 @@ struct SelfCtx {
 }
 
 /// One parallel loop being checked.
+#[derive(Clone)]
 struct LoopCtx {
     binder: String,
     /// A `seq(...)` loop runs in order on one thread, so the scope boundary
@@ -134,13 +135,18 @@ struct LabelCtx {
 /// What the body did to one escaping name, collected across the whole walk.
 /// The verdict cannot be reached at the assignment: reduction.tex:35 asks
 /// whether the name is otherwise READ, and the read may not have happened yet.
+#[derive(Clone)]
 struct AssignRecord {
     ty: Type,
     /// The first assignment, which is what a failed recogniser points at.
     span: Span,
-    /// Every assignment to this name was `+=` or `-=` -- reduction.tex:30-31.
-    /// One `l := e` disqualifies it for good.
+    /// Every assignment to this name was compound -- reduction.tex:30-31. One
+    /// `l := e` disqualifies it for good.
     only_compound: bool,
+    /// What the partials must be folded with. `+=` and `-=` agree on `Add`;
+    /// `*=` is `Mul`. `None` once two assignments disagree, which disqualifies
+    /// the name: one accumulator cannot be both.
+    merge: Option<ArithOp>,
     /// Every assignment to this name was inside an `atomic`. That is the other
     /// carve-out, and it is the one that actually takes the lock.
     all_atomic: bool,
@@ -313,6 +319,21 @@ fn more_specific(a: &Signature, b: &Signature, registry: &Registry) -> bool {
 /// The original comment here said the concession was for a generic trait's own
 /// static parameter. That reason is dead: `mono::emit` never emits a template,
 /// only its instances, so a bare static parameter cannot reach this pass at all.
+/// What the per-worker partials of a compound assignment are folded with.
+///
+/// `+=` and `-=` share `Add` on purpose, and it is not a simplification: `-=`
+/// accumulates `Identity - e` into a slot that starts at the identity, so the
+/// group inverse is ALREADY INSIDE the partial. Folding with `Sub` would take
+/// it back out. `*=` is its own, because 0 is not the identity for it and the
+/// sum of partial products is not a product.
+const fn merge_op(op: ArithOp) -> ArithOp {
+    match op {
+        ArithOp::Add | ArithOp::Sub => ArithOp::Add,
+        ArithOp::Mul => ArithOp::Mul,
+        ArithOp::Div => ArithOp::Div,
+    }
+}
+
 fn excusable(e: &TypeError, abstract_: bool) -> bool {
     abstract_
         && matches!(
@@ -1652,7 +1673,13 @@ impl Checker {
     /// resolves below. The counterpart to `lookup_capturing`, and it exists
     /// because `assign` reads its target with `lookup`, which records nothing:
     /// a name the body only writes has no crossing READ to notice.
-    fn record_assignment(&mut self, name: &str, compound: bool, in_atomic: bool, span: Span) {
+    fn record_assignment(
+        &mut self,
+        name: &str,
+        compound: Option<ArithOp>,
+        in_atomic: bool,
+        span: Span,
+    ) {
         let Some(depth) = self.depth_of(name) else {
             return;
         };
@@ -1667,9 +1694,16 @@ impl Checker {
                 ty,
                 span,
                 only_compound: true,
+                merge: compound,
                 all_atomic: true,
             });
-            record.only_compound &= compound;
+            record.only_compound &= compound.is_some();
+            // Two assignments that disagree about the operator cannot share one
+            // accumulator, and folding a product with `+` is the silent wrong
+            // answer this carries.
+            if record.merge != compound {
+                record.merge = None;
+            }
             record.all_atomic &= in_atomic;
         }
     }
@@ -1798,6 +1832,26 @@ impl Checker {
                 span,
             } => self.typecase_expr(subject, arms, else_arm, *span, expected),
             Expr::Label { name, body, span } => self.label_expr(name, body, *span, expected),
+            Expr::BigReduction {
+                op,
+                binder,
+                lo,
+                hi,
+                inclusive,
+                sequential,
+                body,
+                span,
+            } => self.big_reduction(
+                *op,
+                binder,
+                lo,
+                hi,
+                *inclusive,
+                *sequential,
+                body,
+                *span,
+                expected,
+            ),
             // Unreachable: closure lowering runs before the checker and either
             // rewrites a lambda into a construction or refuses it by name.
             Expr::Lambda { span, .. } => Err(TypeError::LambdaUnsupported {
@@ -2117,12 +2171,14 @@ impl Checker {
         for (name, record) in ctx.assigned {
             let recognised = !sequential
                 && record.only_compound
+                && record.merge.is_some()
                 && !ctx.captures.contains_key(&name)
                 && Self::reducible(record.ty);
-            if recognised {
+            if let (true, Some(op)) = (recognised, record.merge) {
                 reductions.push(TypedReduction {
                     name,
                     ty: record.ty,
+                    op,
                 });
                 continue;
             }
@@ -2223,6 +2279,11 @@ impl Checker {
         let arith = match op {
             BinOp::Add => ArithOp::Add,
             BinOp::Sub => ArithOp::Sub,
+            // Reachable only from a `PROD` reduction: `*=` is not a compound
+            // operator this parser reads, deliberately, because the corpus
+            // writes none. The accumulator carries its own operator, so the
+            // merge folds with `*` and the identity is 1.
+            BinOp::Mul => ArithOp::Mul,
             _ => {
                 return Err(TypeError::CompoundOperatorUnsupported {
                     span,
@@ -2360,6 +2421,11 @@ impl Checker {
             }
             Expr::Label { body, .. } => self.reads_shared(body, floor),
             Expr::Lambda { body, .. } => self.reads_shared(body, floor),
+            Expr::BigReduction { lo, hi, body, .. } => {
+                self.reads_shared(lo, floor)
+                    || self.reads_shared(hi, floor)
+                    || self.reads_shared(body, floor)
+            }
             Expr::Exit { value, .. } => value
                 .as_deref()
                 .is_some_and(|e| self.reads_shared(e, floor)),
@@ -2384,7 +2450,17 @@ impl Checker {
         // exactly these two maps and a write-only name appears in neither
         // otherwise.
         if let Expr::Var { name, .. } = &a.target {
-            self.record_assignment(name, a.op.is_some(), in_atomic, a.span);
+            // The MERGE operator, not the assignment's own: `-=` accumulates
+            // `Identity - e`, so the group inverse is already inside the
+            // partial and the fold is `+`. Recording `Sub` here folds it back
+            // out -- 1000 - (-100000) = 101000 where -99000 belongs, which is
+            // what tools/atomic-gate.sh's two-reduction case measures.
+            let compound = self
+                .lookup(name)
+                .and_then(|local| self.compound_op(a.op, local.ty, a.span).ok())
+                .flatten()
+                .map(merge_op);
+            self.record_assignment(name, compound, in_atomic, a.span);
         }
         // THE scope boundary, and it is still one comparison. Everything M4
         // claims about data races reduces to this: a parallel body may only
@@ -4299,6 +4375,138 @@ impl Checker {
                 .collect(),
             _ => Vec::new(),
         }
+    }
+
+    /// `SUM[i <- lo:hi] e`, lowered onto the M5 accumulator and nothing else.
+    ///
+    /// `reductions.tex:60-77` desugars it to
+    /// `do var r = identity; for i <- lo:hi do r OP= e end; r end`, which is
+    /// EXACTLY the shape M5's recogniser already turns into a per-worker
+    /// private accumulator. So this needs no `Reduction` trait, no generator
+    /// protocol and no closure -- which is why the gap analysis calls it the
+    /// one separable part of the generator chain.
+    ///
+    /// THE ACCUMULATOR'S TYPE IS THE BODY'S, and that is why the desugaring is
+    /// here rather than in the parser: `SUM[i <- 1:10] i` accumulates ZZ64,
+    /// because a loop binder is ZZ64, and the parser cannot know that. The
+    /// context supplies it when there is one -- `total: ZZ32 = SUM[...]` -- and
+    /// otherwise the body is walked SPECULATIVELY for its type alone.
+    #[allow(clippy::too_many_arguments)]
+    fn big_reduction(
+        &mut self,
+        op: BinOp,
+        binder: &str,
+        lo: &Expr,
+        hi: &Expr,
+        inclusive: bool,
+        sequential: bool,
+        body: &Expr,
+        span: Span,
+        expected: Option<Type>,
+    ) -> Checked<TypedExpr> {
+        let ty = match expected {
+            Some(t) if Self::reducible(t) => t,
+            _ => self.probe_type(body, binder, span)?,
+        };
+        if !Self::reducible(ty) {
+            return Err(TypeError::Mismatch {
+                span,
+                found: ty,
+                required: Type::ZZ64,
+            });
+        }
+        let name = format!("$big{}", self.cases);
+        self.cases = self.cases.saturating_add(1);
+
+        let identity = match (op, ty) {
+            (BinOp::Mul, Type::RR64) => Expr::FloatLit {
+                int_digits: "1".to_owned(),
+                frac_digits: "0".to_owned(),
+                span,
+            },
+            (BinOp::Mul, _) => Expr::IntLit {
+                digits: "1".to_owned(),
+                span,
+            },
+            (_, Type::RR64) => Expr::FloatLit {
+                int_digits: "0".to_owned(),
+                frac_digits: "0".to_owned(),
+                span,
+            },
+            _ => Expr::IntLit {
+                digits: "0".to_owned(),
+                span,
+            },
+        };
+        let desugared = Expr::Block {
+            items: vec![
+                BlockItem::Binding(fortress_ast::Binding {
+                    name: name.clone(),
+                    // WRITTEN, not inferred: an unannotated `0` is ZZ32 and the
+                    // body is usually ZZ64, so the accumulator has to say what
+                    // it is.
+                    ty: Some(TypeRef::Named {
+                        name: ty.name().to_owned(),
+                        args: Vec::new(),
+                        span,
+                    }),
+                    value: identity,
+                    mutable: true,
+                    span,
+                }),
+                BlockItem::Expr(Expr::For {
+                    binder: binder.to_owned(),
+                    lo: Box::new(lo.clone()),
+                    hi: Box::new(hi.clone()),
+                    inclusive,
+                    sequential,
+                    body: Box::new(Expr::Block {
+                        items: vec![BlockItem::Assign(Assign {
+                            target: Expr::Var {
+                                name: name.clone(),
+                                span,
+                            },
+                            op: Some(op),
+                            value: body.clone(),
+                            span,
+                        })],
+                        span,
+                    }),
+                    span,
+                }),
+                BlockItem::Expr(Expr::Var { name, span }),
+            ],
+            span,
+        };
+        self.expr(&desugared, expected)
+    }
+
+    /// The type of an expression, walked for that alone.
+    ///
+    /// The walk has side effects -- it memoises dispatch tables, numbers
+    /// outlined loop bodies, and records captures into an enclosing loop
+    /// context -- so the two that would be WRONG to keep are saved and put
+    /// back. A memoised dispatch table is not one of them: the real walk
+    /// computes the same table from the same types, and `or_insert_with` keeps
+    /// the first.
+    fn probe_type(&mut self, body: &Expr, binder: &str, span: Span) -> Checked<Type> {
+        let loops = self.loops;
+        let saved = self.loop_ctx.clone();
+        let mut scope = HashMap::new();
+        scope.insert(
+            binder.to_owned(),
+            Local {
+                ty: Type::ZZ64,
+                mutable: false,
+            },
+        );
+        self.scopes.push(scope);
+        let probed = self.expr(body, None);
+        self.scopes.pop();
+        self.loops = loops;
+        self.loop_ctx = saved;
+        let _ = span;
+        Ok(probed?.ty)
     }
 
     /// `label L ... end L`. The label's type is fixed by the FIRST `exit` that

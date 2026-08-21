@@ -109,6 +109,9 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
                     fortress_parser::ParseError::LambdaFormUnsupported { form, .. } => {
                         format!("lambda form: {form}")
                     }
+                    fortress_parser::ParseError::BigReductionUnsupported { name, .. } => {
+                        format!("BIG reduction `{name}`")
+                    }
                 };
                 *blockers.entry(label).or_default() += 1;
             }
