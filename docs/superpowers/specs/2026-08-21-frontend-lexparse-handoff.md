@@ -23,7 +23,7 @@ tests (below).
 Every commit carries its own list diff, IR diff and floor ratchet. Floors are
 now lexer 1845, parser 839.
 
-## The three things somebody else has to act on
+## The four things somebody else has to act on
 
 ### 1. `apply-gate.sh`'s COMPILE_FLOOR has no margin, and I must not touch it
 
@@ -67,7 +67,25 @@ and two lost, one of them a must-fail.
 baselines right now, and flipping it on re-bases every one of them silently.
 Turning it on is a decision for whoever owns the instruments.
 
-### 3. A parser collision with `fix/semantics-correctness`
+### 3. `dispatch-gate.sh` is RED, one hardcoded string, and I did not fix it
+
+`tools/dispatch-gate.sh:233` asserts the ambiguity diagnostic contains
+`is ambiguous for (OL, OR)`. `OL` and `OR` are operator words under
+`lexical-structure.tex:1167-1172` -- `OR` is literally the disjunction operator --
+so neither can be an object name any more. `fortressc/tests/ambiguous.fss` and
+the same program inline in `crates/types/tests/types.rs` were renamed to `OLeft`
+and `ORight`, and both suites are green; the gate still expects the old names, so
+it reports **34/1**.
+
+Every other gate is green: apply 21/0, array 16/0, atomic 28/0, generics 24/0,
+memory 17/0, operator 25/0, parallel 26/0, unit 15/0. (`mpi-gate` needs an
+Apptainer image that is not built here.)
+
+The fix is one string, but it is in `tools/` and the brief put testing gates out
+of my lane -- and the owner may prefer to move the fixture rather than the
+expectation. Flagged rather than edited.
+
+### 4. A parser collision with `fix/semantics-correctness`
 
 That branch carries `7ed9e4230 fix(parser): a where clause is parsed, and one of
 its thirteen forms is implemented`. This branch also touches `skip_where`: it
