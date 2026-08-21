@@ -152,9 +152,11 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
     // parameters between an enclosing operator's opener and its operand, an
     // encloser with no operand at all, and a closing half that need not match
     // the opening half in length.
-    // The named `end` took it 749 -> 758.
+    // The named `end` took it 749 -> 758, and continuation-line declaration
+    // headers -- static parameters, parameter list, return type, `where` and
+    // `throws`, each on the line below what it belongs to -- took it 758 -> 766.
     assert!(
-        parsed >= 758,
-        "parser corpus regressed: {parsed} files parse, floor is 758"
+        parsed >= 766,
+        "parser corpus regressed: {parsed} files parse, floor is 766"
     );
 }

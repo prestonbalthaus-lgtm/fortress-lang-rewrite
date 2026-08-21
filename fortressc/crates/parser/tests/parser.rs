@@ -1256,3 +1256,78 @@ fn a_block_end_takes_no_name() {
     let c = component("component t\nf() = do 1 end\ng() = 2\nend\n");
     assert_eq!(c.decls.len(), 2);
 }
+
+// -------------------------------------------- continuation-line declarations
+
+/// `NamedFnHeaderFront = Id (w StaticParams)? w ValParam` and
+/// `FnHeaderClause = (w NoNewlineIsType)? FnClauses`. Every `w` there is
+/// may-newline, and the library writes long headers across lines --
+/// `Library/FortressLibrary.fsi:305` breaks before the parameter list,
+/// `Library/RangeInternals.fsi:576` before the static parameters,
+/// `Library/Set.fsi:63` before the return type.
+#[test]
+fn a_declaration_header_may_break_across_lines() {
+    for src in [
+        "api t\nf\n(x: ZZ32): ZZ32\nend\n",
+        "api t\nf[\\T\\]\n(x: T): T\nend\n",
+        "api t\nf\n[\\T\\](x: T): T\nend\n",
+        "api t\nf(x: ZZ32):\n    ZZ32\nend\n",
+        "api t\nf(x: ZZ32)\n    : ZZ32\nend\n",
+        "api t\nopr juxtaposition\n    (self, b: ZZ32): ZZ32\nend\n",
+        "api t\ntrait A\n[\\T\\] end\nend\n",
+        "api t\ntrait A\n    f(x: ZZ32):\n        ZZ32\nend\nend\n",
+    ] {
+        let tokens = fortress_lexer::lex(src).unwrap_or_else(|e| panic!("lex failed: {e}"));
+        assert!(parse(&tokens).is_ok(), "should parse:\n{src}");
+    }
+}
+
+/// The newlines may only be eaten when the optional clause is really there.
+/// Without that test the separator disappears and two declarations become one.
+#[test]
+fn a_missing_optional_clause_leaves_the_separator_alone() {
+    let c = component("api t\nf(x: ZZ32)\ng(y: ZZ32)\nend\n");
+    assert_eq!(c.decls.len(), 2);
+}
+
+/// `FnClause = w Where / w Throws`. The diagnostic before this was
+/// `expected a field or method name, found KwWhere`, which names a mechanism a
+/// `where` clause is not: it is not a member at all.
+#[test]
+fn where_and_throws_may_sit_on_the_line_below_the_header() {
+    for src in [
+        "api t\ntrait A end\nf[\\T\\](x: T): T\n    where { T extends A }\nend\n",
+        "api t\nf(x: ZZ32): ZZ32\n    throws NotFound\nend\n",
+        "api t\ntrait C\n    getter get(): ZZ32 throws NotFound\nend\nend\n",
+    ] {
+        let tokens = fortress_lexer::lex(src).unwrap_or_else(|e| panic!("lex failed: {e}"));
+        assert!(parse(&tokens).is_ok(), "should parse:\n{src}");
+    }
+}
+
+/// `NoNewlineHeader.rats:48-52` gives `where` two shapes and only the
+/// brace-only one parsed. `Library/PrefixMap.fsi` needs the bracket form.
+#[test]
+fn a_where_clause_may_bind_in_brackets() {
+    for src in [
+        "api t\ntrait A end\nf[\\T\\](x: T): T where [\\ T \\]\nend\n",
+        "api t\ntrait A end\nf[\\T\\](x: T): T where [\\ T \\] { T extends A }\nend\n",
+    ] {
+        let tokens = fortress_lexer::lex(src).unwrap_or_else(|e| panic!("lex failed: {e}"));
+        assert!(parse(&tokens).is_ok(), "should parse:\n{src}");
+    }
+}
+
+/// The clause is SKIPPED, not parsed, so nothing inside it is checked -- which
+/// is exactly why the kinds M3d locked out have to be refused here as well.
+/// `[\nat n\]` refused and `where [\nat n\]` accepted would be one rule with
+/// two answers.
+#[test]
+fn a_where_binding_refuses_the_kinds_a_static_parameter_list_refuses() {
+    let src = "api t\ntrait T where [\\ nat n \\]\nend\nend\n";
+    let tokens = fortress_lexer::lex(src).unwrap_or_else(|e| panic!("lex failed: {e}"));
+    match parse(&tokens) {
+        Err(ParseError::StaticParameterKindUnsupported { kind, .. }) => assert_eq!(kind, "nat"),
+        other => panic!("expected a `nat` refusal, got {other:?}"),
+    }
+}

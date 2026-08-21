@@ -164,6 +164,31 @@ impl<'t, 'a> Parser<'t, 'a> {
     }
 
     /// A `w`/`wr` context: newlines carry no meaning here.
+    /// True when `kind` is the next token that is not a newline.
+    ///
+    /// This is what the grammar's `w` means in front of an OPTIONAL clause --
+    /// `FnHeaderClause = (w NoNewlineIsType)? FnClauses`, `FnClause = w Where`,
+    /// `Id (w StaticParams)? w ValParam`. The newlines may only be consumed if
+    /// the clause is really there: if it is not, they are the statement
+    /// separator and eating them merges two declarations into one.
+    fn at_across_newlines(&self, kind: &Kind<'_>) -> bool {
+        let mut index = self.pos;
+        while matches!(self.tokens.get(index).map(|t| &t.kind), Some(Kind::Newline)) {
+            index += 1;
+        }
+        self.tokens.get(index).map(|t| &t.kind) == Some(kind)
+    }
+
+    /// `w` in front of an optional clause: skip the newlines only when the
+    /// clause follows them.
+    fn skip_newlines_before(&mut self, kind: &Kind<'_>) -> bool {
+        if !self.at_across_newlines(kind) {
+            return false;
+        }
+        self.skip_newlines();
+        true
+    }
+
     fn skip_newlines(&mut self) {
         while self.at(&Kind::Newline) {
             self.pos += 1;
@@ -418,6 +443,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         let (name, name_span) = self.identifier("a value name")?;
         let ty = if self.at(&Kind::Colon) {
             self.pos += 1;
+            self.skip_newlines();
             Some(self.type_ref()?)
         } else {
             None
@@ -458,6 +484,7 @@ impl<'t, 'a> Parser<'t, 'a> {
     fn trait_decl(&mut self, modifiers: Modifiers) -> Parsed<TraitDecl> {
         let start = self.expect(&Kind::KwTrait, "`trait`")?.span;
         let (name, _) = self.identifier("a trait name")?;
+        self.skip_newlines_before(&Kind::LGeneric);
         let static_params = self.static_params()?;
         let (extends, comprises, excludes) = self.topology_clauses()?;
         self.skip_where()?;
@@ -480,6 +507,7 @@ impl<'t, 'a> Parser<'t, 'a> {
     fn object_decl(&mut self, modifiers: Modifiers) -> Parsed<ObjectDecl> {
         let start = self.expect(&Kind::KwObject, "`object`")?.span;
         let (name, _) = self.identifier("an object name")?;
+        self.skip_newlines_before(&Kind::LGeneric);
         let static_params = self.static_params()?;
         let params = if self.at(&Kind::LParen) {
             self.pos += 1;
@@ -633,11 +661,52 @@ impl<'t, 'a> Parser<'t, 'a> {
     /// `where {T extends U}`. Consumed and discarded: there are no static
     /// parameters to constrain until generics land.
     fn skip_where(&mut self) -> Parsed<()> {
-        if !self.at(&Kind::KwWhere) {
+        // `FnClause = w Where`, so the clause may sit on the line below its
+        // header -- which is how the corpus writes all eight of the files that
+        // put one on a continuation line. The diagnostic before this was
+        // `expected a field or method name, found KwWhere`, naming a mechanism
+        // a `where` clause is not.
+        if !self.at(&Kind::KwWhere) && !self.skip_newlines_before(&Kind::KwWhere) {
             return Ok(());
         }
         self.pos += 1;
         self.skip_newlines();
+        // TWO SHAPES. `NoNewlineHeader.rats:48-52`: `where [\ bindings \]`
+        // with an OPTIONAL constraint block after it, or `where { constraints }`
+        // on its own. Both are still SKIPPED rather than parsed -- see the
+        // method's own note -- so what this adds is only that the bracket form
+        // reaches the end of the clause instead of dying on `expected `{``.
+        if self.at(&Kind::LGeneric) {
+            self.pos += 1;
+            let mut depth = 1usize;
+            while depth > 0 {
+                // A `where` binding takes the SAME kinds a static parameter
+                // list does (`WhereBinding = nat w IdOrOpName / int ... `), and
+                // M3d refuses those AT THE PARSER by a locked decision. Letting
+                // them through here because the clause happens to be skipped
+                // would make one rule two answers -- `[\nat n\]` refused and
+                // `where [\nat n\]` accepted -- which is how a locked
+                // constraint becomes a silent one.
+                if let Some(Kind::Reserved(word)) = self.peek_kind() {
+                    if matches!(*word, "nat" | "int" | "bool" | "unit" | "dim" | "opr") {
+                        return Err(ParseError::StaticParameterKindUnsupported {
+                            span: self.span_here(),
+                            kind: (*word).to_owned(),
+                        });
+                    }
+                }
+                match self.peek_kind() {
+                    Some(Kind::LGeneric) => depth += 1,
+                    Some(Kind::RGeneric) => depth -= 1,
+                    None | Some(Kind::Eof) => return Err(self.error("`\\]`")),
+                    _ => {}
+                }
+                self.pos += 1;
+            }
+            if !self.at(&Kind::LBrace) && !self.skip_newlines_before(&Kind::LBrace) {
+                return Ok(());
+            }
+        }
         self.expect(&Kind::LBrace, "`{`")?;
         let mut depth = 1usize;
         while depth > 0 {
@@ -694,21 +763,21 @@ impl<'t, 'a> Parser<'t, 'a> {
         }
         let (name, name_span) = self.identifier("a field or method name")?;
 
+        self.skip_newlines_before(&Kind::LGeneric);
         let static_params = self.static_params()?;
-        if self.at(&Kind::LParen) {
+        if self.at(&Kind::LParen) || self.skip_newlines_before(&Kind::LParen) {
             if mutable {
                 return Err(self.error("a field name after `var`"));
             }
             self.pos += 1;
             let params = self.params()?;
             let rparen = self.expect(&Kind::RParen, "`)`")?.span;
-            let return_type = if self.at(&Kind::Colon) {
-                self.pos += 1;
-                Some(self.type_ref()?)
-            } else {
-                None
-            };
+            let return_type = self.optional_return_type()?;
             self.skip_where()?;
+            // `getter get(): E throws NotFound` -- `FortressLibrary.fsi:772`.
+            // A member takes the same `FnClause*` a top-level declaration does,
+            // and this one was reading only `where`.
+            self.skip_throws()?;
             let body = self.optional_definition()?;
             let end = body.as_ref().map_or(rparen, Expr::span);
             return Ok(Member::Method(MethodDecl {
@@ -724,6 +793,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         }
 
         self.expect(&Kind::Colon, "`:` or `(`")?;
+        self.skip_newlines();
         let ty = self.type_ref()?;
         let init = self.optional_definition()?;
         let end = init.as_ref().map_or_else(|| ty.span(), Expr::span);
@@ -734,6 +804,25 @@ impl<'t, 'a> Parser<'t, 'a> {
             mutable,
             span: Span::new(name_span.start, end.end),
         }))
+    }
+
+    /// `: T`. `FnHeaderClause = (w NoNewlineIsType)?` and
+    /// `NoNewlineIsType = colon w NoNewlineType`, so a newline is permitted on
+    /// BOTH sides of the colon -- `Library/Set.fsi:63` writes the return type
+    /// on the line below the parameter list. `NoNewlineType` bounds what is
+    /// inside the type, not what precedes it.
+    ///
+    /// A FIELD is a different production: `NoNewlineVarWType = BindId s
+    /// NoNewlineIsType` uses `s`, so a field's colon must stay on its name's
+    /// line. That asymmetry is why this is not the same helper `member` uses
+    /// for a field.
+    fn optional_return_type(&mut self) -> Parsed<Option<TypeRef>> {
+        if !self.at(&Kind::Colon) && !self.skip_newlines_before(&Kind::Colon) {
+            return Ok(None);
+        }
+        self.pos += 1;
+        self.skip_newlines();
+        Ok(Some(self.type_ref()?))
     }
 
     /// `= e`, where the `=` may sit on the following line. Restores the
@@ -830,18 +919,25 @@ impl<'t, 'a> Parser<'t, 'a> {
 
     fn fn_decl(&mut self, modifiers: Modifiers, signature_only: bool) -> Parsed<FnDecl> {
         let (name, name_span) = self.identifier("a function name")?;
+        // `NamedFnHeaderFront = Id (w StaticParams)? w ValParam`. Both `w`s are
+        // may-newline, and the whole corpus writes long headers across lines --
+        // `Library/RangeInternals.fsi:576` breaks before the static parameters,
+        // `Library/FortressLibrary.fsi:305` (`opr juxtaposition`) breaks before
+        // the parameter list.
+        self.skip_newlines_before(&Kind::LGeneric);
         let static_params = self.static_params()?;
+        self.skip_newlines();
         self.expect(&Kind::LParen, "`(`")?;
         let params = self.params()?;
         let rparen = self.expect(&Kind::RParen, "`)`")?.span;
 
-        let return_type = if self.at(&Kind::Colon) {
-            self.pos += 1;
-            Some(self.type_ref()?)
-        } else {
-            None
-        };
+        let return_type = self.optional_return_type()?;
         self.skip_where()?;
+        // `FnHeaderClause = (w NoNewlineIsType)? FnClauses` and `FnClause`
+        // covers `throws` as well as `where`. This branch read only `where`, so
+        // a top-level `f(): T throws E` never parsed at all -- only the `opr`
+        // form did, which is where the clause was first met.
+        self.skip_throws()?;
 
         // `w equals w` at top level: a newline is permitted on both sides.
         // Inside an `api` there is no `=` at all and the declaration ends here.
@@ -999,14 +1095,10 @@ impl<'t, 'a> Parser<'t, 'a> {
             name.push('_');
             name.push_str(&join(&close));
             let mut end = self.previous_span();
-            let return_type = if self.at(&Kind::Colon) {
-                self.pos += 1;
-                let ty = self.type_ref()?;
+            let return_type = self.optional_return_type()?;
+            if let Some(ty) = return_type.as_ref() {
                 end = ty.span();
-                Some(ty)
-            } else {
-                None
-            };
+            }
             self.skip_throws()?;
             return Ok(OprSignature {
                 name,
@@ -1034,17 +1126,14 @@ impl<'t, 'a> Parser<'t, 'a> {
         mut params: Vec<Param>,
         static_params: Vec<StaticParam>,
     ) -> Parsed<OprSignature> {
+        self.skip_newlines();
         self.expect(&Kind::LParen, "`(`")?;
         params.extend(self.params()?);
         let mut end = self.expect(&Kind::RParen, "`)`")?.span;
-        let return_type = if self.at(&Kind::Colon) {
-            self.pos += 1;
-            let ty = self.type_ref()?;
+        let return_type = self.optional_return_type()?;
+        if let Some(ty) = return_type.as_ref() {
             end = ty.span();
-            Some(ty)
-        } else {
-            None
-        };
+        }
         self.skip_where()?;
         self.skip_throws()?;
         Ok(OprSignature {
@@ -1111,7 +1200,10 @@ impl<'t, 'a> Parser<'t, 'a> {
     /// `throws NotFound`. Recorded nowhere: this is a parse spike, and an
     /// exception clause has no meaning until the language has exceptions.
     fn skip_throws(&mut self) -> Parsed<()> {
-        if !self.at(&Kind::Reserved("throws")) {
+        // `FnClause = w Throws`, the same continuation rule as `where`.
+        if !self.at(&Kind::Reserved("throws"))
+            && !self.skip_newlines_before(&Kind::Reserved("throws"))
+        {
             return Ok(());
         }
         self.pos += 1;
