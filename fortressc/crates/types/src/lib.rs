@@ -295,6 +295,32 @@ fn more_specific(a: &Signature, b: &Signature, registry: &Registry) -> bool {
     strictly_below(&a.params, &b.params, registry)
 }
 
+/// Whether an abstract member may keep a type that did not resolve.
+///
+/// THE LINE IS BETWEEN A TYPE THIS COMPILER CANNOT REPRESENT AND A TYPE THAT
+/// DOES NOT EXIST. The first is our limitation: `ProjectFortress/tests/
+/// tupleTypeParam2.fss` instantiates `A[\(ZZ32, ZZ32)\]`, so the instance's
+/// abstract `f(x: (ZZ32, ZZ32))` cannot be typed here -- and nothing calls it,
+/// because the object that extends it declares its own concrete `f`. Refusing
+/// that would refuse a program that runs and prints the right answer.
+///
+/// The second is the PROGRAM's error, and it used to be accepted in silence.
+/// An abstract member is the one place in this compiler where a type is written
+/// and read by nothing, so `m(x: Foo): ZZ32` with no `Foo` compiled to exit 0 --
+/// which is how the closure pass came to need its own `liftable` guard against
+/// exactly this. It is a diagnostic now.
+///
+/// The original comment here said the concession was for a generic trait's own
+/// static parameter. That reason is dead: `mono::emit` never emits a template,
+/// only its instances, so a bare static parameter cannot reach this pass at all.
+fn excusable(e: &TypeError, abstract_: bool) -> bool {
+    abstract_
+        && matches!(
+            e,
+            TypeError::TypeNotImplemented { .. } | TypeError::UnsupportedElementType { .. }
+        )
+}
+
 fn members_of(decl: &Decl) -> &[Member] {
     match decl {
         Decl::Trait(t) => &t.members,
@@ -644,7 +670,7 @@ impl Checker {
                 // program for a signature nothing calls.
                 let abstract_ = m.body.is_none();
                 let mut params = vec![receiver];
-                let mut unresolved = false;
+                let mut unrepresentable = false;
                 for p in &m.params {
                     // `Self` stands for the declaring type here exactly as it
                     // does in a functional method. The two kinds disagreeing
@@ -652,20 +678,20 @@ impl Checker {
                     let written = substitute_self(&p.ty, owner);
                     match self.storable(&written, "a parameter") {
                         Ok(ty) => params.push(ty),
-                        Err(_) if abstract_ => {
-                            unresolved = true;
+                        Err(e) if excusable(&e, abstract_) => {
+                            unrepresentable = true;
                             break;
                         }
                         Err(e) => return Err(e),
                     }
                 }
-                if unresolved {
+                if unrepresentable {
                     continue;
                 }
                 let returns = match &m.return_type {
                     Some(t) => match self.registry.resolve(&substitute_self(t, owner)) {
                         Ok(ty) => ty,
-                        Err(_) if abstract_ => continue,
+                        Err(e) if excusable(&e, abstract_) => continue,
                         Err(e) => return Err(e),
                     },
                     None => Type::Void,
@@ -737,7 +763,7 @@ impl Checker {
                 // refusing a program for a signature nothing calls.
                 let abstract_ = m.body.is_none();
                 let mut params = Vec::with_capacity(m.params.len());
-                let mut unresolved = false;
+                let mut unrepresentable = false;
                 // The parser gives the `self` parameter the written type
                 // `Self`, so it needs no case of its own: one substitution
                 // covers the receiver, `x: Self` in another position, and the
@@ -746,25 +772,22 @@ impl Checker {
                     let written = substitute_self(&p.ty, owner);
                     match self.storable(&written, "a parameter") {
                         Ok(ty) => params.push(ty),
-                        Err(_) if abstract_ => {
-                            unresolved = true;
+                        Err(e) if excusable(&e, abstract_) => {
+                            unrepresentable = true;
                             break;
                         }
                         Err(e) => return Err(e),
                     }
                 }
-                if unresolved {
+                if unrepresentable {
                     continue;
                 }
                 let returns = match &m.return_type {
-                    Some(t) => {
-                        let written = substitute_self(t, owner);
-                        match self.registry.resolve(&written) {
-                            Ok(ty) => ty,
-                            Err(_) if abstract_ => continue,
-                            Err(e) => return Err(e),
-                        }
-                    }
+                    Some(t) => match self.registry.resolve(&substitute_self(t, owner)) {
+                        Ok(ty) => ty,
+                        Err(e) if excusable(&e, abstract_) => continue,
+                        Err(e) => return Err(e),
+                    },
                     None => Type::Void,
                 };
                 if self

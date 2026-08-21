@@ -842,6 +842,49 @@ fn a_mutable_field_is_storage_and_an_immutable_one_is_not() {
 }
 
 #[test]
+fn an_abstract_member_may_name_an_unrepresentable_type_but_not_a_missing_one() {
+    // An abstract member is the one place in this compiler where a type is
+    // WRITTEN and READ BY NOTHING, so anything at all used to be accepted
+    // there -- in silence, at exit 0. That is how the closure pass came to
+    // need its own guard against `Foo -> ZZ32` with no `Foo`.
+    for source in [
+        "trait T
+ m(x: Foo): ZZ32
+end
+run(): ZZ32 = 1",
+        "trait T
+ m(x: ZZ32): Foo
+end
+run(): ZZ32 = 1",
+        "trait T
+ m(self, x: Foo): ZZ32
+end
+run(): ZZ32 = 1",
+    ] {
+        match body_error(source) {
+            TypeError::UnknownType { name, .. } => assert_eq!(name, "Foo"),
+            other => panic!("expected UnknownType for `{source}`, got {other:?}"),
+        }
+    }
+
+    // And the line that keeps it honest: a type this compiler cannot
+    // REPRESENT is our limitation, not the program's. `tupleTypeParam2.fss`
+    // instantiates a trait at a tuple, so the instance's abstract member
+    // cannot be typed here -- and nothing calls it, because the object that
+    // extends it declares its own concrete one. It compiles and prints 7.
+    let component = typed(
+        "component t
+trait T
+ m(x: (ZZ32, ZZ32)): ZZ32
+end
+run(): ZZ32 = 1
+end
+",
+    );
+    assert_eq!(component.functions.len(), 1, "only `run` is emitted");
+}
+
+#[test]
 fn a_trait_that_extends_itself_is_a_diagnostic_rather_than_a_hang() {
     let e = body_error("trait A extends {B} end\ntrait B extends {A} end\nrun(): ZZ32 = 1");
     assert!(matches!(e, TypeError::TraitCycle { .. }), "got {e}");
