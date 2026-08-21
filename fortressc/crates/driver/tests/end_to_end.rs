@@ -1504,3 +1504,36 @@ fn a_diagnostic_names_a_line_and_column_and_shows_the_source() {
     assert!(message.contains("11 | describe(s: Shape)"), "{message}");
     assert!(message.contains('^'), "{message}");
 }
+
+/// `where { ... }` was brace-matched and thrown away, so nothing inside it was
+/// parsed at all and a bound written there was a silent no-op -- while the
+/// identical bound in the bracket list was enforced.
+#[test]
+fn a_where_clause_is_parsed_rather_than_skipped() {
+    for (name, phrase) in [
+        ("badwhereclause.fss", "only constrain a static parameter"),
+        ("badwherevariable.fss", "introduces fresh static variables"),
+        ("badwherebound.fss", "does not satisfy `A extends Top`"),
+    ] {
+        let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+            .arg(fixture(name))
+            .arg("--emit-ir")
+            .output()
+            .expect("could not run fortressc");
+        let message = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{name}:\n{message}");
+        assert!(message.contains(phrase), "{name}: {message}");
+    }
+}
+
+/// The one form v1 implements needs no machinery of its own: the constraint is
+/// appended to the named static parameter's bounds, so `record_bounds` and
+/// `discharge_bounds` enforce it exactly as they do a bracket-list bound.
+#[test]
+fn a_satisfied_where_bound_compiles_and_an_empty_clause_is_legal() {
+    let binary = compile_fixture("whereclause.fss", "whereclause");
+    let out = run(&binary);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "1\n7\n");
+    let _ = std::fs::remove_file(&binary);
+}

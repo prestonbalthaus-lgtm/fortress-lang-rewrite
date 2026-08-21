@@ -32,6 +32,21 @@ pub enum ParseError {
     LocalFunctionDeclarationUnsupported {
         span: Span,
     },
+    /// A `where` clause form outside v1. The clause used to be a TOKEN SKIP --
+    /// brace-matched and thrown away -- so `where { this is total garbage }`
+    /// compiled, linked and ran, and a bound written in a where clause was a
+    /// silent no-op while the identical bound in the bracket list was enforced.
+    ///
+    /// v1 restricts a where clause to constraints over the static parameters
+    /// the declaration WRITES. The form that introduces fresh static variables
+    /// (`where [\ ... \]`, `trait-parameters.tex:312-316`) is refused by name:
+    /// it binds statics SEMANTICALLY, and M3d's locked rule is that static
+    /// arguments are written and never inferred, with expansion running to a
+    /// fixpoint before `Checker::new`. That phase split is load bearing.
+    WhereClauseFormUnsupported {
+        span: Span,
+        form: String,
+    },
     /// `a <= b > c`. `chained-multifix.tex:16-34` restricts a chain to a
     /// mixture of equivalence operators and ordering operators of one sense.
     ChainedOperatorsDiffer {
@@ -50,6 +65,7 @@ impl ParseError {
             | Self::ReservedWord { span, .. }
             | Self::StaticParameterKindUnsupported { span, .. }
             | Self::LocalFunctionDeclarationUnsupported { span }
+            | Self::WhereClauseFormUnsupported { span, .. }
             | Self::ChainedOperatorsDiffer { span, .. } => Some(*span),
             Self::UnexpectedEndOfInput { .. } => None,
         }
@@ -79,6 +95,11 @@ impl core::fmt::Display for ParseError {
             ),
             Self::LocalFunctionDeclarationUnsupported { .. } => f.write_str(
                 "a local function declaration is not implemented; declare it at component level",
+            ),
+            Self::WhereClauseFormUnsupported { form, .. } => write!(
+                f,
+                "a `where` clause may only constrain a static parameter this declaration \
+                 declares; {form}"
             ),
             Self::ChainedOperatorsDiffer { first, second, .. } => write!(
                 f,
