@@ -2,7 +2,9 @@
 // integration test is its own crate, so the workspace denies apply here.
 #![allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 
-use fortress_ast::{BinOp, BlockItem, Component, Decl, Expr, Fixity, TypeRef, UnOp};
+use fortress_ast::{
+    BinOp, BlockItem, Component, Decl, Expr, Fixity, ImportItems, ImportedName, TypeRef, UnOp,
+};
 use fortress_parser::{parse, ParseError};
 
 fn component(src: &str) -> Component {
@@ -1622,4 +1624,124 @@ fn a_closing_run_stops_at_the_openers_length() {
 #[test]
 fn a_bracket_literal_is_still_an_array_literal() {
     assert!(matches!(expr("[1, 2, 3]"), Expr::ArrayLit { .. }));
+}
+
+// ------------------------------------------------------ imports and exports
+
+/// `Compilation.rats` gives the export the same APIName the component header
+/// takes. The header read a dotted name and the export, fourteen lines later,
+/// read an identifier -- so `component Compiled5.a` parsed and
+/// `export Compiled5.a` did not.
+#[test]
+fn an_export_takes_a_dotted_or_braced_name() {
+    let c = component("component t\nexport Compiled5.a\nexport {A, B}\nf() = 0\nend\n");
+    assert_eq!(c.exports, ["Compiled5.a", "A", "B"]);
+}
+
+/// The brace group used to be consumed as a balanced token run and thrown
+/// away. A resolver cannot answer `source-code.tex:280-287`'s question --
+/// which of two apis a name came from -- without knowing which names were
+/// asked for.
+#[test]
+fn an_import_records_what_it_names() {
+    let c = component(
+        "component t\n\
+         import List.{...}\n\
+         import Map.{a, b as c}\n\
+         import FlatString.FlatString\n\
+         import api Foo\n\
+         import Set.{...} except { emptyList, opr BIG UNION }\n\
+         f() = 0\n\
+         end\n",
+    );
+    let names: Vec<&str> = c.imports.iter().map(|i| i.api_name.as_str()).collect();
+    assert_eq!(names, ["List", "Map", "FlatString", "Foo", "Set"]);
+    let at = |n: usize| c.imports.get(n).expect("an import");
+    assert_eq!(at(0).items, ImportItems::OnDemand);
+    assert_eq!(
+        at(1).items,
+        ImportItems::Named(vec![
+            ImportedName {
+                name: "a".to_owned(),
+                alias: None
+            },
+            ImportedName {
+                name: "b".to_owned(),
+                alias: Some("c".to_owned())
+            },
+        ])
+    );
+    // `import FlatString.FlatString` is the api `FlatString` and one name in
+    // it; only the file system can say where the api name ends, so both
+    // readings are carried.
+    assert_eq!(
+        at(2).items,
+        ImportItems::Named(vec![ImportedName {
+            name: "FlatString".to_owned(),
+            alias: None
+        }])
+    );
+    assert!(at(3).is_api);
+    assert_eq!(at(4).except, ["emptyList", "BIG UNION"]);
+}
+
+/// `simpleNameTest.fsi:15` imports an ENCLOSING operator, whose two halves are
+/// written with a space between. What says a second half follows is the
+/// opener's own MIRROR and nothing weaker: `opr BIG SYMDIFF }` ends an except
+/// set, and `opr <| => ||}` glues the alias to the list's closing brace.
+#[test]
+fn an_imported_operator_may_be_an_enclosing_pair() {
+    let c = component("component t\nimport Set.{ opr { } }\nf() = 0\nend\n");
+    assert_eq!(
+        c.imports.first().expect("an import").items,
+        ImportItems::Named(vec![ImportedName {
+            name: "{_}".to_owned(),
+            alias: None
+        }])
+    );
+    let c = component("component t\nimport List.{Cons => CC, opr <| => ||}\nf() = 0\nend\n");
+    assert_eq!(
+        c.imports.first().expect("an import").items,
+        ImportItems::Named(vec![
+            ImportedName {
+                name: "Cons".to_owned(),
+                alias: Some("CC".to_owned())
+            },
+            ImportedName {
+                name: "<|".to_owned(),
+                alias: Some("||".to_owned())
+            },
+        ])
+    );
+}
+
+/// `source-code.tex:280-287` disambiguates "the type `List` declared in the API
+/// `List` or the type `List` declared in the API `PureList`" with a qualified
+/// name, and with ten api names duplicated across the source path the collision
+/// is not hypothetical. It parses; it resolves nowhere, which is honest.
+#[test]
+fn a_type_name_may_be_qualified() {
+    let c = component("api t\nf(x: List.List): ZZ32\nend\n");
+    let Some(Decl::Function(f)) = c.decls.into_iter().next() else {
+        panic!("expected a function");
+    };
+    match f.params.first().map(|p| &p.ty) {
+        Some(TypeRef::Named { name, .. }) => assert_eq!(name, "List.List"),
+        other => panic!("expected a qualified name, got {other:?}"),
+    }
+}
+
+/// 39 corpus files reach a JVM implementation this way, and three of them are
+/// bootstrap files whose bodies have no other implementation in the tree --
+/// which is C-shim work, not import work. What phase 3 owes the construct is a
+/// diagnostic that names it, in place of
+/// `expected a newline or `;`, found Ident("com")`.
+#[test]
+fn a_foreign_import_is_refused_by_name() {
+    let src = "component t\nimport java com.sun.x.{y}\nf() = 0\nend\n";
+    let tokens = fortress_lexer::lex(src).unwrap_or_else(|e| panic!("lex failed: {e}"));
+    match parse(&tokens) {
+        Err(ParseError::ForeignImportUnsupported { .. }) => {}
+        other => panic!("expected a foreign-import refusal, got {other:?}"),
+    }
 }

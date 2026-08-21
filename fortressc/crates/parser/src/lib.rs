@@ -16,8 +16,8 @@ pub use error::ParseError;
 
 use fortress_ast::{
     Assign, BinOp, Binding, BlockItem, Component, Decl, Expr, FieldDecl, Fixity, FnDecl,
-    ImportDecl, Member, MethodDecl, Modifiers, ObjectDecl, Param, Span, StaticParam, TraitDecl,
-    TypeRef, UnOp,
+    ImportDecl, ImportItems, ImportedName, Member, MethodDecl, Modifiers, ObjectDecl, Param, Span,
+    StaticParam, TraitDecl, TypeRef, UnOp,
 };
 use fortress_lexer::{Kind, Token};
 
@@ -100,6 +100,20 @@ fn operator_text<'a>(kind: &Kind<'a>) -> Option<&'a str> {
         Kind::RBracket => "]",
         Kind::LBrace => "{",
         Kind::RBrace => "}",
+        _ => return None,
+    })
+}
+
+/// The closing half of a one-character enclosing operator, for the positions
+/// that must recognise a bracket PAIR written with a space in it -- an import
+/// list is the only one. `|` and `||` mirror themselves.
+const fn mirrored(open: &str) -> Option<&'static str> {
+    Some(match open.as_bytes() {
+        b"{" => "}",
+        b"[" => "]",
+        b"<|" => "|>",
+        b"|" => "|",
+        b"||" => "||",
         _ => return None,
     })
 }
@@ -510,7 +524,16 @@ impl<'t, 'a> Parser<'t, 'a> {
         loop {
             if self.at(&Kind::KwExport) {
                 self.pos += 1;
-                exports.push(self.identifier("an export name")?.0);
+                // `Compilation.rats` gives the export the same APIName the
+                // component header takes -- which is why `component Compiled5.a`
+                // parsed and `export Compiled5.a` did not: the header read a
+                // dotted name and the export, fourteen lines later, read an
+                // identifier. `export {A, B}` is the set form.
+                if self.at(&Kind::LBrace) {
+                    exports.extend(self.name_set()?);
+                } else {
+                    exports.push(self.dotted_name()?);
+                }
             } else if self.at(&Kind::KwImport) {
                 imports.push(self.import_decl()?);
             } else {
@@ -553,56 +576,218 @@ impl<'t, 'a> Parser<'t, 'a> {
     /// pretending.
     fn import_decl(&mut self) -> Parsed<ImportDecl> {
         let start = self.expect(&Kind::KwImport, "`import`")?.span;
+        // `import java com.sun.fortress.nativeHelpers.{...}` reaches a Fortress
+        // body through the JVM. 39 corpus files write it and three of them are
+        // bootstrap files whose bodies have NO other implementation in this
+        // tree -- those three are C-shim work, not import work. What phase 3
+        // owes it is a diagnostic that NAMES the construct instead of
+        // `expected a newline or `;`, found Ident("com")`.
+        if matches!(self.peek_kind(), Some(Kind::Ident("java"))) {
+            return Err(ParseError::ForeignImportUnsupported {
+                span: self.span_here(),
+            });
+        }
         let is_api = self.at(&Kind::KwApi);
         if is_api {
             self.pos += 1;
         }
         // `import api {A, B}` names a set with no leading dotted name.
-        let api_name = if self.at(&Kind::LBrace) {
-            String::new()
+        let (api_name, trailing) = if self.at(&Kind::LBrace) {
+            (String::new(), None)
         } else {
-            self.dotted_name()?
+            self.dotted_import_name()?
         };
         let mut end = self.span_here();
+        // `import Foo.{...}` and `import api Foo` are IMPORT-ON-DEMAND;
+        // `import Foo.{a, b as c}` and the single-member `import Foo.a` name
+        // what they take.
+        // `import api {File, FileSupport}` names APIS, not members of one, so
+        // `is_api` is what a resolver reads to know which the list holds.
+        let mut items = if is_api {
+            ImportItems::OnDemand
+        } else {
+            trailing.map_or(ImportItems::OnDemand, |name| {
+                ImportItems::Named(vec![ImportedName { name, alias: None }])
+            })
+        };
         if self.at(&Kind::LBrace) {
-            end = self.skip_braces()?;
+            let (names, close) = self.import_items()?;
+            items = names;
+            end = close;
         }
+        let mut except = Vec::new();
         if self.at(&Kind::KwExcept) {
             self.pos += 1;
             self.skip_newlines();
-            end = if self.at(&Kind::LBrace) {
-                self.skip_braces()?
+            if self.at(&Kind::LBrace) {
+                except = self.name_set()?;
+                end = self.previous_span();
             } else {
-                self.identifier("a name after `except`")?.1
-            };
+                let (name, span) = self.identifier("a name after `except`")?;
+                except.push(name);
+                end = span;
+            }
         }
         Ok(ImportDecl {
             api_name,
             is_api,
+            items,
+            except,
             span: Span::new(start.start, end.end),
         })
     }
 
-    /// Consumes a balanced `{ ... }` and answers with the closing brace's span.
-    fn skip_braces(&mut self) -> Parsed<Span> {
+    /// `Foo`, `Foo.Bar`, or `Foo.member`. The api name and a trailing single
+    /// member are the same dotted run, and only the file system can say where
+    /// one ends -- `import FlatString.FlatString` is the api `FlatString` and
+    /// the name `FlatString` in it, while `import Compiled5.a.{...}` is a
+    /// dotted api. So BOTH readings are carried: the whole run as the api name,
+    /// and the last segment as a candidate member, and the resolver picks.
+    fn dotted_import_name(&mut self) -> Parsed<(String, Option<String>)> {
+        let name = self.dotted_name()?;
+        if self.at(&Kind::LBrace) {
+            return Ok((name, None));
+        }
+        match name.rsplit_once('.') {
+            Some((head, last)) => Ok((head.to_owned(), Some(last.to_owned()))),
+            None => Ok((name, None)),
+        }
+    }
+
+    /// `{ ... }`, `{ a, b }`, `{ a as b }`. Three `Dot`s are the open-set marker
+    /// `intro.tex:38-63` calls an import-on-demand; there is no `...` token, so
+    /// it is the same glued run a varargs parameter uses.
+    fn import_items(&mut self) -> Parsed<(ImportItems, Span)> {
         self.expect(&Kind::LBrace, "`{`")?;
-        let mut depth = 1usize;
-        loop {
-            let span = self.span_here();
-            match self.peek_kind() {
-                Some(Kind::LBrace) => depth += 1,
-                Some(Kind::RBrace) => {
-                    depth -= 1;
-                    if depth == 0 {
-                        self.pos += 1;
-                        return Ok(span);
-                    }
+        self.skip_newlines();
+        if self.at_ellipsis() {
+            self.pos += 3;
+            self.skip_newlines();
+            let close = self.expect(&Kind::RBrace, "`}`")?.span;
+            return Ok((ImportItems::OnDemand, close));
+        }
+        let mut names = Vec::new();
+        if !self.at(&Kind::RBrace) {
+            loop {
+                let name = self.import_name()?;
+                names.push(name);
+                self.skip_newlines();
+                if !self.at(&Kind::Comma) {
+                    break;
                 }
-                None | Some(Kind::Eof) => return Err(self.error("`}`")),
-                _ => {}
+                self.pos += 1;
+                self.skip_newlines();
             }
+        }
+        let close = self.expect(&Kind::RBrace, "`}`")?.span;
+        Ok((ImportItems::Named(names), close))
+    }
+
+    /// One imported name. An OPERATOR may be imported and aliased
+    /// (`opr OPLUS => MYPLUS`), so the name is read as an operator run when it
+    /// is not an identifier.
+    fn import_name(&mut self) -> Parsed<ImportedName> {
+        let name = self.imported_identifier()?;
+        let alias = if self.at(&Kind::FatArrow) || self.at_word("as") {
+            self.pos += 1;
+            self.skip_newlines();
+            Some(self.imported_identifier()?)
+        } else {
+            None
+        };
+        Ok(ImportedName { name, alias })
+    }
+
+    fn imported_identifier(&mut self) -> Parsed<String> {
+        let mut name = String::new();
+        if self.at(&Kind::Reserved("opr")) {
+            self.pos += 1;
+            self.skip_newlines();
+            // `import Map.{...} except { opr BIG UNION, ... }` --
+            // `Library/PrefixSet.fsi:35`. `BIG` is a modifier on the name and
+            // not the name, exactly as `opr_signature` reads it.
+            if self.at(&Kind::Reserved("BIG")) {
+                self.pos += 1;
+                name.push_str("BIG ");
+            }
+        }
+        if matches!(self.peek_kind(), Some(Kind::Ident(_))) {
+            name.push_str(&self.dotted_name()?);
+            return Ok(name);
+        }
+        // `import Set.{ opr { } }` -- `simpleNameTest.fsi:15`. An ENCLOSING
+        // operator is named by both halves, and in an import list they are
+        // written with a SPACE between, so the run stops at the first.
+        //
+        // What says a second half follows is that the next token is the OPENER'S
+        // OWN MIRROR, and nothing weaker will do. `opr BIG SYMDIFF }` ends an
+        // except set and `opr <| => ||}` ends an alias list, so "an operator
+        // character follows" reads the list's own `}` as half of a name.
+        let mirror = self.peek_kind().and_then(operator_text).and_then(mirrored);
+        let open = self.import_operator_run();
+        if open.is_empty() {
+            return Err(self.error("an imported name"));
+        }
+        name.push_str(&join(&open));
+        if mirror.is_some() && self.peek_kind().and_then(operator_text) == mirror {
+            let Some(close) = self.peek_kind().and_then(operator_text) else {
+                return Ok(name);
+            };
+            self.pos += 1;
+            name.push('_');
+            name.push_str(close);
+        }
+        Ok(name)
+    }
+
+    /// An operator name inside an import list. It is `operator_run` with three
+    /// tokens held back: `,` and `}` end the ITEM and the LIST, and `=>`
+    /// introduces the alias. `import List.{opr <| => ||}` glues `||` to the
+    /// closing brace, so a greedy run reads the list's own `}` into the name.
+    fn import_operator_run(&mut self) -> Vec<&'a str> {
+        let mut run = Vec::new();
+        loop {
+            if matches!(
+                self.peek_kind(),
+                Some(Kind::Comma | Kind::RBrace | Kind::FatArrow)
+            ) {
+                break;
+            }
+            let Some(text) = self.peek_kind().and_then(operator_text) else {
+                break;
+            };
+            if !run.is_empty() && !self.glued_right(self.pos - 1) {
+                break;
+            }
+            run.push(text);
             self.pos += 1;
         }
+        run
+    }
+
+    fn at_word(&self, word: &str) -> bool {
+        matches!(self.peek_kind(), Some(Kind::Ident(name)) if *name == word)
+    }
+
+    /// `{A, B}` where every element is a plain name -- an export set, or the
+    /// set after `except`.
+    fn name_set(&mut self) -> Parsed<Vec<String>> {
+        self.expect(&Kind::LBrace, "`{`")?;
+        self.skip_newlines();
+        let mut names = Vec::new();
+        if !self.at(&Kind::RBrace) {
+            loop {
+                names.push(self.imported_identifier()?);
+                self.skip_newlines();
+                if !self.at(&Kind::Comma) {
+                    break;
+                }
+                self.pos += 1;
+                self.skip_newlines();
+            }
+        }
+        self.expect(&Kind::RBrace, "`}`")?;
+        Ok(names)
     }
 
     fn decl(&mut self, signature_only: bool) -> Parsed<Decl> {
@@ -1528,7 +1713,24 @@ impl<'t, 'a> Parser<'t, 'a> {
             }
             return Ok(TypeRef::Tuple { elems, span });
         }
-        let (name, span) = self.identifier("a type name")?;
+        let (mut name, span) = self.identifier("a type name")?;
+        // A QUALIFIED type name. `source-code.tex:280-287` disambiguates "the
+        // type `List` declared in the API `List` or the type `List` declared in
+        // the API `PureList`" with exactly this, and with ten api names
+        // duplicated across the source path the collision is not hypothetical.
+        // It PARSES here and does not RESOLVE anywhere: a qualified name means
+        // nothing until an import resolver exists, so it comes out as
+        // `unknown type `List.List``, which is a diagnostic and not the
+        // `expected `)`, found Dot` that named the wrong mechanism.
+        let mut end = span;
+        while self.at(&Kind::Dot) && matches!(self.peek_ahead(1), Some(Kind::Ident(_))) {
+            self.pos += 1;
+            let (part, part_span) = self.identifier("a type name")?;
+            name.push('.');
+            name.push_str(&part);
+            end = part_span;
+        }
+        let span = Span::new(span.start, end.end);
         if !self.at(&Kind::LGeneric) {
             return Ok(TypeRef::Named {
                 name,

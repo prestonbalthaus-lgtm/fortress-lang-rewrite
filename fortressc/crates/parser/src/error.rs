@@ -75,6 +75,14 @@ pub enum ParseError {
         span: Span,
         name: String,
     },
+    /// `import java com.sun.fortress.nativeHelpers.{...}`. 39 corpus files
+    /// write it. Three are bootstrap files whose bodies reach the JVM this way
+    /// and have no other implementation in the tree -- and those three are
+    /// C-shim work, not import work. What phase 3 owes the construct is a
+    /// diagnostic that names it.
+    ForeignImportUnsupported {
+        span: Span,
+    },
 }
 
 impl ParseError {
@@ -90,7 +98,8 @@ impl ParseError {
             | Self::ObjectVarargsParameter { span, .. }
             | Self::ClosingNameDiffers { span, .. }
             | Self::OperatorsUnrelated { span, .. }
-            | Self::LopsidedOperator { span, .. } => Some(*span),
+            | Self::LopsidedOperator { span, .. }
+            | Self::ForeignImportUnsupported { span } => Some(*span),
             Self::UnexpectedEndOfInput { .. } => None,
         }
     }
@@ -176,6 +185,12 @@ impl core::fmt::Display for ParseError {
                 f,
                 "{}..{}: `{name}` has whitespace on one side and not the other; \
                  an infix operator must be loose or tight, not lopsided",
+                span.start, span.end
+            ),
+            Self::ForeignImportUnsupported { span } => write!(
+                f,
+                "{}..{}: a foreign import reaches a JVM implementation and this \
+                 compiler emits native code; the body belongs in a C shim",
                 span.start, span.end
             ),
         }

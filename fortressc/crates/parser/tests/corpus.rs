@@ -115,6 +115,9 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
                     fortress_parser::ParseError::LopsidedOperator { .. } => {
                         "lopsided infix operator".to_owned()
                     }
+                    fortress_parser::ParseError::ForeignImportUnsupported { .. } => {
+                        "foreign (JVM) import".to_owned()
+                    }
                 };
                 *blockers.entry(label).or_default() += 1;
             }
@@ -170,8 +173,11 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
     // 798 -> 811. The declaration side has parsed since the `opr` spike; this
     // closed an exact declaration/expression asymmetry.
     // The Unicode allowlist took it 811 -> 815.
+    // Import and export names -- dotted and braced exports, the import list
+    // recorded rather than skipped, qualified type names, and a foreign import
+    // refused BY NAME -- took it 815 -> 839.
     assert!(
-        parsed >= 815,
-        "parser corpus regressed: {parsed} files parse, floor is 815"
+        parsed >= 839,
+        "parser corpus regressed: {parsed} files parse, floor is 839"
     );
 }
