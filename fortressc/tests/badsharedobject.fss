@@ -1,0 +1,22 @@
+component badsharedobject
+
+export Executable
+
+(* The array refusal, one indirection out: the callee's `b.n := ...` is checked
+   against an empty loop context, so the loop's own lexical rules never see it. *)
+object Box()
+    var n: ZZ64 = 0
+end
+
+bump(b: Box): () = do
+    b.n := b.n + 1
+end
+
+run(): () = do
+    b = Box()
+    for i <- 0#10 do
+        bump(b)
+    end
+    println(b.n)
+end
+end

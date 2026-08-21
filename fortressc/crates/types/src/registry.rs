@@ -83,13 +83,57 @@ impl Registry {
     }
 
     pub(crate) fn field(&self, object: &str, field: &str) -> Option<(u32, Type)> {
+        self.field_decl(object, field).map(|(i, f)| (i, f.ty))
+    }
+
+    pub(crate) fn field_decl(&self, object: &str, field: &str) -> Option<(u32, &TypedField)> {
         let info = self.objects.get(object)?;
         let (index, found) = info
             .fields
             .iter()
             .enumerate()
             .find(|(_, f)| f.name == field)?;
-        u32::try_from(index).ok().map(|i| (i, found.ty))
+        u32::try_from(index).ok().map(|i| (i, found))
+    }
+
+    /// The first path from `ty` to storage a parallel iteration could write:
+    /// an array, or a field declared `var`. Reference fields are followed, so
+    /// an object holding an object holding an array is found. A trait is every
+    /// concrete type below it, because the value could be any of them.
+    ///
+    /// This is what replaces "an object cannot be written through", which was
+    /// true only while no field store existed in the language.
+    pub(crate) fn reaches_mutable(&self, ty: Type) -> Option<String> {
+        let mut seen: BTreeSet<&'static str> = BTreeSet::new();
+        self.reaches_from(ty, &mut seen)
+    }
+
+    fn reaches_from(&self, ty: Type, seen: &mut BTreeSet<&'static str>) -> Option<String> {
+        match ty {
+            Type::Array(_) => Some(String::new()),
+            Type::Object(name) => {
+                if !seen.insert(name) {
+                    return None;
+                }
+                let info = self.objects.get(name)?;
+                info.fields.iter().find_map(|f| {
+                    if f.mutable {
+                        return Some(f.name.clone());
+                    }
+                    let rest = self.reaches_from(f.ty, seen)?;
+                    Some(if rest.is_empty() {
+                        f.name.clone()
+                    } else {
+                        format!("{}.{rest}", f.name)
+                    })
+                })
+            }
+            Type::Trait(name) => self
+                .concretes_below(name)
+                .into_iter()
+                .find_map(|concrete| self.reaches_from(Type::Object(concrete), seen)),
+            _ => None,
+        }
     }
 
     /// A written type name to a [`Type`]. The registry's keys are populated

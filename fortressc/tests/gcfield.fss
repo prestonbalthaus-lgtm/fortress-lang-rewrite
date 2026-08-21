@@ -1,0 +1,51 @@
+component gcfield
+
+export Executable
+
+(* A mutable field is the first storage in this language that a WRITE can put a
+   pointer into after its block was allocated, so it is the first place the
+   scanned-versus-atomic distinction can be got wrong by a field rather than by
+   an array. `runtime/tests/array_trace.c` measured that distinction; this is
+   the same measurement in Fortress.
+
+   THE STORE HAPPENS IN A CALLEE ON PURPOSE. Boehm scans the stack
+   conservatively, so a string still named by the caller's own frame survives
+   whether the object block is scanned or not. `fill` returns, its frame goes,
+   and the field is then the only reference to that string.
+
+   AND THIS IS STILL A SMOKE TEST, NOT THE MEASUREMENT. Run against
+   `fortress_object_alloc` switched to the atomic allocator it printed the right
+   string five times out of five: one object and one string sit inside what a
+   conservative stack scan retains anyway, and reading a field back does not
+   show a reclaim because freed memory usually still reads correctly. The
+   measurement that DOES refuse that mutation is
+   `runtime/tests/object_trace.c` -- live bytes after a forced collection,
+   12627968 against 69632 of an 8388608 byte payload. *)
+object Slot(seed: String)
+    var held: String = seed
+end
+
+fill(s: Slot, n: ZZ64): () = do
+    s.held := "kept" "-" "across" "-" "collection" "-" n
+end
+
+(* Nested, not 400,000 deep: this recursion is what allocates, and a single
+   chain that long overflows the stack before the collector is under any
+   pressure at all. gcsoak.fss has the same shape for the same reason. *)
+inner(n: ZZ64): ZZ64 = if n < 1 then 0 else do
+    junk:String = "x" n
+    inner(n - 1)
+end end
+
+outer(n: ZZ64): ZZ64 = if n < 1 then 0 else do
+    inner(1000)
+    outer(n - 1)
+end end
+
+run(): () = do
+    s = Slot("initial")
+    fill(s, 7)
+    outer(400)
+    println(s.held)
+end
+end

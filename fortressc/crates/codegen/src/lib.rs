@@ -641,15 +641,17 @@ impl<'ctx> Lowering<'ctx> {
         Ok(())
     }
 
-    fn load_field(
+    /// The address of one field of one object, with the base evaluated exactly
+    /// once. A compound assignment reads and writes through the same address,
+    /// so evaluating the receiver twice would be a second side effect.
+    fn field_pointer(
         &mut self,
         base: &TypedExpr,
         index: u32,
-        ty: Type,
-    ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+    ) -> Result<PointerValue<'ctx>, CodegenError> {
         let Type::Object(name) = base.ty else {
             return Err(CodegenError::internal(
-                "a field read on something that is not an object".to_owned(),
+                "a field reference on something that is not an object".to_owned(),
             ));
         };
         let layout = *self
@@ -657,7 +659,16 @@ impl<'ctx> Lowering<'ctx> {
             .get(name)
             .ok_or_else(|| CodegenError::internal(format!("no layout for `{name}`")))?;
         let object = self.operand(base)?.into_pointer_value();
-        let slot = self.field_slot(layout, object, index, "field")?;
+        self.field_slot(layout, object, index, "field")
+    }
+
+    fn load_field(
+        &mut self,
+        base: &TypedExpr,
+        index: u32,
+        ty: Type,
+    ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+        let slot = self.field_pointer(base, index)?;
         let loaded = self
             .basic_type(ty)
             .ok_or_else(|| CodegenError::internal("a field with no storage type".to_owned()))?;
@@ -1938,6 +1949,31 @@ impl<'ctx> Lowering<'ctx> {
                     }
                 };
                 self.store_element(*elem, slot, stored)
+            }
+            // A direct store into the receiver's own block. The specification
+            // calls the setter here; there is no setter machinery to call, and
+            // the deviation is recorded on `AssignTarget::Field`. Boehm needs
+            // no write barrier -- the block is scanned, so a pointer stored
+            // into it is seen by the next collection.
+            AssignTarget::Field { base, index, ty } => {
+                let slot = self.field_pointer(base, *index)?;
+                let stored = match op {
+                    None => lowered,
+                    Some(op) => {
+                        let cell = self.basic_type(*ty).ok_or_else(|| {
+                            CodegenError::internal("a field with no storage type".to_owned())
+                        })?;
+                        let current = self
+                            .builder
+                            .build_load(cell, slot, "field")
+                            .map_err(CodegenError::from_builder)?;
+                        self.arith(op, *ty, current, lowered)?
+                    }
+                };
+                self.builder
+                    .build_store(slot, stored)
+                    .map_err(CodegenError::from_builder)?;
+                Ok(())
             }
         }
     }

@@ -1,0 +1,27 @@
+component atomicfield
+
+export Executable
+
+(* What the refusals leave available. `atomic` serialises the write, so the
+   count is exact at every worker count -- both written in the body and written
+   by a callee the body reaches. *)
+object Box()
+    var n: ZZ64 = 0
+end
+
+bump(b: Box): () = do
+    b.n += 1
+end
+
+run(): () = do
+    b = Box()
+    for i <- 0#100000 do
+        atomic b.n += 1
+    end
+    println(b.n)
+    for i <- 0#100000 do
+        atomic bump(b)
+    end
+    println(b.n)
+end
+end

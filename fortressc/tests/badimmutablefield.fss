@@ -1,0 +1,13 @@
+component badimmutablefield
+
+export Executable
+
+(* A constructor parameter is not `var`, so it is not an assignment target. *)
+object Box(w: ZZ32)
+end
+
+run(): () = do
+    b = Box(1)
+    b.w := 2
+end
+end

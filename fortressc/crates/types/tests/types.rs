@@ -815,11 +815,29 @@ fn a_field_initializer_may_not_reach_a_singleton() {
 }
 
 #[test]
-fn a_mutable_field_is_refused_rather_than_ignored() {
-    let e = body_error("object Box(w: ZZ32) var seen: ZZ32 = 0 end\nrun(): ZZ32 = Box(1).w");
+fn a_mutable_field_is_storage_and_an_immutable_one_is_not() {
+    let source = "component t\nobject Box(w: ZZ32) var seen: ZZ32 = 0 end\n\
+                  run(): ZZ32 = do b = Box(1)\n b.seen := 7\n b.seen end\nend\n";
+    let component = typed(source);
+    let boxed = component
+        .objects
+        .iter()
+        .find(|o| o.name == "Box")
+        .expect("Box is registered");
+    let named = |n: &str| {
+        boxed
+            .fields
+            .iter()
+            .find(|f| f.name == n)
+            .unwrap_or_else(|| panic!("no field `{n}`"))
+    };
+    assert!(!named("w").mutable, "a constructor parameter is not");
+    assert!(named("seen").mutable, "`var seen` is");
+
+    let e = body_error("object Box(w: ZZ32) end\nrun(): ZZ32 = do b = Box(1)\n b.w := 2\n b.w end");
     assert!(
-        matches!(e, TypeError::MutableFieldUnsupported { .. }),
-        "got {e}"
+        matches!(e, TypeError::FieldIsImmutable { .. }),
+        "an immutable field is not an assignment target: got {e}"
     );
 }
 

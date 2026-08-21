@@ -101,6 +101,12 @@ struct LoopCtx {
     /// WRITES would never reach the environment at all -- and codegen would
     /// meet an assignment to a name it has no binding for.
     assigned: BTreeMap<String, AssignRecord>,
+    /// Loop-LOCAL names that nevertheless name shared storage, because their
+    /// initializer read something from below the floor. `b = shared` makes `b`
+    /// loop-local by scope and shared by reference, and the depth comparison
+    /// alone cannot tell the two apart. A reference type only: copying a
+    /// scalar out of a shared name copies its value.
+    tainted: BTreeSet<String>,
 }
 
 /// What the body did to one escaping name, collected across the whole walk.
@@ -514,16 +520,11 @@ impl Checker {
             fields.push(TypedField {
                 name: p.name.clone(),
                 ty: self.storable(&p.ty, "a field")?,
+                mutable: false,
             });
         }
         for member in &o.members {
             let Member::Field(f) = member else { continue };
-            if f.mutable {
-                return Err(TypeError::MutableFieldUnsupported {
-                    span: f.span,
-                    name: f.name.clone(),
-                });
-            }
             if f.init.is_none() {
                 return Err(TypeError::FieldNeedsInitializer {
                     span: f.span,
@@ -533,6 +534,7 @@ impl Checker {
             fields.push(TypedField {
                 name: f.name.clone(),
                 ty: self.storable(&f.ty, "a field")?,
+                mutable: f.mutable,
             });
         }
         for (index, field) in fields.iter().enumerate() {
@@ -2001,6 +2003,7 @@ impl Checker {
             floor: self.scopes.len() - 1,
             captures: BTreeMap::new(),
             assigned: BTreeMap::new(),
+            tainted: BTreeSet::new(),
         });
 
         let checked = self.expr(body, Some(Type::Void));
@@ -2192,6 +2195,84 @@ impl Checker {
         matches!(self.depth_of(name), Some(depth) if depth < floor)
     }
 
+    /// The same question once ALIASING is possible. `escapes_loop` answers it
+    /// by scope depth, which was exact while the only way to name shared
+    /// storage was to be declared outside the loop. A binding whose value came
+    /// from outside is loop-local and shared at once, so it is carried
+    /// separately and asked about here.
+    fn shared_in_loop(&self, name: &str, floor: usize) -> bool {
+        self.escapes_loop(name, floor)
+            || self
+                .parallel_loop()
+                .is_some_and(|c| c.tainted.contains(name))
+    }
+
+    /// Whether an initializer reads anything shared. Conservative and
+    /// syntactic: any mention anywhere in the expression taints the binding,
+    /// because `shared.child` and `pick(shared)` are both aliases of it.
+    fn reads_shared(&self, e: &Expr, floor: usize) -> bool {
+        match e {
+            Expr::Var { name, .. } => self.shared_in_loop(name, floor),
+            Expr::Unit { .. }
+            | Expr::IntLit { .. }
+            | Expr::FloatLit { .. }
+            | Expr::StrLit { .. }
+            | Expr::BoolLit { .. } => false,
+            Expr::Tuple { items, .. } | Expr::Juxt { items, .. } | Expr::ArrayLit { items, .. } => {
+                items.iter().any(|i| self.reads_shared(i, floor))
+            }
+            Expr::Infix { lhs, rhs, .. } => {
+                self.reads_shared(lhs, floor) || self.reads_shared(rhs, floor)
+            }
+            Expr::Prefix { operand, .. } => self.reads_shared(operand, floor),
+            Expr::Call { callee, args, .. } => {
+                self.reads_shared(callee, floor) || args.iter().any(|a| self.reads_shared(a, floor))
+            }
+            Expr::If {
+                cond,
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                self.reads_shared(cond, floor)
+                    || self.reads_shared(then_branch, floor)
+                    || else_branch
+                        .as_deref()
+                        .is_some_and(|e| self.reads_shared(e, floor))
+            }
+            Expr::Block { items, .. } => items.iter().any(|item| match item {
+                BlockItem::Binding(b) => self.reads_shared(&b.value, floor),
+                BlockItem::Assign(a) => self.reads_shared(&a.value, floor),
+                BlockItem::Expr(e) => self.reads_shared(e, floor),
+            }),
+            Expr::Index { base, index, .. } => {
+                self.reads_shared(base, floor) || self.reads_shared(index, floor)
+            }
+            Expr::While { cond, body, .. } => {
+                self.reads_shared(cond, floor) || self.reads_shared(body, floor)
+            }
+            Expr::Field { base, .. } => self.reads_shared(base, floor),
+            Expr::For { lo, hi, body, .. } => {
+                self.reads_shared(lo, floor)
+                    || self.reads_shared(hi, floor)
+                    || self.reads_shared(body, floor)
+            }
+            Expr::Instantiate { callee, .. } => self.reads_shared(callee, floor),
+            Expr::Atomic { body, .. } => self.reads_shared(body, floor),
+        }
+    }
+
+    /// The name an assignment target is rooted at. `o.left.count := 1` is
+    /// rooted at `o`; a target rooted at no name at all -- the result of a
+    /// call -- has no name to ask about and is treated as shared.
+    fn target_root(target: &Expr) -> Option<(&str, Span)> {
+        match target {
+            Expr::Var { name, span } => Some((name, *span)),
+            Expr::Field { base, .. } | Expr::Index { base, .. } => Self::target_root(base),
+            _ => None,
+        }
+    }
+
     fn assign(&mut self, a: &Assign) -> Checked<TypedBlockItem> {
         let in_atomic = self.atomic_depth > 0;
         // Before anything can refuse it: the crossing has to be on the record
@@ -2223,13 +2304,35 @@ impl Checker {
                         });
                     }
                 }
+                // A field has no index, so there is no `a[binder]` carve-out
+                // to make two iterations disjoint: a shared receiver is
+                // refused outright. This is the rule that keeps M5's soundness
+                // argument true now that a field store exists -- the argument
+                // was "no field store exists in the language yet".
+                Expr::Field { span, .. } if !in_atomic => {
+                    let root = Self::target_root(&a.target).map(|(n, _)| n.to_owned());
+                    let shared = root
+                        .as_deref()
+                        .is_none_or(|name| self.shared_in_loop(name, floor));
+                    if shared {
+                        let aliased = root
+                            .as_deref()
+                            .is_some_and(|name| !self.escapes_loop(name, floor));
+                        return Err(TypeError::ParallelFieldEscape {
+                            span: *span,
+                            name: root.unwrap_or_default(),
+                            aliased,
+                        });
+                    }
+                }
                 Expr::Index { base, index, span } if !in_atomic => {
                     // An array the body created ITSELF is private to this
                     // iteration, so any index into it is safe. Only a shared
-                    // array -- one whose name resolves below the loop -- has to
-                    // be written at the slot this iteration owns.
+                    // array -- one whose name resolves below the loop, or one
+                    // bound from such a name -- has to be written at the slot
+                    // this iteration owns.
                     let shared = match base.as_ref() {
-                        Expr::Var { name, .. } => self.escapes_loop(name, floor),
+                        Expr::Var { name, .. } => self.shared_in_loop(name, floor),
                         _ => true,
                     };
                     let names_binder = matches!(
@@ -2250,6 +2353,14 @@ impl Checker {
         }
         match &a.target {
             Expr::Var { name, span } => {
+                // Inside a method a bare name may be one of the receiver's
+                // fields, exactly as it is when it is READ. Locals win, so
+                // this is only reached when nothing else binds the name.
+                if self.lookup(name).is_none() {
+                    if let Some(target) = self.self_field_target(name, *span)? {
+                        return self.field_assignment(target, a, *span);
+                    }
+                }
                 let local = self
                     .lookup(name)
                     .ok_or_else(|| TypeError::AssignToUndeclared {
@@ -2298,7 +2409,110 @@ impl Checker {
                     span: a.span,
                 })
             }
+            Expr::Field { base, name, span } => {
+                let base = self.expr(base, None)?;
+                let Type::Object(object) = base.ty else {
+                    return Err(TypeError::UnknownField {
+                        span: *span,
+                        found: base.ty,
+                        name: name.clone(),
+                    });
+                };
+                let Some((index, field)) = self.registry.field_decl(object, name) else {
+                    return Err(TypeError::UnknownField {
+                        span: *span,
+                        found: base.ty,
+                        name: name.clone(),
+                    });
+                };
+                let (ty, mutable) = (field.ty, field.mutable);
+                if !mutable {
+                    return Err(TypeError::FieldIsImmutable {
+                        span: *span,
+                        name: name.clone(),
+                    });
+                }
+                self.field_assignment(
+                    AssignTarget::Field {
+                        base: Box::new(base),
+                        index,
+                        ty,
+                    },
+                    a,
+                    *span,
+                )
+            }
             other => Err(TypeError::InvalidAssignTarget { span: other.span() }),
+        }
+    }
+
+    /// A bare name that is a mutable field of the receiver, as an assignment
+    /// target. `None` when the name is not a field at all; the immutable case
+    /// is an error rather than a miss, so that `w := 1` on a constructor
+    /// parameter says what is wrong instead of "not declared".
+    fn self_field_target(&mut self, name: &str, span: Span) -> Checked<Option<AssignTarget>> {
+        let Some(ctx) = &self.self_ctx else {
+            return Ok(None);
+        };
+        let Some((index, field)) = ctx.fields.iter().enumerate().find(|(_, f)| f.name == name)
+        else {
+            return Ok(None);
+        };
+        if !field.mutable {
+            return Err(TypeError::FieldIsImmutable {
+                span,
+                name: name.to_owned(),
+            });
+        }
+        let (ty, receiver) = (field.ty, ctx.ty);
+        let index = u32::try_from(index).unwrap_or(u32::MAX);
+        Ok(Some(AssignTarget::Field {
+            base: Box::new(TypedExpr {
+                kind: TypedExprKind::Var("self".to_owned()),
+                ty: receiver,
+                span,
+            }),
+            index,
+            ty,
+        }))
+    }
+
+    /// The half both field spellings share: the compound operator and the
+    /// value, checked against the field's own type.
+    fn field_assignment(
+        &mut self,
+        target: AssignTarget,
+        a: &Assign,
+        span: Span,
+    ) -> Checked<TypedBlockItem> {
+        let AssignTarget::Field { ty, .. } = target else {
+            return Err(TypeError::InvalidAssignTarget { span });
+        };
+        let op = self.compound_op(a.op, ty, span)?;
+        let value = self.expr(&a.value, Some(ty))?;
+        Ok(TypedBlockItem::Assign {
+            target,
+            op,
+            value,
+            span: a.span,
+        })
+    }
+
+    /// A loop-local binding that names storage from outside the loop. Only a
+    /// reference type can: a scalar binding is a copy, and writing it cannot
+    /// reach anything another iteration sees.
+    fn taint_if_aliased(&mut self, name: &str, ty: Type, value: &Expr) {
+        let Some(floor) = self.parallel_loop().map(|c| c.floor) else {
+            return;
+        };
+        if !ty.is_reference() && !matches!(ty, Type::Array(_)) {
+            return;
+        }
+        if !self.reads_shared(value, floor) {
+            return;
+        }
+        if let Some(ctx) = self.loop_ctx.iter_mut().rev().find(|c| c.parallel) {
+            ctx.tainted.insert(name.to_owned());
         }
     }
 
@@ -2952,12 +3166,31 @@ impl Checker {
             let Expr::Var { name, span } = arg else {
                 continue;
             };
-            let shared_array = matches!(self.lookup(name).map(|l| l.ty), Some(Type::Array(_)))
-                && self.escapes_loop(name, floor);
-            if shared_array {
+            let Some(ty) = self.lookup(name).map(|l| l.ty) else {
+                continue;
+            };
+            if !self.shared_in_loop(name, floor) {
+                continue;
+            }
+            if matches!(ty, Type::Array(_)) {
                 return Err(TypeError::ParallelSharedArrayArgument {
                     span: *span,
                     name: name.clone(),
+                });
+            }
+            // An object is only safe to hand over while nothing inside it can
+            // be written. That was every object until field mutation landed,
+            // which is why this question is asked of the registry now rather
+            // than assumed.
+            if let Some(path) = self.registry.reaches_mutable(ty) {
+                return Err(TypeError::ParallelSharedObjectArgument {
+                    span: *span,
+                    name: name.clone(),
+                    path: if path.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{name}.{path}")
+                    },
                 });
             }
         }
@@ -3791,6 +4024,7 @@ impl Checker {
                         });
                     }
                     self.declare(b.name.clone(), ty, b.mutable);
+                    self.taint_if_aliased(&b.name, ty, &b.value);
                     typed.push(TypedBlockItem::Binding {
                         name: b.name.clone(),
                         ty,

@@ -38,6 +38,22 @@ fn compile_fixture(name: &str, tag: &str) -> PathBuf {
     out
 }
 
+/// The stderr of a compile that must be refused. Exit 1 and nothing else: 70
+/// is an internal error and 101 is a panic, and both mean the compiler broke
+/// rather than reported.
+fn refusal(name: &str) -> String {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture(name))
+        .arg("--emit-obj")
+        .arg("-o")
+        .arg("/dev/null")
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(out.status.code(), Some(1), "{message}");
+    message
+}
+
 fn run(binary: &PathBuf) -> Output {
     Command::new(binary)
         .output()
@@ -1289,5 +1305,118 @@ fn a_dispatch_table_built_while_signatures_were_settling_is_discarded() {
     let out = run(&binary);
     assert_eq!(String::from_utf8_lossy(&out.stdout), "1\n2\n1\n");
     assert_eq!(out.status.code(), Some(0));
+    let _ = std::fs::remove_file(&binary);
+}
+
+// ------------------------------------------------------- mutable fields
+
+/// A mutable field is storage, and the store is DIRECT.
+/// `Specification/basic/expressions/bindings.tex:60-61` says assigning a field
+/// calls the corresponding setter; there is no setter machinery in this
+/// compiler -- accessors are skipped at every member walk -- so calling one
+/// would mean inventing it. The deviation is named on `AssignTarget::Field`.
+///
+/// Three spellings in one program, because they take three different paths:
+/// `c.n := 5` is the dotted target, `c.n += 2` is the compound form that has to
+/// evaluate the receiver ONCE for the load and the store alike, and `n := n + 1`
+/// inside a method is the bare name that resolves to a field of `self`.
+#[test]
+fn a_mutable_field_is_written_by_all_three_spellings() {
+    let binary = compile_fixture("mutablefield.fss", "mutablefield");
+    let out = run(&binary);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "8\n18\nrenamed\n0\n41\n51\n"
+    );
+    assert_eq!(out.status.code(), Some(0));
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// The collector, and this is the first storage in the language a WRITE can put
+/// a pointer into after the block was allocated. An object goes through
+/// `fortress_alloc_scanned`, so the field is scanned and what it names survives
+/// unrelated allocation. Atomic memory is NOT scanned -- `runtime/tests/
+/// array_trace.c` measured that -- so getting an object onto the atomic path
+/// would free the string this field is still holding.
+#[test]
+fn a_pointer_stored_into_a_mutable_field_survives_a_collection() {
+    let binary = compile_fixture("gcfield.fss", "gcfield");
+    let out = run(&binary);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "kept-across-collection\n"
+    );
+    assert_eq!(out.status.code(), Some(0));
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// A field is not an assignment target unless it was declared `var`, the same
+/// rule a local binding has.
+#[test]
+fn an_immutable_field_is_not_an_assignment_target() {
+    let message = refusal("badimmutablefield.fss");
+    assert!(message.contains("field `w` is immutable"), "{message}");
+}
+
+/// The M5 soundness argument was "`f(h)` where `h` is an object holding an
+/// array would pass; no field store exists in the language yet, so nothing can
+/// exploit it today". A field store exists now, so these three are what keeps
+/// it true. An array has the `a[binder]` carve-out because an index can name
+/// the slot one iteration owns; a field has no index and no carve-out.
+#[test]
+fn a_parallel_body_may_not_write_a_field_of_anything_it_shares() {
+    let message = refusal("badparallelfield.fss");
+    assert!(
+        message.contains("is declared outside this loop"),
+        "{message}"
+    );
+    assert!(message.contains("a field has no index"), "{message}");
+}
+
+/// The aliasing case, and it needs its own diagnostic: `c` is loop-LOCAL, so
+/// the depth comparison that is the whole of M4's race freedom calls it
+/// private. It was bound from something outside the loop, which is what makes
+/// it shared. A message naming the wrong mechanism sends the reader to the
+/// wrong fix -- the class of defect this project has paid for twice.
+#[test]
+fn a_loop_local_bound_from_shared_storage_is_still_shared() {
+    let message = refusal("badaliasedfield.fss");
+    assert!(
+        message.contains("declared inside this loop but bound from storage outside it"),
+        "{message}"
+    );
+}
+
+/// The array refusal one indirection out. Reachability is computed over the
+/// registry, so an object holding an object holding an array is refused too,
+/// and the diagnostic names the path it found.
+#[test]
+fn an_object_that_reaches_mutable_storage_may_not_be_handed_to_a_call() {
+    let message = refusal("badsharedobject.fss");
+    assert!(
+        message.contains("reaches mutable storage through `b.n`"),
+        "{message}"
+    );
+}
+
+/// What the three refusals leave available, and it is exact rather than
+/// approximately right: `atomic` serialises the write, so the count is the same
+/// at every worker count. Both halves matter -- the second loop writes the
+/// field from a CALLEE, which is the path the reachability refusal covers.
+#[test]
+fn an_atomic_field_write_counts_exactly_at_every_worker_count() {
+    let binary = compile_fixture("atomicfield.fss", "atomicfield");
+    for workers in ["1", "2", "8", "16"] {
+        let out = Command::new(&binary)
+            .env("FORTRESS_WORKERS", workers)
+            .output()
+            .expect("could not run the produced binary");
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "100000\n200000\n",
+            "at FORTRESS_WORKERS={workers}"
+        );
+        assert_eq!(out.status.code(), Some(0));
+    }
     let _ = std::fs::remove_file(&binary);
 }

@@ -192,7 +192,9 @@ pub enum TypeError {
         span: Span,
         name: String,
     },
-    MutableFieldUnsupported {
+    /// `o.f := e` where `f` was not declared `var`. The binding rule is the
+    /// same one a local has: only `var` is storage.
+    FieldIsImmutable {
         span: Span,
         name: String,
     },
@@ -268,6 +270,30 @@ pub enum TypeError {
     ParallelSharedArrayArgument {
         span: Span,
         name: String,
+    },
+    /// `o.f := e` inside a parallel loop body where `o` is shared between
+    /// iterations. The array rule above is `a[binder]`, an index this
+    /// iteration provably owns; a field has no index, so there is no
+    /// equivalent carve-out and the write is refused outright.
+    ParallelFieldEscape {
+        span: Span,
+        name: String,
+        /// The receiver is loop-LOCAL and still shared, because it was bound
+        /// from something outside the loop. Naming the wrong one of these two
+        /// mechanisms sends the reader to the wrong fix.
+        aliased: bool,
+    },
+    /// A loop-captured object that can REACH mutable storage, handed to a call
+    /// from inside a parallel body. The same hole as the array argument, one
+    /// indirection further out: the callee's `o.f := v` is checked against an
+    /// empty loop context. Reachability is computed over the registry, so an
+    /// object holding an object holding an array is refused too.
+    ParallelSharedObjectArgument {
+        span: Span,
+        name: String,
+        /// What the reachability walk found, for the diagnostic: the field
+        /// path that reaches mutable storage.
+        path: String,
     },
     /// `x op= e` for an operator with no identity the compiler knows. `||=`,
     /// `UNIONCAT=` and the rest need `Monoid[\\T,op\\]` and a user-declared
@@ -369,7 +395,7 @@ impl TypeError {
             | Self::NotATrait { span, .. }
             | Self::UnknownField { span, .. }
             | Self::DottedMethodUnsupported { span, .. }
-            | Self::MutableFieldUnsupported { span, .. }
+            | Self::FieldIsImmutable { span, .. }
             | Self::FieldNeedsInitializer { span, .. }
             | Self::SingletonNotConstructible { span, .. }
             | Self::SingletonInitializerRestricted { span, .. }
@@ -382,6 +408,8 @@ impl TypeError {
             | Self::ParallelEscape { span, .. }
             | Self::ParallelIndexNotBinder { span, .. }
             | Self::ParallelSharedArrayArgument { span, .. }
+            | Self::ParallelFieldEscape { span, .. }
+            | Self::ParallelSharedObjectArgument { span, .. }
             | Self::CompoundOperatorUnsupported { span, .. }
             | Self::ParallelFormUnsupported { span, .. }
             | Self::AccessorUnsupported { span, .. }
@@ -548,9 +576,10 @@ impl core::fmt::Display for TypeError {
                 "`{name}` is a getter or setter; accessors parse but are not \
                  implemented, and `{name}` is read rather than called"
             ),
-            Self::MutableFieldUnsupported { name, .. } => {
-                write!(f, "`var {name}`: mutable fields are not implemented")
-            }
+            Self::FieldIsImmutable { name, .. } => write!(
+                f,
+                "field `{name}` is immutable; declare it `var {name}: T = ...` to assign to it"
+            ),
             Self::FieldNeedsInitializer { name, .. } => write!(
                 f,
                 "field `{name}` is not a constructor parameter, so it needs `= ...`"
@@ -614,6 +643,35 @@ impl core::fmt::Display for TypeError {
                  shares, and passing it to a call puts any assignment to it \
                  out of reach of the loop's own rules, which are lexical. \
                  Wrap the call in `atomic`, or write `for ... <- seq(...)`"
+            ),
+            Self::ParallelFieldEscape {
+                name,
+                aliased: false,
+                ..
+            } => write!(
+                f,
+                "`{name}` is declared outside this loop, and a parallel loop \
+                 body may not assign to a field of it; a field has no index, \
+                 so there is no `a[i]` rule to make two iterations disjoint. \
+                 Wrap the assignment in `atomic`, or write `for ... <- seq(...)`"
+            ),
+            Self::ParallelFieldEscape {
+                name,
+                aliased: true,
+                ..
+            } => write!(
+                f,
+                "`{name}` is declared inside this loop but bound from storage \
+                 outside it, so every iteration writes the same object. \
+                 Wrap the assignment in `atomic`, or write `for ... <- seq(...)`"
+            ),
+            Self::ParallelSharedObjectArgument { name, path, .. } => write!(
+                f,
+                "`{name}` is shared between iterations of this parallel loop \
+                 and reaches mutable storage through `{path}`, so passing it \
+                 to a call puts any assignment to it out of reach of the \
+                 loop's own rules, which are lexical. Wrap the call in \
+                 `atomic`, or write `for ... <- seq(...)`"
             ),
             Self::CompoundOperatorUnsupported { op, .. } => write!(
                 f,

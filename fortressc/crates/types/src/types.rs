@@ -448,6 +448,10 @@ pub struct TypedObject {
 pub struct TypedField {
     pub name: String,
     pub ty: Type,
+    /// Declared `var`. Only a mutable field is an assignment target, and it is
+    /// the only storage in the program the collector can see a write to after
+    /// construction -- Boehm needs no write barrier, so the store is a store.
+    pub mutable: bool,
 }
 
 /// A generated dispatch function. Its signature is the call site's static
@@ -626,5 +630,21 @@ pub enum AssignTarget {
         base: Box<TypedExpr>,
         index: Box<TypedExpr>,
         elem: Elem,
+    },
+    /// `o.f := e`, and a bare `f := e` inside a method, which resolves to the
+    /// same thing with `self` as the base.
+    ///
+    /// A DIRECT STORE, and that is a named deviation:
+    /// `Specification/basic/expressions/bindings.tex:60-61` says assigning a
+    /// field calls the corresponding setter. There is no setter to call --
+    /// accessors are excluded from every member walk in this compiler -- so
+    /// calling one would mean inventing it. The store is what the layout
+    /// already supports; when setters land, this becomes the path a field with
+    /// no declared setter takes.
+    Field {
+        base: Box<TypedExpr>,
+        /// Into [`TypedObject::fields`], as [`TypedExprKind::Field`] is.
+        index: u32,
+        ty: Type,
     },
 }
