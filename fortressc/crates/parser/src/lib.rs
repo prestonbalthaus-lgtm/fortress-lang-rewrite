@@ -63,6 +63,10 @@ fn operator_text<'a>(kind: &Kind<'a>) -> Option<&'a str> {
         // (`lexical-structure.tex:1173-1176`), so `opr CMP` reaches the same
         // run the symbolic names do and needs no branch of its own.
         Kind::OpWord(text) => text,
+        // An allowlisted Unicode operator character carries its own text, so
+        // the name of `opr \u{2229}` is that character and nothing has to know
+        // which one it is.
+        Kind::UniOp(text) => text,
         Kind::Bang => "!",
         Kind::Question => "?",
         Kind::Tilde => "~",
@@ -1474,14 +1478,19 @@ impl<'t, 'a> Parser<'t, 'a> {
     /// the corpus lexes.
     fn type_ref(&mut self) -> Parsed<TypeRef> {
         let from = self.type_atom()?;
-        if !(self.at(&Kind::Minus)
+        // `->`, two tokens joined by adjacency, or U+2192, one token.
+        let width = if self.at(&Kind::RightArrow) {
+            1
+        } else if self.at(&Kind::Minus)
             && self.glued_right(self.pos)
-            && matches!(self.peek_ahead(1), Some(Kind::Gt)))
+            && matches!(self.peek_ahead(1), Some(Kind::Gt))
         {
+            2
+        } else {
             return Ok(from);
-        }
+        };
         let start = from.span().start;
-        self.pos += 2;
+        self.pos += width;
         self.skip_newlines();
         let to = self.type_ref()?;
         let end = to.span().end;
@@ -1910,6 +1919,7 @@ impl<'t, 'a> Parser<'t, 'a> {
             Kind::Dollar => "$",
             Kind::Percent => "%",
             Kind::At => "@",
+            Kind::UniOp(text) => *text,
             // `#` is DELIBERATELY absent. `for i <- 0#n` writes the extent
             // form of a generator range with it (`for_expr` reads it at
             // :2030), so taking it here as an infix operator makes the range
@@ -2010,10 +2020,10 @@ impl<'t, 'a> Parser<'t, 'a> {
         self.skip_newlines();
         let (binder, _) = self.identifier("a loop variable")?;
         self.skip_newlines();
-        if !self.at_left_arrow() {
+        let Some(width) = self.left_arrow_width() else {
             return Err(self.error("`<-` after the loop variable"));
-        }
-        self.pos += 2;
+        };
+        self.pos += width;
         self.skip_newlines();
 
         // `seq(...)` is recognised HERE rather than as a call, because it is
@@ -2061,10 +2071,17 @@ impl<'t, 'a> Parser<'t, 'a> {
     }
 
     /// `<-`, as two glued tokens.
-    fn at_left_arrow(&self) -> bool {
-        self.at(&Kind::Lt)
+    /// `Symbol.rats:197`: `leftarrow = "<-" / "\u2190"`. The ASCII spelling is
+    /// two tokens joined by adjacency and the Unicode one is a single token, so
+    /// this answers how many to step over rather than merely whether to.
+    fn left_arrow_width(&self) -> Option<usize> {
+        if self.at(&Kind::LeftArrow) {
+            return Some(1);
+        }
+        (self.at(&Kind::Lt)
             && self.glued_right(self.pos)
-            && matches!(self.peek_ahead(1), Some(Kind::Minus))
+            && matches!(self.peek_ahead(1), Some(Kind::Minus)))
+        .then_some(2)
     }
 
     fn unary(&mut self) -> Parsed<Expr> {
@@ -2295,9 +2312,15 @@ impl<'t, 'a> Parser<'t, 'a> {
                 span,
                 word: (*word).to_owned(),
             }),
-            Kind::Bar | Kind::BarBar | Kind::BarRun(_) | Kind::LeftBar | Kind::LBrace => {
-                self.enclosing_application()
-            }
+            Kind::Bar
+            | Kind::BarBar
+            | Kind::BarRun(_)
+            | Kind::LeftBar
+            | Kind::LBrace
+            // U+27E8 and U+27E9 are angle brackets, and the allowlist gives
+            // them no ASCII spelling because the reference grammar gives them
+            // none either -- so the pair they name is `\u{27E8}_\u{27E9}`.
+            | Kind::UniOp(_) => self.enclosing_application(),
             _ => Err(self.error("an expression")),
         }
     }

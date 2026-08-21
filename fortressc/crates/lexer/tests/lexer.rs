@@ -428,23 +428,80 @@ fn tabs_are_rejected_outside_comments_and_accepted_inside_them() {
 
 #[test]
 fn non_ascii_is_rejected_outside_comments_and_strings() {
-    assert_eq!(err("a \u{2208} b"), LexErrorKind::NonAsciiCharacter);
+    // U+2208 was the example here until the allowlist landed; it is now an
+    // operator character. U+2211 (SUMMATION) stands in: it is exactly the kind
+    // of mathematical symbol decision 3 declines to admit, and the corpus does
+    // not write it outside a comment.
+    assert_eq!(err("a \u{2211} b"), LexErrorKind::NonAsciiCharacter);
     // U+202F is the one exception, and only inside a numeral.
     assert_eq!(kinds("1\u{202F}000").len(), 2);
     assert_eq!(err("a \u{202F} b"), LexErrorKind::NonAsciiCharacter);
     // Inside a comment or a string it is content.
-    assert_eq!(kinds("a (* \u{2208} *) b").len(), 3);
-    assert_eq!(kinds("\"\u{2208}\"").len(), 2);
+    assert_eq!(kinds("a (* \u{2211} *) b").len(), 3);
+    assert_eq!(kinds("\"\u{2211}\"").len(), 2);
 }
 
 #[test]
 fn out_of_subset_literals_fail_with_specific_errors() {
     assert_eq!(err("'x'"), LexErrorKind::CharacterLiteralUnsupported);
-    assert_eq!(
-        err("\u{201C}hi\u{201D}"),
-        LexErrorKind::CurlyQuoteStringUnsupported
-    );
     assert_eq!(err("7FFF_16"), LexErrorKind::RadixNumeralUnsupported);
+}
+
+/// `Literal.rats:151-155` gives a string literal two delimiter pairs.
+/// `ProjectFortress/tests/matchingStringMarks.fss` prints through the curly
+/// one, and the grammar has an explicit error production for each MIXED pair.
+#[test]
+fn a_string_may_be_curly_quoted_but_its_marks_must_match() {
+    assert_eq!(
+        kinds("\u{201C}hi\u{201D}"),
+        vec![Kind::StrLit("hi".to_owned()), Kind::Eof]
+    );
+    assert_eq!(
+        kinds("\"hi\""),
+        vec![Kind::StrLit("hi".to_owned()), Kind::Eof]
+    );
+    assert_eq!(err("\"hi\u{201D}"), LexErrorKind::MismatchedStringMarks);
+    assert_eq!(err("\u{201C}hi\""), LexErrorKind::MismatchedStringMarks);
+    // An unopened closing mark is the same static error.
+    assert_eq!(err("a \u{201D} b"), LexErrorKind::MismatchedStringMarks);
+}
+
+/// The allowlist, and the two classes it is split into.
+///
+/// A codepoint the reference grammar lists as an alternative SPELLING of a
+/// token is that token -- `Symbol.rats:197`, :200, :214-216 spell each one out.
+/// Every other allowlisted codepoint is an ordinary operator character carrying
+/// its own text, because 02-stack's decision 3 says mathematical symbols take
+/// their meaning from library aliasing rather than from a token each.
+#[test]
+fn the_unicode_allowlist_splits_into_spellings_and_operators() {
+    for (src, kind) in [
+        ("\u{27E6}", Kind::LGeneric),
+        ("\u{27E7}", Kind::RGeneric),
+        ("\u{21D2}", Kind::FatArrow),
+        ("\u{2264}", Kind::Le),
+        ("\u{2265}", Kind::Ge),
+        ("\u{2260}", Kind::NotEq),
+        ("\u{2254}", Kind::ColonEq),
+        ("\u{2190}", Kind::LeftArrow),
+        ("\u{2192}", Kind::RightArrow),
+    ] {
+        assert_eq!(kinds(src), vec![kind, Kind::Eof], "{src:?} is a spelling");
+    }
+    for src in [
+        "\u{00AC}", "\u{2208}", "\u{2228}", "\u{2229}", "\u{226A}", "\u{226B}", "\u{2286}",
+        "\u{2287}", "\u{27E8}", "\u{27E9}",
+    ] {
+        assert_eq!(
+            kinds(src),
+            vec![Kind::UniOp(src), Kind::Eof],
+            "{src:?} is an operator character"
+        );
+    }
+    // And nothing else: a letter outside the allowlist is still refused, which
+    // is decision 3's whole point -- this is a curated list, not `ID_Start`.
+    assert_eq!(err("\u{1105}"), LexErrorKind::NonAsciiCharacter);
+    assert_eq!(err("\u{2020}"), LexErrorKind::NonAsciiCharacter);
 }
 
 // -------------------------------------- unary minus: shape same, spans differ

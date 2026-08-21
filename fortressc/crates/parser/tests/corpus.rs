@@ -169,8 +169,9 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
     // Enclosing-operator APPLICATION -- `|x|`, `<|a, b|>`, `{a, b}` -- took it
     // 798 -> 811. The declaration side has parsed since the `opr` spike; this
     // closed an exact declaration/expression asymmetry.
+    // The Unicode allowlist took it 811 -> 815.
     assert!(
-        parsed >= 811,
-        "parser corpus regressed: {parsed} files parse, floor is 811"
+        parsed >= 815,
+        "parser corpus regressed: {parsed} files parse, floor is 815"
     );
 }

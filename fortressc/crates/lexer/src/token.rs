@@ -137,6 +137,15 @@ pub enum Kind<'a> {
     /// `lexical-structure.tex:1174-1177` makes one base operator. Two is
     /// `BarBar`; the slice is carried because the run has no fixed length.
     BarRun(&'a str),
+    /// `<-` written as U+2190, and `->` as U+2192. Both ASCII spellings are two
+    /// tokens joined by span adjacency, so the Unicode ones cannot reuse them.
+    LeftArrow,
+    RightArrow,
+    /// An allowlisted Unicode operator character, carrying its own text. There
+    /// is ONE token for all ten because 02-stack's decision 3 says mathematical
+    /// symbols resolve through library aliasing rather than through a lexer
+    /// token each: an `opr` declaration is what gives one meaning.
+    UniOp(&'a str),
     /// `===`. There is no `==` in Fortress.
     EqEqEq,
     /// `=/=`.

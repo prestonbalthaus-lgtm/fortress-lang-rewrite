@@ -132,8 +132,11 @@ fn lexes_the_whole_corpus_without_panicking() {
     // binding position took it 1807 -> 1810. The six ordinary operator
     // characters `! ? ~ $ % @` and the three-or-more vertical-line run took it
     // 1810 -> 1833, and `UnrecognizedCharacter` 40 -> 2.
+    // The Unicode allowlist -- eighteen codepoints, measured over the library
+    // rather than guessed -- plus curly-quoted string literals took it
+    // 1833 -> 1845.
     assert!(
-        ok >= 1833,
-        "lexer corpus regressed: {ok} files lex, floor is 1833"
+        ok >= 1845,
+        "lexer corpus regressed: {ok} files lex, floor is 1845"
     );
 }

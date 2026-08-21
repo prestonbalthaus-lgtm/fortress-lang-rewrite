@@ -26,7 +26,10 @@ pub enum LexErrorKind {
     NonAsciiCharacter,
     CharacterLiteralUnsupported,
     RadixNumeralUnsupported,
-    CurlyQuoteStringUnsupported,
+    /// A string opened with one mark and closed with the other.
+    /// `Literal.rats:158-167` has an explicit error production for each
+    /// mixed pair, and the corpus has a must-fail test for it.
+    MismatchedStringMarks,
 }
 
 impl LexErrorKind {
@@ -58,8 +61,8 @@ impl LexErrorKind {
             }
             Self::CharacterLiteralUnsupported => "character literals are not in the M1 subset",
             Self::RadixNumeralUnsupported => "radix numerals are not in the M1 subset",
-            Self::CurlyQuoteStringUnsupported => {
-                "curly-quote string delimiters are not in the M1 subset; use `\"`"
+            Self::MismatchedStringMarks => {
+                "the opening and closing marks of a string literal must match"
             }
         }
     }

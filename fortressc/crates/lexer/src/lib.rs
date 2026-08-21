@@ -73,6 +73,9 @@ pub fn lex(source: &str) -> Result<Vec<Token<'_>>, LexError> {
             raw::Raw::Percent => Kind::Percent,
             raw::Raw::At => Kind::At,
             raw::Raw::BarRun => Kind::BarRun(slice),
+            raw::Raw::LeftArrow => Kind::LeftArrow,
+            raw::Raw::RightArrow => Kind::RightArrow,
+            raw::Raw::UniOp => Kind::UniOp(slice),
             raw::Raw::EqEqEq => Kind::EqEqEq,
             raw::Raw::NotEq => Kind::NotEq,
             raw::Raw::Lt => Kind::Lt,
@@ -119,8 +122,16 @@ fn numeral_kind(text: &str) -> Kind<'_> {
 /// forms plus the two curly quotes (`Literal.rats:182-196`); the scanner has
 /// already rejected anything else.
 fn decode_string(slice: &str) -> String {
-    let body = slice.strip_prefix('"').unwrap_or(slice);
-    let body = body.strip_suffix('"').unwrap_or(body);
+    // Either delimiter pair; `Literal.rats:151-155` gives the two the same
+    // content and the scanner has already refused a mixed pair.
+    let body = slice
+        .strip_prefix('"')
+        .or_else(|| slice.strip_prefix('\u{201C}'))
+        .unwrap_or(slice);
+    let body = body
+        .strip_suffix('"')
+        .or_else(|| body.strip_suffix('\u{201D}'))
+        .unwrap_or(body);
 
     let mut out = String::with_capacity(body.len());
     let mut chars = body.chars();
