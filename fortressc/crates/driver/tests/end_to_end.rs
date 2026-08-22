@@ -2366,9 +2366,13 @@ fn the_uniformity_exemption_does_not_reach_outside_the_legacy_library() {
 fn dimension_and_unit_declarations_run() {
     let binary = compile_fixture("dimensions.fss", "dimensions");
     let out = run(&binary);
+    // BOTH FEATURES IN ONE FILE, which is the assertion that answers "do
+    // dimensions break array types": `dim Area = Length^2` and `a: ZZ32[5]`
+    // share one suffix production, classified by the position it was written
+    // in. The first three lines are the array half.
     assert_eq!(
         String::from_utf8_lossy(&out.stdout),
-        "dimensions declared\n"
+        "4\n2.5\n7\ndimensions declared\n"
     );
     assert_eq!(out.status.code(), Some(0));
     let _ = std::fs::remove_file(&binary);

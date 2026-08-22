@@ -17,6 +17,19 @@ unit meter_squared: Area = square meter
 
 trait Quantity[\unit U absorbs unit, nat e\] end
 
-run() = println("dimensions declared")
+(* THE TWO FEATURES IN ONE FILE. `Length^2` above is a dimension EXPONENT and
+   `ZZ32[5]` here is an array SIZE, and both spellings run through the same
+   suffix production -- one node at parse time, classified by the position it
+   was written in, which is how the reference implementation reads it too. *)
+g[\nat n\](a: ZZ32[n]): ZZ32 = a[0]
+
+run() = do
+  a: ZZ32[5] = [0 1 2 3 4]
+  v: RR64[2] = [1.5 2.5]
+  println(a[4])
+  println(v[1])
+  println(g[\3\]([7 8 9]))
+  println("dimensions declared")
+end
 
 end

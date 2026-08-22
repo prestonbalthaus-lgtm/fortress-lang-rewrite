@@ -69,6 +69,10 @@ preflight() {
 # Every declaration form on one file: base and derived dimensions, the bundled
 # `dim ... SI_unit ...`, an alias list, a `: Dim` annotation, a definition, the
 # `per` and `square` sugar, and a `unit` static parameter with `absorbs unit`.
+#
+# AND THE TWO FEATURES TOGETHER, which is the assertion that answers "do
+# dimensions break array types". `dim Area = Length^2` and `a: ZZ32[5]` share
+# the caret and bracket suffix production, so the fixture writes both and RUNS.
 declaring() {
     printf '== every declaration form parses, registers and runs ==\n'
     if ! timeout 300 "$fortressc" "$repo/fortressc/tests/dimensions.fss" \
@@ -81,8 +85,8 @@ declaring() {
     local out status
     out=$("$build/dimensions" 2>&1)
     status=$?
-    if [[ $status -eq 0 && $out == "dimensions declared" ]]; then
-        ok 'it runs and exits 0'
+    if [[ $status -eq 0 && $out == $'4\n2.5\n7\ndimensions declared' ]]; then
+        ok 'it runs, exits 0, and its array types work alongside its dimensions'
     else
         bad 'it runs and exits 0' "status $status: $out"
     fi
