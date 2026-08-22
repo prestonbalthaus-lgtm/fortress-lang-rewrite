@@ -50,6 +50,14 @@ impl Row<'_> {
     fn is_own_static(&self, name: &str) -> bool {
         self.statics.iter().any(|p| p.name == name)
     }
+
+    /// Whether a `comprises` clause on this row is one THIS FILE wrote. Named
+    /// rather than spelled `!r.own` at the site so the mutation table has a
+    /// UNIQUE line to reach: the open-comprises rule below tests `own` too, and
+    /// a `from` pattern matching twice is a row that silently does nothing.
+    const fn clause_is_ours(&self) -> bool {
+        self.own
+    }
 }
 
 impl Row<'_> {
@@ -170,7 +178,7 @@ pub fn check(
         // together they reported that BirdyLib's `LessThan` fails to extend a
         // trait BirdyLib has never heard of. The api is refused on its own when
         // it is compiled, which is where that error belongs.
-        if !r.own {
+        if !r.clause_is_ours() {
             continue;
         }
         for listed in r.comprises {

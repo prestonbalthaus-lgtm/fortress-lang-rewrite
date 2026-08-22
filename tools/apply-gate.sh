@@ -586,7 +586,7 @@ MUTATIONS=(
   'crates/driver/src/resolve.rs|if component.name == IMPLICITLY_IMPORTED {|if false {|let the builtin implicitly import itself'
   'crates/driver/src/resolve.rs|let key = (name.clone(), import.items.clone());|let key = (name.clone(), ImportItems::OnDemand);|key the resolver on the api name alone again'
   'crates/types/src/comprises.rs|if r.is_own_static(sub) {|if false {|read a static parameter in a comprises clause as a type name'
-  'crates/types/src/comprises.rs|if !r.own {|if false {|report a merged comprises clause against the importing file'
+  'crates/types/src/comprises.rs|if !r.clause_is_ours() {|if false {|report a merged comprises clause against the importing file'
   'crates/parser/src/lib.rs|if is_literal(operand) {|if true {|duplicate every chain operand instead of binding it'
   'crates/parser/src/lib.rs|Some((seen, earlier)) if seen != this => {|Some((seen, earlier)) if false => {|drop the chain sense check'
   'crates/parser/src/lib.rs|&& self.glued_left(self.pos + 1)|&& false|drop the local function declaration guard'
