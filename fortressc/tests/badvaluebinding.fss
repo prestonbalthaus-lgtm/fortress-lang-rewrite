@@ -1,12 +1,19 @@
 component badvaluebinding
 export Executable
 
-(* A component-level value binding parses, and is refused. Carrying it as a
-   nullary function would compile this program and silently never run the
-   initializer, because nothing can reference the name. *)
+(* THIS FIXTURE INVERTED WHEN COMPONENT-LEVEL VALUES LANDED, and the thing it
+   was guarding is now the thing it asserts. It used to check that a value
+   binding was REFUSED, because carrying one as a nullary function compiles
+   this program and silently never runs the initializer -- nothing can
+   reference the name.
+
+   The initializer runs now, so the file proves it: `INITIALIZER RAN` must
+   appear, and it must appear BEFORE `run`, because initializers are emitted
+   inside `main` after `fortress_runtime_init` and before `run` is called. *)
 noisy: ZZ32 = do println("INITIALIZER RAN"); 7 end
 
 run(): () = do
   println("run")
+  println(noisy)
 end
 end

@@ -394,8 +394,30 @@ juxtnary|a juxtaposition of 3 elements led by a function is not implemented
 juxtsingleton|neither multiplication nor concatenation
 localfn|a local function declaration is not implemented
 badchainsense|chained ordering operators must have the same sense
-badvaluebinding|a component-level value declaration is parsed but not implemented
+badarrowtype|an arrow type is not implemented
 CASES
+
+    # `badvaluebinding.fss` LEFT THIS LIST when component-level values landed,
+    # and became its own POSITIVE case. It used to assert a refusal, because a
+    # value carried as a nullary function compiles the program and SILENTLY
+    # NEVER RUNS the initializer. Now the initializer runs, and the assertion
+    # is the ORDER: it is emitted inside `main` after `fortress_runtime_init`
+    # and before `run`, so its line must come FIRST.
+    local out
+    if "$fortressc" "$repo/fortressc/tests/badvaluebinding.fss" \
+            -o "$build/badvaluebinding" >/dev/null 2>&1; then
+        out=$("$build/badvaluebinding" 2>&1)
+        if [[ $out == "INITIALIZER RAN"$'\n'"run"$'\n'"7" ]]; then
+            ok 'a component-level initializer runs, and runs BEFORE `run`'
+        else
+            bad 'a component-level initializer runs, and runs BEFORE `run`' \
+                "got $(printf '%s' "$out" | tr '\n' '/')"
+        fi
+    else
+        bad 'badvaluebinding.fss compiles' \
+            "$("$fortressc" "$repo/fortressc/tests/badvaluebinding.fss" 2>&1 \
+               | grep -v '^fortressc: ' | head -1)"
+    fi
 }
 
 # The milestone's headline number, and the first time it has been guarded. The
@@ -460,7 +482,7 @@ MUTATIONS=(
   'crates/parser/src/lib.rs|if is_literal(operand) {|if true {|duplicate every chain operand instead of binding it'
   'crates/parser/src/lib.rs|Some((seen, earlier)) if seen != this => {|Some((seen, earlier)) if false => {|drop the chain sense check'
   'crates/parser/src/lib.rs|&& self.glued_left(self.pos + 1)|&& false|drop the local function declaration guard'
-  'crates/types/src/lib.rs|if f.value_binding {|if false {|carry a component-level value binding as a nullary function'
+  'crates/types/src/lib.rs|Decl::Value(v) => Some(v),|Decl::Value(_) => None,|see no component-level values at all, so no initializer runs'
 )
 
 # FORTRESSC AND --mutate DO NOT MIX, and the failure is silent. Every mutation

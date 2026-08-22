@@ -3,17 +3,24 @@ component badarrowtype
 export Executable
 
 (* An arrow type this subset does not implement.
-   SPIKE-CLOSURE-REPRESENTATION made `ZZ32 -> String` a real type -- it lifts to
-   a generated trait -- so the file had to move to an arrow that is still out of
-   the subset, or it would have stopped testing anything. A TUPLE DOMAIN is the
-   one that stays: `apply` would need a parameter this subset cannot store, so
-   `liftable` leaves the arrow exactly as it was and `Registry::resolve` gives
-   it the refusal it always had.
 
-   The liftable case is covered by fortressc/tests/closure.fss and by
+   THIS FILE HAS MOVED TWICE, and each move is the same shape: the arrow it
+   named became implemented, so it had to name one that had not.
+     * `ZZ32 -> String` went when SPIKE-CLOSURE-REPRESENTATION lifted an arrow
+       over storable types into a generated trait.
+     * A TUPLE DOMAIN went when `basic/overloading.tex:125` was applied -- a
+       functional has a single parameter WHICH MAY BE A TUPLE, so `(A,B) -> C`
+       is `apply(x: A, y: B): C` and needs no tuple value.
+
+   A `()` CODOMAIN is what stays, and it stays MEASURED rather than pending:
+   allowing it gained zero files and accepted
+   `ProjectFortress/parser_tests/XXXArrowType.fss`, an XXX must-fail. See the
+   note on `liftable_domain` in crates/types/src/closure.rs.
+
+   The liftable cases are covered by fortressc/tests/closure.fss and by
    `an_arrow_over_liftable_types_becomes_a_trait_and_the_rest_stay_refused` in
-   crates/types/tests/types.rs, which asserts all four forms in one place. *)
-f(g: (ZZ32, ZZ32) -> String): ZZ32 = 1
+   crates/types/tests/types.rs. *)
+f(g: ZZ32 -> ()): ZZ32 = 1
 
 run(): () = ()
 
