@@ -20,7 +20,7 @@
 
 use std::collections::HashMap;
 
-use fortress_ast::{Decl, Span, TypeRef};
+use fortress_ast::{Decl, Span, StaticParam, TypeRef};
 
 use crate::error::TypeError;
 
@@ -30,9 +30,26 @@ struct Row<'a> {
     span: Span,
     extends: &'a [TypeRef],
     comprises: &'a [TypeRef],
+    /// THE DECLARATION'S OWN STATIC PARAMETERS, and this field is not
+    /// bookkeeping. `Library/CompilerAlgebra.fsi:24` writes
+    /// `trait Equality[\T\] comprises T`, where `T` IS THE STATIC PARAMETER --
+    /// so the name in the clause is not a type at all, and looking it up among
+    /// the declarations means finding whatever unrelated `T` the file happens
+    /// to declare. `ProjectFortress/test_library/Compiled3.f.fsi` declares
+    /// `trait T`, and with `Equality` merged in that combination reported
+    /// `T is listed in the comprises clause of Equality but does not
+    /// explicitly extend Equality` about two things that have nothing to do
+    /// with each other.
+    statics: &'a [StaticParam],
     open: bool,
     is_trait: bool,
     own: bool,
+}
+
+impl Row<'_> {
+    fn is_own_static(&self, name: &str) -> bool {
+        self.statics.iter().any(|p| p.name == name)
+    }
 }
 
 impl Row<'_> {
@@ -64,6 +81,7 @@ fn row(decl: &Decl, own: bool) -> Option<(&str, Row<'_>)> {
                 span: t.span,
                 extends: &t.extends,
                 comprises: &t.comprises,
+                statics: &t.static_params,
                 open: t.comprises_open,
                 is_trait: true,
                 own,
@@ -75,6 +93,7 @@ fn row(decl: &Decl, own: bool) -> Option<(&str, Row<'_>)> {
                 span: o.span,
                 extends: &o.extends,
                 comprises: &o.comprises,
+                statics: &o.static_params,
                 open: o.comprises_open,
                 is_trait: false,
                 own,
@@ -92,18 +111,38 @@ pub fn check(
     open_allowed: bool,
     fallback: Span,
 ) -> Result<(), TypeError> {
-    let rows: HashMap<&str, Row> = merged
+    // DECLARATION ORDER IS CARRIED ALONGSIDE THE MAP, and it is not tidiness.
+    // Every rule below reports the FIRST violation it meets; iterating a
+    // `HashMap` meant the first was whichever the hasher happened to yield, so
+    // the SAME BINARY reported `XXXComprisesHidden.fss` against `T` on one run
+    // and `S` on the next. Both are correct refusals of the same file, which is
+    // why it went unnoticed -- and this project asserts MESSAGES, so a
+    // nondeterministic one is a flaky gate waiting to happen.
+    let mut rows: HashMap<&str, Row> = HashMap::new();
+    let mut order: Vec<&str> = Vec::new();
+    for (decl, is_own) in merged
         .iter()
-        .filter_map(|d| row(d, false))
-        .chain(own.iter().filter_map(|d| row(d, true)))
-        .collect();
+        .map(|d| (d, false))
+        .chain(own.iter().map(|d| (d, true)))
+    {
+        let Some((name, r)) = row(decl, is_own) else {
+            continue;
+        };
+        // An own declaration REPLACES a merged one of the same name and keeps
+        // the merged one's position, so the order is a pure function of the
+        // two inputs either way.
+        if rows.insert(name, r).is_none() {
+            order.push(name);
+        }
+    }
 
     // traits.tex:161-162 -- "In an API (but not a component), a `comprises`
     // clause may include `...`". A rule about WHERE the marker may be written,
     // so it reads only what this file wrote: an open clause arriving through a
     // resolved api is that api's business and is legal there.
     if !open_allowed {
-        for (name, r) in &rows {
+        for name in &order {
+            let Some(r) = rows.get(name) else { continue };
             if r.open && r.own {
                 return Err(TypeError::OpenComprisesInComponent {
                     span: r.span,
@@ -118,9 +157,28 @@ pub fn check(
     // their `extends` clause)". A name that is not declared in either set is
     // NOT reported: an api this compiler cannot read yet is skipped by the
     // resolver, so demanding the declaration would measure the parser.
-    for (name, r) in &rows {
+    for name in &order {
+        let Some(r) = rows.get(name) else { continue };
+        // THE CLAUSE MUST BE ONE THIS FILE WROTE, which is the same guard the
+        // open-comprises rule below already carries and for the same reason.
+        // A merged api's `comprises` clause names ITS OWN declarations, and the
+        // resolver deliberately lets this file's declarations WIN a contested
+        // name -- so the name in the clause and the row it finds here can be
+        // two unrelated types. `ProjectFortress/BirdyLib/Comparison.fsi`
+        // declares `object LessThan extends Comparison`, the merged builtin
+        // declares `trait TotalComparison comprises { LessThan, ... }`, and
+        // together they reported that BirdyLib's `LessThan` fails to extend a
+        // trait BirdyLib has never heard of. The api is refused on its own when
+        // it is compiled, which is where that error belongs.
+        if !r.own {
+            continue;
+        }
         for listed in r.comprises {
             let Some(sub) = head(listed) else { continue };
+            // A STATIC PARAMETER IS NOT A TYPE NAME. See `Row::statics`.
+            if r.is_own_static(sub) {
+                continue;
+            }
             let Some(sub_row) = rows.get(sub) else {
                 continue;
             };
@@ -145,13 +203,14 @@ pub fn check(
     // row's `extends` against every open row rather than one row against
     // itself, and it only fires where the open clause is legal in the first
     // place -- in a component the previous rule has already refused.
-    let open: Vec<&str> = rows
+    let open: Vec<&str> = order
         .iter()
-        .filter(|(_, r)| r.open && r.is_trait)
-        .map(|(n, _)| *n)
+        .filter(|n| rows.get(*n).is_some_and(|r| r.open && r.is_trait))
+        .copied()
         .collect();
     if !open.is_empty() {
-        for (name, r) in &rows {
+        for name in &order {
+            let Some(r) = rows.get(name) else { continue };
             // THE EXTENDER MUST BE ONE THIS FILE WROTE. A component that
             // imports an api gets that api's traits merged into it, and
             // reporting the api's own ill-formedness against every importer is

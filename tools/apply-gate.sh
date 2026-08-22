@@ -272,8 +272,12 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # no slack, so it rises with the count.
 # `()` AS A STATIC ARGUMENT, same day: `ProjectFortress/LibraryBuiltin/
 # CompilerBuiltin.fsi`, the bootstrap root's own root. 67.
+# THE IMPLICIT BUILTIN IMPORT, same day: TWELVE apis gained and TWO lost, both
+# of the losses `test_library` support files that redeclare a builtin functional
+# method (`RecA.fsi`'s `odd(x:ZZ32)` against `odd(self)` on `ZZ32`). 77, and the
+# .fss count does not move at all -- the implicit import is api-side only.
 OBJECT_FLOOR=321
-API_FLOOR=67
+API_FLOOR=77
 
 passed=0
 failed=0
@@ -482,8 +486,107 @@ PY
 # Each entry is file|from|to|label. Every `from` must match exactly once in its
 # file, and the tree has to be clean first. Restored either way.
 
+# THE IMPLICIT BUILTIN IMPORT, and the three defects landing it exposed.
+# `library/structure.tex:16-18`: the default libraries "are automatically
+# imported by every Fortress component and API". The api half only -- the
+# component half would give a merged object a type tag and construct a merged
+# singleton in `main`, perturbing the IR of every module that already compiles.
+implicit_builtin_import() {
+    printf '== the implicit builtin import ==\n'
+    local err status out
+
+    err=$("$fortressc" "$repo/fortressc/tests/implicitbuiltin.fsi" \
+            --emit-obj -o /dev/null 2>&1 >/dev/null)
+    status=$?
+    if [[ $status -eq 0 ]]; then
+        ok 'an api names `RR32` with no import written'
+    else
+        bad 'an api names `RR32` with no import written' "status $status: $err"
+    fi
+
+    # AND THE COMPONENT HALF IS OUT. Without this the api case above passes
+    # whether the scope is api-only or universal.
+    err=$("$fortressc" "$repo/fortressc/tests/implicitbuiltin.fss" \
+            --emit-obj -o /dev/null 2>&1 >/dev/null)
+    status=$?
+    if refused_cleanly "$status" && [[ $err == *'unknown type `RR32`'* ]]; then
+        ok 'and a COMPONENT writing the same thing is still refused'
+    else
+        bad 'and a COMPONENT writing the same thing is still refused' "status $status: $err"
+    fi
+
+    # NOT INTO THE BUILTIN ITSELF. Observable in the count the driver prints:
+    # `CompilerBuiltin.fsi` writes two imports of its own and must resolve two.
+    out=$("$fortressc" "$repo/ProjectFortress/LibraryBuiltin/CompilerBuiltin.fsi" \
+            --emit-obj -o /dev/null 2>&1)
+    if [[ $out == *'resolved 2 api(s)'* ]]; then
+        ok 'the builtin does not implicitly import itself'
+    else
+        bad 'the builtin does not implicitly import itself' "$out"
+    fi
+
+    # A STATIC PARAMETER IN A `comprises` CLAUSE IS NOT A TYPE NAME.
+    err=$("$fortressc" "$repo/fortressc/tests/staticcomprises.fsi" \
+            --emit-obj -o /dev/null 2>&1 >/dev/null)
+    status=$?
+    if [[ $status -eq 0 ]]; then
+        ok '`trait Equality[\T\] comprises T` beside an unrelated `trait T`'
+    else
+        bad '`trait Equality[\T\] comprises T` beside an unrelated `trait T`' "status $status: $err"
+    fi
+
+    # A MERGED `comprises` CLAUSE IS NOT THE IMPORTER'S TO ANSWER FOR.
+    err=$("$fortressc" "$repo/fortressc/tests/comprisesuser.fsi" \
+            --emit-obj -o /dev/null 2>&1 >/dev/null)
+    status=$?
+    if [[ $status -eq 0 ]]; then
+        ok 'an imported clause naming a name this file also declares'
+    else
+        bad 'an imported clause naming a name this file also declares' "status $status: $err"
+    fi
+
+    # TWO REQUESTS FOR ONE api AT DIFFERENT NAME SETS ARE TWO REQUESTS.
+    err=$("$fortressc" "$repo/fortressc/tests/twoimports.fsi" \
+            --emit-obj -o /dev/null 2>&1 >/dev/null)
+    status=$?
+    if [[ $status -eq 0 ]]; then
+        ok 'both name sets land when one api is imported twice'
+    else
+        bad 'both name sets land when one api is imported twice' "status $status: $err"
+    fi
+
+    # AND THE DIAGNOSTIC IS THE SAME EVERY RUN. `comprises` reported the FIRST
+    # violation out of a `HashMap`, so the same binary named `T` on one run and
+    # `S` on the next. No mutation row can reach this -- swapping the iteration
+    # back is not a one-line change -- so it is asserted by repetition.
+    local first= this= same=1 i
+    for i in 1 2 3 4 5; do
+        this=$("$fortressc" "$repo/ProjectFortress/parser_tests/XXXComprisesHidden.fss" \
+                --emit-obj -o /dev/null 2>&1 >/dev/null | head -1)
+        if [[ -z $first ]]; then
+            first=$this
+        elif [[ $this != "$first" ]]; then
+            same=0
+        fi
+    done
+    if [[ $same -eq 1 && -n $first ]]; then
+        ok 'the `comprises` diagnostic is the same on five runs'
+    else
+        bad 'the `comprises` diagnostic is the same on five runs' "$first vs $this"
+    fi
+}
+
 MUTATIONS=(
   'crates/types/src/lib.rs|if self.lookup(name).is_some() {|if false {|drop the shadowing guard on a function element'
+  # THE IMPLICIT BUILTIN IMPORT, four axes. Its SCOPE is two decisions -- api
+  # rather than component, and not the builtin itself -- and the two defects it
+  # exposed are two more. Every target line is bar-free on purpose.
+  'crates/driver/src/resolve.rs|if !component.is_api {|if true {|never implicitly import the builtins'
+  'crates/driver/src/resolve.rs|if !component.is_api {|if false {|implicitly import the builtins into COMPONENTS too'
+  'crates/driver/src/resolve.rs|if component.name == IMPLICITLY_IMPORTED {|if false {|let the builtin implicitly import itself'
+  'crates/driver/src/resolve.rs|let key = (name.clone(), import.items.clone());|let key = (name.clone(), ImportItems::OnDemand);|key the resolver on the api name alone again'
+  'crates/types/src/comprises.rs|if r.is_own_static(sub) {|if false {|read a static parameter in a comprises clause as a type name'
+  'crates/types/src/comprises.rs|if !r.own {|if false {|report a merged comprises clause against the importing file'
   'crates/parser/src/lib.rs|if is_literal(operand) {|if true {|duplicate every chain operand instead of binding it'
   'crates/parser/src/lib.rs|Some((seen, earlier)) if seen != this => {|Some((seen, earlier)) if false => {|drop the chain sense check'
   'crates/parser/src/lib.rs|&& self.glued_left(self.pos + 1)|&& false|drop the local function declaration guard'
@@ -542,7 +645,8 @@ PY
         else
             rm -rf "$build"; mkdir -p "$build"
             passed=0; failed=0
-            runs_and_prints; evaluated_once; refusals
+            runs_and_prints; evaluated_once; implicit_builtin_import
+            refusals
             if [[ $failed -gt 0 ]]; then
                 printf 'REFUSED  %d check(s) failed, which is the point\n' "$failed"
             else
@@ -576,6 +680,7 @@ case "${1:-}" in
         preflight
         runs_and_prints
         evaluated_once
+        implicit_builtin_import
         refusals
         compile_metric
         ;;

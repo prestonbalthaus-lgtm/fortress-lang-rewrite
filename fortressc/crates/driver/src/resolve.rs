@@ -26,7 +26,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use fortress_ast::{Component, Decl, ImportDecl, ImportItems, TypeRef};
+use fortress_ast::{Component, Decl, ImportDecl, ImportItems, Span, TypeRef};
 
 /// `default_repository/configuration:44`:
 /// `fortress.source.path=;.;${_fr}/LibraryBuiltin;${FORTRESS_AUTOHOME}/Library;${_fr}/test_library`
@@ -38,6 +38,56 @@ const REPOSITORY_PATH: [&str; 3] = [
     "Library",
     "ProjectFortress/test_library",
 ];
+
+/// `Specification-1.0-frozen/library/structure.tex:16-18`: the default
+/// libraries "are automatically imported by every Fortress component and API".
+/// `CompilerBuiltin` is the one this compiler's own bootstrap needs -- it is
+/// what declares `RR32`, `RR64` and the numeric traits `FortressLibrary.fsi`
+/// stops on at :362 without ever writing an import for them.
+const IMPLICITLY_IMPORTED: &str = "CompilerBuiltin";
+
+/// THE api HALF ONLY, AND THE COMPONENT HALF IS ARCHITECTURALLY OUT.
+/// Merged declarations land in `component.decls`: a merged OBJECT takes a
+/// 32-bit type tag, which shifts every dispatch table built after it, and a
+/// merged SINGLETON is CONSTRUCTED in that program's `main`, because
+/// `emit_main` walks `component.objects`. Doing it component-side would perturb
+/// the emitted IR of every module that already compiles. An api is checked and
+/// never lowered, so neither happens there.
+///
+/// AND IT COULD NOT LAND UNTIL `CompilerBuiltin.fsi` ITSELF CHECKED. Written
+/// once before that and measured at 446 -> 392: merging a library that does not
+/// check poisons every importer with its own remaining error, and every one of
+/// the 57 losses reported the same `()` has no value.
+///
+/// NOT INTO THE BUILTIN ITSELF, and not into anything it reaches: only the
+/// TOP-LEVEL file gets the implicit import, because an api pulled in through
+/// the queue is resolved with the imports it WRITES. `CompilerBuiltin` imports
+/// `AnyType` and `CompilerAlgebra`, and injecting the reverse edge would make
+/// the graph the api-first design exists to keep acyclic.
+///
+/// LAST IN THE QUEUE, WHICH IS `insert(0, ..)`: the loop POPS, so index zero is
+/// reached last and an explicitly written import claims a contested name first.
+///
+/// TWO GUARDS ON TWO LINES, neither carrying a vertical bar: a mutation row
+/// splits on `IFS='|'`, so `||` cannot appear in a line a table has to reach.
+fn implicit_import(component: &Component, queue: &mut Vec<ImportDecl>) {
+    if !component.is_api {
+        return;
+    }
+    if component.name == IMPLICITLY_IMPORTED {
+        return;
+    }
+    queue.insert(
+        0,
+        ImportDecl {
+            api_name: IMPLICITLY_IMPORTED.to_owned(),
+            is_api: true,
+            items: ImportItems::OnDemand,
+            except: Vec::new(),
+            span: Span::new(0, 0),
+        },
+    );
+}
 
 /// Loads the api a component EXPORTS. Imports and exports read the same source
 /// path and the same files; what differs is the obligation -- an import puts
@@ -207,7 +257,18 @@ pub fn resolve(component: &Component, source: &Path) -> Resolution {
     let mut loaded = Vec::new();
     let mut missing = Vec::new();
     let mut unreadable = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
+    // KEYED BY THE api NAME AND WHAT THE IMPORT ASKED FOR, not by the name
+    // alone. `ComparisonLibrary.fsi` writes `import CompilerAlgebra.{Equality,
+    // opr =}` and `CompilerBuiltin` writes `import CompilerAlgebra.{Equality,
+    // StandardTotalOrder}`; with the name alone as the key the FIRST of those
+    // decided, the second was silently dropped, and a merged builtin trait was
+    // left extending a `StandardTotalOrder` nothing had brought in. Two
+    // requests for the same api at different name sets are two requests, and
+    // `taken` is what keeps the second from merging anything twice.
+    //
+    // IT STILL TERMINATES on a cycle: `RecA` importing `RecB` importing `RecA`
+    // is the SAME pair both times.
+    let mut seen: Vec<(String, ImportItems)> = Vec::new();
     // Declarations the component itself makes always win: an api gives a
     // SIGNATURE and the component gives the definition, and `source-code.tex`
     // makes satisfying the api the component's obligation rather than the
@@ -226,6 +287,7 @@ pub fn resolve(component: &Component, source: &Path) -> Resolution {
     // instantiation budget of a component that never named it, and
     // MAX_INSTANTIATIONS is what that component died on.
     let mut queue: Vec<ImportDecl> = component.imports.clone();
+    implicit_import(component, &mut queue);
     let mut sources: HashMap<String, PathBuf> = HashMap::new();
     while let Some(import) = queue.pop() {
         let Some((name, file)) = candidates(&import)
@@ -238,9 +300,11 @@ pub fn resolve(component: &Component, source: &Path) -> Resolution {
             }
             continue;
         };
-        if !seen.insert(name.clone()) {
+        let key = (name.clone(), import.items.clone());
+        if seen.contains(&key) {
             continue;
         }
+        seen.push(key);
         let Ok(text) = std::fs::read_to_string(&file) else {
             unreadable.push(name);
             continue;
@@ -297,7 +361,9 @@ pub fn resolve(component: &Component, source: &Path) -> Resolution {
                 merged.push(decl);
             }
         }
-        loaded.push(name);
+        if !loaded.contains(&name) {
+            loaded.push(name);
+        }
     }
 
     let mut component = component.clone();

@@ -2387,15 +2387,28 @@ fn the_bootstrap_root_parses_in_full() {
         "two BODILESS declarations of one signature are one declaration; that \
          wall may not come back: {message}"
     );
-    // REPINNED A THIRD TIME, AND THE NEW WALL IS NOT A LANGUAGE FEATURE AT ALL.
-    // `RR32` is declared in `ProjectFortress/LibraryBuiltin/CompilerBuiltin.fsi`
-    // and this compiler cannot import it yet. FortressLibrary.fsi is past every
-    // LANGUAGE wall it has had -- the scalar supertrait, tuple types, and the
-    // self-position pair -- and now waits on the builtin library.
+    // REPINNED A FOURTH TIME, AND THE WALL IS NOW THE LIBRARY CONTRADICTING
+    // ITSELF. The builtins ARE importable since the implicit import landed, so
+    // `RR32` resolves -- and `FortressLibrary.fsi:335` writes
+    // `trait RR64 ... comprises { Float, FloatLiteral, RR32, QQ }` while
+    // `CompilerBuiltin.fsi:447` writes `trait FloatLiteral excludes {RR32,
+    // RR64}`. One file says `FloatLiteral` is one of the traits immediately
+    // below `RR64`; the other says the two types cannot share a value.
+    // `traits.tex:232-235` makes the first an error unless `FloatLiteral`
+    // explicitly extends `RR64`, and it does not.
+    //
+    // THAT IS NOT A LANGUAGE FEATURE AND IT IS NOT OURS TO FIX. It is the same
+    // class as the `__cond` uniformity violation DEV-15 answers: the SHIPPED
+    // library is not conformant with the SHIPPED specification.
     assert!(
-        message.contains("unknown type `RR32`"),
-        "the remaining blocker should be a builtin the library cannot import: \
+        !message.contains("unknown type `RR32`"),
+        "the builtins are importable now; `RR32` may not come back as the wall: \
          {message}"
+    );
+    assert!(
+        message.contains("`FloatLiteral` is listed in the `comprises` clause of `RR64`"),
+        "the remaining blocker should be the library disagreeing with the \
+         builtin about `FloatLiteral`: {message}"
     );
 }
 
