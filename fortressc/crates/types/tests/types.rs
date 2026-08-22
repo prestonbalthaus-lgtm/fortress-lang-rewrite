@@ -1302,18 +1302,34 @@ fn an_arrow_over_liftable_types_becomes_a_trait_and_the_rest_stay_refused() {
         other => panic!("expected UnknownType for a trait field, got {other:?}"),
     }
 
-    // The three that are NOT liftable keep the diagnostic they had, because
-    // `apply` would need a parameter this subset cannot store -- or, for an
-    // undeclared name, because an abstract member's parameter types are
-    // resolved by nothing and it would compile in silence.
-    // `() -> ZZ32` is NOT in this list any more: a unit DOMAIN became liftable
-    // when `fn () => e` landed -- `apply` simply takes no parameter -- and 169
-    // of the corpus's 1064 `fn` uses are that shape. A unit CODOMAIN is still
-    // refused, because `apply` has to return something.
-    for source in [
-        "f(g: (ZZ32, ZZ32) -> ZZ32): ZZ32 = 1",
-        "f(g: ZZ32 -> ()): ZZ32 = 1",
-    ] {
+    // A TUPLE DOMAIN IS LIFTABLE NOW and is not in this list any more.
+    // `basic/overloading.tex:125` -- a functional has a single parameter WHICH
+    // MAY BE A TUPLE -- so `(A,B) -> C` is `apply(x: A, y: B): C` and needs no
+    // tuple VALUE at all. `Compiled17d.fss` writes `combine: (R,R) -> R`.
+    // It COMPILES: the arrow becomes a minted trait, so this is an ordinary
+    // function with an ordinary parameter and an ordinary body.
+    {
+        let src = "component t\nf(g: (ZZ32, ZZ32) -> ZZ32): ZZ32 = 1\nend\n";
+        let tokens = fortress_lexer::lex(src).expect("lex");
+        let ast = fortress_parser::parse(&tokens).expect("parse");
+        assert!(
+            check(&ast, Uniformity::Enforced).is_ok(),
+            "a tuple domain lifts"
+        );
+    }
+
+    // What is NOT liftable keeps the diagnostic it had, because `apply` would
+    // need a parameter this subset cannot store -- or, for an undeclared name,
+    // because an abstract member's parameter types are resolved by nothing and
+    // it would compile in silence.
+    //
+    // A `()` CODOMAIN IS STILL REFUSED, AND THAT IS MEASURED. Allowing it
+    // gained ZERO files -- `Zeepf.fsi:16`'s `foo: String -> ()` is refused a
+    // second time further along -- and ACCEPTED
+    // `ProjectFortress/parser_tests/XXXArrowType.fss`, an XXX must-fail, whose
+    // `f: ZZ32 -> () -> ()` starts qualifying the moment the inner `() -> ()`
+    // does.
+    for source in ["f(g: ZZ32 -> ()): ZZ32 = 1"] {
         match body_error(source) {
             TypeError::TypeNotImplemented { form, .. } => assert_eq!(form, "an arrow type"),
             other => panic!("expected TypeNotImplemented for `{source}`, got {other:?}"),

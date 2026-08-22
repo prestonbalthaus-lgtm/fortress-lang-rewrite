@@ -60,6 +60,7 @@ const TRAIT_PREFIX: &str = "Arrow$";
 pub(crate) fn lower(component: &Component) -> Result<Component, TypeError> {
     let mut pass = Pass {
         functions: BTreeMap::new(),
+        methods: BTreeMap::new(),
         traits: BTreeMap::new(),
         objects: BTreeMap::new(),
         known: BUILTIN_TYPE_NAMES.iter().map(|s| (*s).to_owned()).collect(),
@@ -101,6 +102,14 @@ struct Pass {
     /// that is an overload set, and a value use of one is ambiguous unless the
     /// arrow the context asks for picks exactly one.
     functions: BTreeMap<String, Vec<FnDecl>>,
+    /// Every METHOD's parameter list, by method name. Only the parameters are
+    /// kept, because that is all `arrow_parameters` reads.
+    ///
+    /// A DOTTED CALL NEEDS THIS AND HAD NOTHING. `arrow_parameters` consulted
+    /// `functions` alone, so `g.generate[\String\](somebody, plus)` --
+    /// `Compiled17d.fss:26` -- left its arguments unlifted and the checker
+    /// reported `unknown name somebody`, five files' worth.
+    methods: BTreeMap<String, Vec<Vec<Param>>>,
     /// Arrow signature to the trait minted for it. Ordered, because tags follow
     /// declaration order and declaration order has to be a fact about the
     /// source rather than about a hash.
@@ -133,16 +142,44 @@ fn is_infer(t: &TypeRef) -> bool {
 
 /// The `apply` parameter list for an arrow with this domain: none at all when
 /// the domain is `()`, and one otherwise.
-fn apply_params(from: &TypeRef, name: &str, span: Span) -> Vec<Param> {
-    if matches!(from, TypeRef::Unit { .. }) {
-        return Vec::new();
+/// The parameter list `apply` gets for an arrow of this domain.
+///
+/// A TUPLE DOMAIN IS N PARAMETERS, and that is not a shortcut -- it is
+/// `basic/overloading.tex:125`: "a functional has a SINGLE PARAMETER, WHICH MAY
+/// BE A TUPLE". An arrow's domain is that parameter, so `(A,B) -> C` and
+/// `apply(x: A, y: B): C` are the same thing, and `Compiled17d.fss:15` writes
+/// `combine: (R,R) -> R` expecting exactly that. Building one parameter of
+/// tuple type instead would need a tuple VALUE, which this backend does not
+/// have.
+fn collect_methods(members: &[Member], out: &mut BTreeMap<String, Vec<Vec<Param>>>) {
+    for member in members {
+        let Member::Method(m) = member else { continue };
+        out.entry(m.name.clone())
+            .or_default()
+            .push(m.params.clone());
     }
-    vec![Param {
-        name: name.to_owned(),
-        ty: from.clone(),
-        varargs: false,
-        span,
-    }]
+}
+
+fn apply_params(from: &TypeRef, name: &str, span: Span) -> Vec<Param> {
+    match from {
+        TypeRef::Unit { .. } => Vec::new(),
+        TypeRef::Tuple { elems, .. } => elems
+            .iter()
+            .enumerate()
+            .map(|(index, ty)| Param {
+                name: format!("{name}${index}"),
+                ty: ty.clone(),
+                varargs: false,
+                span,
+            })
+            .collect(),
+        _ => vec![Param {
+            name: name.to_owned(),
+            ty: from.clone(),
+            varargs: false,
+            span,
+        }],
+    }
 }
 
 fn sanitize(written: &str) -> String {
@@ -209,6 +246,20 @@ impl Pass {
                     .entry(f.name.clone())
                     .or_default()
                     .push(f.clone());
+            }
+        }
+
+        // METHODS ARE COLLECTED HERE, BETWEEN THE TWO PASSES, and the position
+        // is the whole of it: pass one REWRITES an arrow in a signature into
+        // the minted trait's name, and `arrow_parameters` matches on that name.
+        // Collected before pass one, every method still carried `E->R` as a
+        // `TypeRef::Arrow`, matched nothing, and every dotted call's arrow
+        // argument went unlifted.
+        for decl in &decls {
+            match decl {
+                Decl::Trait(t) => collect_methods(&t.members, &mut self.methods),
+                Decl::Object(o) => collect_methods(&o.members, &mut self.methods),
+                Decl::Function(_) | Decl::Value(_) => {}
             }
         }
 
@@ -689,18 +740,23 @@ impl Pass {
                 span,
                 name: name.to_owned(),
             })?;
-        let nullary = matches!(from, TypeRef::Unit { .. });
+        // THE DOMAIN IS A PARAMETER LIST, not one parameter, and that is
+        // `basic/overloading.tex:125` again: a functional has a single
+        // parameter WHICH MAY BE A TUPLE. `()` is the empty list, a tuple is
+        // its elements, anything else is one.
+        let wanted: Vec<String> = match &from {
+            TypeRef::Unit { .. } => Vec::new(),
+            TypeRef::Tuple { elems, .. } => elems.iter().map(TypeRef::written).collect(),
+            other => vec![other.written()],
+        };
         let matching: Vec<&FnDecl> = candidates
             .iter()
             .filter(|f| {
-                let domain = if nullary {
-                    f.params.is_empty()
-                } else {
-                    f.params.len() == 1
-                        && f.params
-                            .first()
-                            .is_some_and(|p| p.ty.written() == from.written())
-                };
+                let domain = f.params.len() == wanted.len()
+                    && f.params
+                        .iter()
+                        .zip(&wanted)
+                        .all(|(p, w)| p.ty.written() == *w);
                 domain
                     && f.return_type
                         .as_ref()
@@ -716,19 +772,25 @@ impl Pass {
             });
         }
 
+        // MINTED ONCE and used twice: `apply`'s parameter list below and the
+        // arguments this call forwards to the real function must agree, and
+        // building them separately is how they would come apart.
+        let forwarded = apply_params(&from, "x$0", span);
         let body = Expr::Call {
             callee: Box::new(Expr::Var {
                 name: name.to_owned(),
                 span,
             }),
-            args: if nullary {
-                Vec::new()
-            } else {
-                vec![Expr::Var {
-                    name: "x$0".to_owned(),
+            // ONE ARGUMENT PER PARAMETER `apply_params` MINTED, and it has to
+            // agree with that function or the forwarding call has the wrong
+            // arity. A tuple domain names them `x$0$0`, `x$0$1`, ...
+            args: forwarded
+                .iter()
+                .map(|p| Expr::Var {
+                    name: p.name.clone(),
                     span,
-                }]
-            },
+                })
+                .collect(),
             span,
         };
         let object = ObjectDecl {
@@ -754,7 +816,7 @@ impl Pass {
                 // No `self` parameter: a `self` parameter marks a FUNCTIONAL
                 // method, which lifts into the top-level overload set and is a
                 // different namespace entirely. `apply` has to be dotted.
-                params: apply_params(&from, "x$0", span),
+                params: forwarded,
                 return_type: Some(to),
                 body: Some(body),
                 accessor: false,
@@ -808,6 +870,10 @@ impl Pass {
                     Expr::Var { name, .. } if scope.get(name).is_none() => {
                         self.arrow_parameters(name, args.len())
                     }
+                    // A DOTTED CALL. `g.generate(somebody, plus)` names a
+                    // METHOD, and its arrow parameters lift exactly as a
+                    // function's do.
+                    Expr::Field { name, .. } => self.arrow_parameters(name, args.len()),
                     _ => Vec::new(),
                 };
                 self.rewrite_expr(callee, scope)?;
@@ -1023,8 +1089,25 @@ impl Pass {
     /// there is nothing unstorable about it. 169 of the corpus's 1064 `fn` uses
     /// are `fn () => e`. The CODOMAIN is still an ordinary type -- `apply` has
     /// to return something.
+    /// A DOMAIN MAY BE A TUPLE, and every element must be liftable. `apply`
+    /// takes one parameter per element -- see `apply_params` -- so nothing here
+    /// needs a tuple VALUE, which is what used to make this `false`.
+    /// A `()` CODOMAIN IS DELIBERATELY NOT LIFTABLE, and this is a MEASURED
+    /// refusal rather than an oversight.
+    ///
+    /// `Zeepf.fsi:16` writes `foo: String -> ()` and would like it. Allowing
+    /// it was tried: it did NOT clear that file -- an api's arrow-typed value
+    /// is refused a second time, further along -- and it DID accept
+    /// `ProjectFortress/parser_tests/XXXArrowType.fss`, whose `XXX` prefix
+    /// means 1.0 refuses it. Its `f: ZZ32 -> () -> ()` becomes liftable the
+    /// moment a unit codomain is, because the inner `() -> ()` starts
+    /// qualifying. Zero files gained, one must-fail lost.
     fn liftable_domain(&self, t: &TypeRef) -> bool {
-        matches!(t, TypeRef::Unit { .. }) || self.liftable(t)
+        match t {
+            TypeRef::Unit { .. } => true,
+            TypeRef::Tuple { elems, .. } => elems.iter().all(|e| self.liftable(e)),
+            _ => self.liftable(t),
+        }
     }
 
     /// Whether an arrow over this type can become a trait.
@@ -1106,12 +1189,25 @@ impl Pass {
             .map(|(key, arrow)| (arrow.name.as_str(), key))
             .collect();
         let mut out: Vec<Option<ArrowKey>> = vec![None; arity];
-        let Some(candidates) = self.functions.get(name) else {
-            return out;
-        };
+        // FUNCTIONS AND METHODS BOTH. A dotted call reaches this with a method
+        // name, and consulting only `functions` left every arrow argument of
+        // one unlifted.
+        let from_functions = self
+            .functions
+            .get(name)
+            .into_iter()
+            .flatten()
+            .map(|f| f.params.as_slice());
+        let from_methods = self
+            .methods
+            .get(name)
+            .into_iter()
+            .flatten()
+            .map(Vec::as_slice);
+        let candidates: Vec<&[Param]> = from_functions.chain(from_methods).collect();
         let mut seen: BTreeSet<usize> = BTreeSet::new();
-        for decl in candidates.iter().filter(|f| f.params.len() == arity) {
-            for (index, p) in decl.params.iter().enumerate() {
+        for params in candidates.iter().filter(|p| p.len() == arity) {
+            for (index, p) in params.iter().enumerate() {
                 let TypeRef::Named { name: pname, .. } = &p.ty else {
                     continue;
                 };

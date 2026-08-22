@@ -2537,6 +2537,84 @@ fn a_tuple_whose_value_is_used_is_still_refused() {
     let _ = std::fs::remove_file(&src);
 }
 
+/// A TUPLE-DOMAIN ARROW IS N PARAMETERS, verified BY VALUE.
+/// `basic/overloading.tex:125` -- a functional has a single parameter WHICH MAY
+/// BE A TUPLE -- so `(A,B) -> C` mints an `apply(x: A, y: B): C` and needs no
+/// tuple value at all.
+#[test]
+fn a_tuple_domain_arrow_forwards_every_argument() {
+    let src = output_path("arrowtuple").with_extension("fss");
+    std::fs::write(
+        &src,
+        "component arrowtuple\n\
+         export Executable\n\
+         add(p: ZZ32, q: ZZ32): ZZ32 = p + q\n\
+         comb(f: (ZZ32,ZZ32) -> ZZ32, x: ZZ32): ZZ32 = f(x,x)\n\
+         run():()= println(comb(add, 3))\n\
+         end\n",
+    )
+    .expect("could not write fixture");
+    let exe = output_path("arrowtuple-out");
+    let built = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(&src)
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .expect("could not run fortressc");
+    assert!(
+        built.status.success(),
+        "{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let ran = Command::new(&exe).output().expect("could not run");
+    assert_eq!(String::from_utf8_lossy(&ran.stdout), "6\n");
+    let _ = std::fs::remove_file(&src);
+    let _ = std::fs::remove_file(&exe);
+}
+
+/// A NAMED FUNCTION PASSED TO A METHOD'S ARROW PARAMETER, which the lift could
+/// not see: `arrow_parameters` consulted top-level functions alone, so a dotted
+/// call left its arrow arguments unlifted and the checker said `unknown name`.
+/// `Compiled17d.fss` is the corpus program, and it self-checks -- it prints the
+/// concatenation `34`.
+#[test]
+fn a_method_arrow_parameter_lifts_a_named_function() {
+    let exe = output_path("compiled17d");
+    let built = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(corpus("ProjectFortress/compiler_tests/Compiled17d.fss"))
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .expect("could not run fortressc");
+    assert!(
+        built.status.success(),
+        "{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let ran = Command::new(&exe).output().expect("could not run");
+    assert_eq!(String::from_utf8_lossy(&ran.stdout), "34\n");
+    let _ = std::fs::remove_file(&exe);
+}
+
+/// AND `XXXArrowType.fss` STAYS REFUSED. It is an XXX must-fail and it is the
+/// first casualty of widening the codomain: `f: ZZ32 -> () -> ()` becomes
+/// liftable the moment a `()` codomain does. That widening was tried, gained
+/// ZERO files, and was reverted.
+#[test]
+fn a_curried_arrow_field_stays_refused() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(corpus("ProjectFortress/parser_tests/XXXArrowType.fss"))
+        .arg("-o")
+        .arg(output_path("xxxarrow-out"))
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        message.contains("an arrow type is not implemented in this subset"),
+        "{message}"
+    );
+}
+
 /// THE SELF-POSITION PAIR IS ONE DECLARATION, and this is what unblocks the
 /// standard library. `Library/FlatString.fsi` writes both
 /// `opr ||(self, b:F)` and `opr ||(a:F, self)`; they differ only in which
