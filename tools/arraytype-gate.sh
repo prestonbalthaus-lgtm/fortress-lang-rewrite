@@ -271,7 +271,11 @@ EOF
 # --------------------------------------------------------------- mutations
 
 MUTATIONS=(
-  'crates/types/src/lib.rs|if declared_len == items.len() {|if true {|stop comparing a declared size with the literal that fills it'
+  # RE-TARGETED at the matrix aggregate. The row named the single comparison
+  # `check_declared_extent` used to make; it walks every dimension now, and the
+  # row read `0 hits` and reported COULD NOT BE APPLIED -- which is the clean
+  # escape this table's own trap 3 exists to turn into a hard error.
+  'crates/types/src/lib.rs|if declared_len != *found {|if false {|stop comparing a declared size with the literal that fills it'
   'crates/types/src/registry.rs|if spelling == ShapeSpelling::Caret {|if false {|let a caret shape resolve as an array'
   # THE RANK, at each of the four places it can be wrong: the linearisation,
   # the per-dimension bound, the checker's arity comparison, and the mangle.
