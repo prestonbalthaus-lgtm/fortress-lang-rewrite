@@ -58,11 +58,12 @@ bad() { failed=$((failed + 1)); printf 'FAIL  %s\n' "$1"; [[ -n ${2:-} ]] && pri
 # timeout, 139 SIGSEGV. 0 means it accepted a program it should have refused.
 refused_cleanly() { [[ $1 -eq 1 ]]; }
 
-# The eleven lines charliteral.fss computes, written here rather than copied
-# from a run: four characters, four cross-checks, two orderings and a
-# concatenation.
+# The twelve lines charliteral.fss computes, written here rather than copied
+# from a run: five characters -- one of them NON-ASCII, which is refused
+# everywhere outside a comment, a string and, by decision, a character literal
+# -- four cross-checks, two orderings and a concatenation.
 expected_output() {
-    printf 'a\n%s\nǇ\n\U0001D11E\ntrue\ntrue\ntrue\ntrue\nordered\nreflexive\nconcatenated: z\n' "'"
+    printf 'a\n%s\nǇ\nα\n\U0001D11E\ntrue\ntrue\ntrue\ntrue\nordered\nreflexive\nconcatenated: z\n' "'"
 }
 
 selftest() {
@@ -81,10 +82,10 @@ selftest() {
             ok "status $status is refused as a clean refusal"
         fi
     done
-    if [[ $(expected_output | wc -l) -eq 11 ]]; then
-        ok 'the expected output is eleven lines'
+    if [[ $(expected_output | wc -l) -eq 12 ]]; then
+        ok 'the expected output is twelve lines'
     else
-        bad 'the expected output is eleven lines' "$(expected_output | wc -l)"
+        bad 'the expected output is twelve lines' "$(expected_output | wc -l)"
     fi
 }
 
@@ -107,7 +108,7 @@ shapes() {
     out=$("$build/charliteral" 2>&1)
     status=$?
     if [[ $status -eq 0 && $out == "$(expected_output)" ]]; then
-        ok 'one character, an apostrophe, four and five hex digits, three names and an ordering'
+        ok 'one character, an apostrophe, a Greek letter, four and five hex digits, three names and an ordering'
     else
         bad 'every character literal shape' \
             "status $status: $(printf '%s' "$out" | tr '\n' ' ')"

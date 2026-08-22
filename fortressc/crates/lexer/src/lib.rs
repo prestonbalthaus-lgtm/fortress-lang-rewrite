@@ -101,6 +101,49 @@ pub fn lex(source: &str) -> Result<Vec<Token<'_>>, LexError> {
 
 /// Group separators are deleted before the value is computed, so `1'000'000`
 /// and `1000000` are the same numeral (`ExprFactory.java:612-613`).
+/// A radix numeral to the DECIMAL DIGIT STRING every other literal carries.
+///
+/// ARBITRARY PRECISION, AND THAT IS NOT GOLD PLATING. Accumulating into a
+/// `u128` panicked the LEXER on a forty-digit hexadecimal literal -- exit 101 on
+/// user-supplied source, which this compiler's rules forbid outright -- and in a
+/// release build it would have WRAPPED instead, silently. The plain decimal path
+/// hands its digits through untouched and lets the checker say `integer literal
+/// does not fit in ZZ32`; this makes the radix path reach the same diagnostic
+/// rather than a different fate.
+///
+/// `raw::digit_value` and NOT `from_str_radix`: `X` is ten and `E` is eleven at
+/// radix twelve, which no standard parser knows. The scanner has already refused
+/// every digit at or above the radix, so `None` here is unreachable.
+fn to_decimal(clean: &str, radix: u32) -> Option<String> {
+    if clean.is_empty() {
+        return None;
+    }
+    // Little-endian decimal digits, multiplied and added one source digit at a
+    // time. No allocation per digit and no ceiling but memory.
+    let mut out: Vec<u32> = vec![0];
+    for c in clean.chars() {
+        let mut carry = raw::digit_value(c, radix)?;
+        for place in &mut out {
+            let n = *place * radix + carry;
+            *place = n.rem_euclid(10);
+            carry = n.div_euclid(10);
+        }
+        while carry > 0 {
+            out.push(carry.rem_euclid(10));
+            carry = carry.div_euclid(10);
+        }
+    }
+    while out.len() > 1 && out.last() == Some(&0) {
+        out.pop();
+    }
+    Some(
+        out.iter()
+            .rev()
+            .map(|d| char::from_digit(*d, 10).unwrap_or('0'))
+            .collect(),
+    )
+}
+
 fn numeral_kind(text: &str) -> Kind<'_> {
     // A RADIX LITERAL IS DECODED HERE AND CARRIED AS DECIMAL DIGITS, so nothing
     // downstream needs to know a base existed: the parser turns `digits` into a
@@ -108,21 +151,10 @@ fn numeral_kind(text: &str) -> Kind<'_> {
     if let Some((digits, specifier)) = text.rsplit_once('_') {
         if let Some(radix) = raw::radix_of(specifier) {
             let clean = digits.replace(NUMERAL_SEPARATORS, "");
-            // `raw::digit_value` and NOT `from_str_radix`: `X` is ten and `E`
-            // is eleven at radix twelve, which no standard parser knows. The
-            // scanner has already refused every digit at or above the radix.
-            let mut value: u128 = 0;
-            let mut ok = !clean.is_empty();
-            for c in clean.chars() {
-                match raw::digit_value(c, radix) {
-                    Some(d) => value = value * u128::from(radix) + u128::from(d),
-                    None => ok = false,
-                }
-            }
-            if ok {
+            if let Some(decimal) = to_decimal(&clean, radix) {
                 return Kind::IntLit {
                     text,
-                    digits: value.to_string(),
+                    digits: decimal,
                 };
             }
         }

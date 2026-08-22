@@ -3415,7 +3415,10 @@ fn the_builtin_type_names_agree_across_the_passes() {
 
 // --------------------------------------------------------------- characters
 
-/// EVERY SHAPE `lexical-structure.tex:862-877` ACCEPTS, and the middle four
+/// EVERY SHAPE `lexical-structure.tex:862-877` ACCEPTS -- including a NON-ASCII
+/// character, which is refused everywhere outside a comment, a string and, by
+/// decision, a character literal (`literals.tex:41-46` writes them in the
+/// specification's own prose) -- and the middle four
 /// lines are CROSS-CHECKS rather than prints: `'0061' = 'a'` and
 /// `'TAB' = '\t'` relate two decoding paths to one character, which is the only
 /// assertion a decoder that got one path right and the other wrong cannot
@@ -3427,7 +3430,7 @@ fn every_character_literal_shape_decodes_to_one_character() {
     assert_eq!(out.status.code(), Some(0));
     assert_eq!(
         String::from_utf8_lossy(&out.stdout),
-        "a\n'\n\u{01C7}\n\u{1D11E}\ntrue\ntrue\ntrue\ntrue\nordered\nreflexive\nconcatenated: z\n"
+        "a\n'\n\u{01C7}\n\u{03B1}\n\u{1D11E}\ntrue\ntrue\ntrue\ntrue\nordered\nreflexive\nconcatenated: z\n"
     );
     let _ = std::fs::remove_file(&binary);
 }

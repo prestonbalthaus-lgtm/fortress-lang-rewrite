@@ -473,6 +473,44 @@ fn a_radix_numeral_uses_the_specifications_digit_values() {
     assert_eq!(err("2x"), LexErrorKind::NumeralWithLetters);
 }
 
+/// ARBITRARY PRECISION, AND THIS IS THE TEST THAT FORCED IT. Accumulating a
+/// radix literal into a `u128` panicked the LEXER on forty hexadecimal digits --
+/// exit 101 on user-supplied source -- and would have WRAPPED silently in a
+/// release build. The plain decimal path hands its digits through untouched and
+/// lets the checker refuse them; the radix path reaches the same place now.
+#[test]
+fn a_radix_numeral_wider_than_any_machine_integer_is_still_digits() {
+    let digits = |src: &str| match kinds(src).first() {
+        Some(Kind::IntLit { digits, .. }) => digits.clone(),
+        other => panic!("not an integer literal: {other:?}"),
+    };
+    // 2^160 - 1: forty hexadecimal digits, wider than any machine integer.
+    assert_eq!(
+        digits("0FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF_16"),
+        "1461501637330902918203684832716283019655932542975"
+    );
+    assert_eq!(digits("0_16"), "0");
+    assert_eq!(digits("00FF_16"), "255");
+}
+
+/// A CHARACTER LITERAL IS A CONTENT CONTEXT, and that is a decision rather than
+/// an oversight. Non-ASCII is refused everywhere else outside comments and
+/// strings; `literals.tex:41-46` writes `\u{03B1}` and `\u{2295}` as character
+/// literals in the specification's own prose, so the quotes make a third one.
+#[test]
+fn a_character_literal_may_hold_a_non_ascii_character() {
+    assert_eq!(
+        kinds("'\u{03B1}'"),
+        vec![Kind::CharLit('\u{03B1}'), Kind::Eof]
+    );
+    assert_eq!(
+        kinds("'\u{2295}'"),
+        vec![Kind::CharLit('\u{2295}'), Kind::Eof]
+    );
+    // Outside one it is still refused.
+    assert_eq!(err("a \u{2295} b"), LexErrorKind::NonAsciiCharacter);
+}
+
 /// `lexical-structure.tex:862-877` lists four shapes a character literal may
 /// take and two it may not, and each refusal names WHICH -- `'x'` used to be
 /// "character literals are not in the M1 subset", which is no longer true of

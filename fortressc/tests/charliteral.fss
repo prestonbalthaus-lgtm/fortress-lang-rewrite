@@ -5,12 +5,18 @@ export Executable
    lines CROSS-CHECKS one against another: a hex code point and the character it
    names must compare equal, and so must an escape and its spelled name. A
    decoder that got one path wrong and the other right would still print
-   plausible characters on its own. *)
+   plausible characters on its own.
+
+   THE GREEK LETTER IS A DECISION AND NOT AN OVERSIGHT. Non-ASCII is refused
+   everywhere outside comments and strings; `literals.tex:41-46` writes it
+   inside character literals in the specification's own prose, so the quotes
+   make a THIRD content context. *)
 
 run(): () = do
     println('a')
     println(''')
     println('01C7')
+    println('α')
     println('1D11E')
     println('TAB' = '\t')
     println('NEWLINE' = '\n')
