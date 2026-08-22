@@ -298,7 +298,13 @@ RUN_TIMEOUT     = 20
 # semantics lane's 291 -> 285, where every lost case was a must-fail being
 # wrongly accepted; this is the same shape one step further out -- a PASS being
 # wrongly earned.
-PASS_FLOOR = 338
+# 2026-08-22: 338 -> 340, RAISED BECAUSE PASSES WERE WON. Tuple destructuring
+# landed and `Compiled5.Binding.fss` and `VarRefTest3.fss` now compile, run and
+# agree with the oracle -- one prints 6765 (fib 20 through two destructurings
+# per recursion) and the other prints PASS. Raising it is what stops either
+# silently going back to a discarded Boolean comparison, which is what that
+# syntax parsed as before the binder node existed.
+PASS_FLOOR = 340
 
 args, opt = sys.argv[1:], {}
 i = 0
