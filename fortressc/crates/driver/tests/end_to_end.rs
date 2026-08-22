@@ -2433,6 +2433,29 @@ fn a_bound_is_charged_to_its_own_member_of_an_overload_set() {
     assert_eq!(stdout, "1\n2\n", "each call must reach its own member");
 }
 
+/// AND THE PRUNE ITSELF IS LOAD BEARING, which the test above does NOT reach --
+/// the mutation table said so by SURVIVING when the prune was replaced with a
+/// no-op. Not erasing the obligation is what fixes the wrong refusal; PRUNING
+/// is what stops the member it belonged to from being dispatched to anyway.
+/// Without it `f[\R\](R, 0)` compiles and prints 2, calling the member whose
+/// bound `R` does not satisfy. A silent wrong answer.
+#[test]
+fn a_member_whose_bound_failed_is_not_a_dispatch_target() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture("overloadboundprune.fss"))
+        .arg("--emit-obj")
+        .arg("-o")
+        .arg("/dev/null")
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "the pruned member must not be callable:\n{message}"
+    );
+}
+
 /// AND WHEN NO MEMBER'S BOUND HOLDS, THE CLEAN DIAGNOSTIC SURVIVES. Pruning
 /// them all turns `Green does not satisfy T extends Red` into a dispatch
 /// failure reading `takes 1 argument(s), found 1`, which is nonsense. A member

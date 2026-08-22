@@ -389,15 +389,20 @@ mutate() {
         exit 2
     fi
 
-    local entry file from to label hits status
+    local entry file from to mutation_label hits status
     local survived=0 broken=0
     for entry in "${MUTATIONS[@]}"; do
-        IFS='|' read -r file from to label <<<"$entry"
-        printf '\n== mutation: %s ==\n' "$label"
+        # NOT `label`. `refusals` reads its own table into a variable of that
+        # name and is called from inside this loop, so the SURVIVED line below
+        # printed a CHECK's name instead of the mutation's -- which is how a
+        # real survivor was first read as a pre-existing row.
+        IFS='|' read -r file from to mutation_label <<<"$entry"
+        printf '\n== mutation: %s ==\n' "$mutation_label"
 
         hits=$(grep -F -c -- "$from" "$repo/fortressc/$file")
         if [[ $hits -ne 1 ]]; then
-            printf 'FAIL  the mutation pattern is not unique (%s hits in %s)\n' "$hits" "$file"
+            printf 'FAIL  the mutation pattern is not unique (%s hits in %s) for %s\n' \
+                "$hits" "$file" "$mutation_label"
             broken=$((broken + 1))
             continue
         fi
@@ -427,7 +432,7 @@ PY
             if [[ $failed -gt 0 ]]; then
                 printf 'REFUSED  %d check(s) failed, which is the point\n' "$failed"
             else
-                printf 'SURVIVED %s -- the gate did not notice\n' "$label"
+                printf 'SURVIVED %s -- the gate did not notice\n' "$mutation_label"
                 survived=$((survived + 1))
             fi
         fi
@@ -513,6 +518,22 @@ overload_member_bounds() {
     else
         bad 'each call reaches the member whose bound it satisfies' \
             "status $status, out [$out]: $err"
+    fi
+
+    # AND THE PRUNE ITSELF IS LOAD BEARING, which the two checks around it do
+    # NOT reach -- the mutation table said so by SURVIVING. Not erasing the
+    # obligation is what fixes the wrong refusal; PRUNING is what stops the
+    # member it belonged to from being dispatched to anyway. Without it
+    # `f[\R\](R, 0)` compiles and prints 2, calling the member whose bound R
+    # does not satisfy. A silent wrong answer.
+    err=$(timeout 300 "$fortressc" "$repo/fortressc/tests/overloadboundprune.fss" \
+            --emit-obj -o /dev/null 2>&1 >/dev/null)
+    status=$?
+    if refused_cleanly "$status"; then
+        ok 'a member whose bound failed is not a dispatch target'
+    else
+        bad 'a member whose bound failed is not a dispatch target' \
+            "status $status: $err"
     fi
 
     # AND WHEN NO MEMBER HOLDS, THE CLEAN DIAGNOSTIC SURVIVES. Pruning them all
