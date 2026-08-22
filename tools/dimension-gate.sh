@@ -128,7 +128,11 @@ EOF
 # this rung and which sends the reader to the wrong place.
 refusals() {
     printf '== the refusals ==\n'
-    local name pattern label err status
+    # `entry` and `label` are LOCAL because this function is called from inside
+    # the mutation loop, which iterates a variable of each name. Without it a
+    # SURVIVED line names a CHECK instead of the mutation that survived -- which
+    # is what generics-gate did, and it cost a session's worth of misreading.
+    local entry name pattern label err status
     for entry in \
         "baddimname|is not a declared dimension|a derivation over an undeclared name is refused" \
         "baddimtype|is a dimension, not a type|a dimension used as a type says which it is" \

@@ -309,7 +309,7 @@ PY
             if [[ $failed -gt 0 ]]; then
                 printf 'REFUSED  %d check(s) failed, which is the point\n' "$failed"
             else
-                printf 'SURVIVED  the gate did not notice\n'
+                printf 'SURVIVED %s -- the gate did not notice\n' "$label"
                 survived=$((survived + 1))
             fi
         fi

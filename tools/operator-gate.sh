@@ -219,7 +219,11 @@ builtins() {
 
 halts() {
     printf '== the halts ==\n'
-    local binary out status
+    # `entry` and `label` are LOCAL because this function is called from inside
+    # the mutation loop, which iterates a variable of each name. Without it a
+    # SURVIVED line names a CHECK instead of the mutation that survived -- which
+    # is what generics-gate did, and it cost a session's worth of misreading.
+    local entry name phrase label binary out status
     for entry in \
         "negexponent|negative exponent has no integer result|a negative integer exponent" \
         "assertfail|assertion failed|a failed assert"; do
@@ -335,7 +339,7 @@ PY
             if [[ $failed -gt 0 ]]; then
                 printf 'REFUSED  %d check(s) failed, which is the point\n' "$failed"
             else
-                printf 'SURVIVED  the gate did not notice\n'
+                printf 'SURVIVED %s -- the gate did not notice\n' "$label"
                 survived=$((survived + 1))
             fi
         fi

@@ -272,7 +272,11 @@ shapes() {
 
 refusals() {
     printf '\n== what M5 refuses ==\n'
-    local name phrase err status
+    # `entry` and `label` are LOCAL because this function is called from inside
+    # the mutation loop, which iterates a variable of each name. Without it a
+    # SURVIVED line names a CHECK instead of the mutation that survived -- which
+    # is what generics-gate did, and it cost a session's worth of misreading.
+    local entry name phrase label err status
     while IFS='|' read -r name phrase label; do
         err=$("$fortressc" "$fixtures/$name.fss" --emit-obj -o /dev/null 2>&1)
         status=$?
@@ -353,7 +357,7 @@ PY
             if [[ $failed -gt 0 ]]; then
                 printf 'REFUSED  %d check(s) failed, which is the point\n' "$failed"
             else
-                printf 'SURVIVED  the gate did not notice\n'
+                printf 'SURVIVED %s -- the gate did not notice\n' "$label"
                 survived=$((survived + 1))
             fi
         fi

@@ -122,7 +122,11 @@ EOF
 # reported before this feature and which sends the reader to the wrong place.
 refusals() {
     printf '== the refusals ==\n'
-    local name pattern label err status
+    # `entry` and `label` are LOCAL because this function is called from inside
+    # the mutation loop, which iterates a variable of each name. Without it a
+    # SURVIVED line names a CHECK instead of the mutation that survived -- which
+    # is what generics-gate did, and it cost a session's worth of misreading.
+    local entry name pattern label err status
     for entry in \
         "badarrayextent|declared with 5 element(s) and 6 are written|a declared size must match the literal that fills it" \
         "badarraydims|has 2 dimensions; an array in this subset is one dimensional|a second dimension is refused by name" \

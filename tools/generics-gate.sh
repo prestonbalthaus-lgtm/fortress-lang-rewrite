@@ -219,7 +219,11 @@ determinism() {
 # programs that must compile cannot catch a rule that stopped firing.
 refusals() {
     printf '== the refusals ==\n'
-    local name pattern err status
+    # `entry` and `label` are LOCAL because this function is called from inside
+    # the mutation loop, which iterates a variable of each name. Without it a
+    # SURVIVED line names a CHECK instead of the mutation that survived -- which
+    # is what generics-gate did, and it cost a session's worth of misreading.
+    local entry name pattern label err status
     for entry in \
         "polyrec|$LIMIT|polymorphic recursion stops at the ceiling" \
         "stampceiling|$LIMIT|a generic method that stamps itself larger stops there too" \
