@@ -164,13 +164,21 @@ tracing() {
     fi
     ok 'the tracing harness builds'
 
-    local out
-    if out=$("$build/array-trace" 2>&1); then
-        ok "an array's elements survive a forced collection"
-        printf '      %s\n' "$(printf '%s' "$out" | tr '\n' ' ')"
-    else
-        bad "an array's elements survive a forced collection" "$(printf '%s' "$out" | tr '\n' ' ')"
-    fi
+    # ONE RANK PER PROCESS. `fortress_array_alloc_n` is a SEPARATE allocator
+    # with a separate header, so rank one being scannable says nothing about it
+    # -- and measuring the second as a delta over the first's heap reads the
+    # reused free space as a reclaimed payload. The harness measures absolutely
+    # and the gate runs it twice.
+    local rank out
+    for rank in 1 2; do
+        if out=$("$build/array-trace" "$rank" 2>&1); then
+            ok "a rank $rank array's elements survive a forced collection"
+            printf '      %s\n' "$(printf '%s' "$out" | tr '\n' ' ')"
+        else
+            bad "a rank $rank array's elements survive a forced collection" \
+                "$(printf '%s' "$out" | tr '\n' ' ')"
+        fi
+    done
 }
 
 # ----------------------------------------------------------------- main

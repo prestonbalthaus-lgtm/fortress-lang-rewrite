@@ -20,6 +20,9 @@
 void fortress_runtime_init(void);
 void *fortress_array_alloc(long long count, long long elem_bytes, int holds_pointers);
 void *fortress_array_slot(void *array, long long index);
+void *fortress_array_alloc_n(long long rank, const long long *extents, long long elem_bytes,
+                             int holds_pointers);
+void *fortress_array_slot_n(void *array, long long rank, const long long *indices);
 long long fortress_array_length(const void *array);
 char *concat_string_string(const char *a, const char *b);
 
@@ -46,28 +49,78 @@ static void *build_held_array(void) {
     return array;
 }
 
-int main(void) {
+/*
+ * THE SAME QUESTION AT RANK TWO, and it is a SEPARATE allocator answering it:
+ * `fortress_array_alloc_n` is its own function with its own header, so
+ * `fortress_array_alloc` being scannable says nothing about it. Non-square, so
+ * a transposed extent would run off the end rather than quietly working.
+ *
+ * ONE RANK PER PROCESS, and that is not tidiness. The first draft built both in
+ * one run and measured the second as a DELTA over the heap left behind by the
+ * first -- and the freed rank-one payload was simply reused, so the delta read
+ * 393216 of 8650752 and looked exactly like a collector that had reclaimed
+ * everything. An absolute measurement in a fresh process is the only one that
+ * means what it says.
+ */
+#define ROWS 32
+#define COLS 33
+#define PAYLOAD2 ((size_t)ROWS * COLS * CHUNK)
+
+static void *build_held_array_2d(void) {
+    static char chunk[CHUNK];
+    memset(chunk, 'y', sizeof chunk - 1);
+    chunk[sizeof chunk - 1] = '\0';
+
+    const long long extents[2] = {ROWS, COLS};
+    void *array = fortress_array_alloc_n(2, extents, (long long)sizeof(char *), 1);
+    for (long long i = 0; i < ROWS; i++) {
+        for (long long j = 0; j < COLS; j++) {
+            const long long at[2] = {i, j};
+            *(char **)fortress_array_slot_n(array, 2, at) = concat_string_string(chunk, "tail");
+        }
+    }
+    return array;
+}
+
+int main(int argc, char **argv) {
     fortress_runtime_init();
 
-    void *array = build_held_array();
+    const int rank = (argc > 1 && argv[1][0] == '2') ? 2 : 1;
+    void *held;
+    size_t payload;
+    if (rank == 1) {
+        held = build_held_array();
+        payload = PAYLOAD;
+    } else {
+        held = build_held_array_2d();
+        payload = PAYLOAD2;
+    }
     GC_gcollect();
     GC_gcollect();
 
     size_t live = GC_get_heap_size() - GC_get_free_bytes();
-    long long length = fortress_array_length(array);
+    printf("rank %d\npayload %zu\nlive %zu\n", rank, payload, live);
 
-    printf("payload %zu\nlive %zu\nlength %lld\n", PAYLOAD, live, length);
-
-    if (length != COUNT) {
-        fputs("FAIL the array lost its length\n", stderr);
-        return 1;
+    if (rank == 1) {
+        long long length = fortress_array_length(held);
+        printf("length %lld\n", length);
+        if (length != COUNT) {
+            fputs("FAIL the array lost its length\n", stderr);
+            return 1;
+        }
     }
-    if (live * 3 < PAYLOAD * 2) {
+    if (live * 3 < payload * 2) {
         fprintf(stderr,
-                "FAIL the collector reclaimed what the array is holding: %zu live of %zu\n",
-                live, PAYLOAD);
+                "FAIL the collector reclaimed what the rank %d array is holding: "
+                "%zu live of %zu\n",
+                rank, live, payload);
         return 1;
     }
+
     /* Keeps the array reachable across the measurement. */
-    return (int)(length - COUNT);
+    if (rank == 1) {
+        return (int)(fortress_array_length(held) - COUNT);
+    }
+    const long long corner[2] = {ROWS - 1, COLS - 1};
+    return *(char **)fortress_array_slot_n(held, 2, corner) == NULL ? 1 : 0;
 }
