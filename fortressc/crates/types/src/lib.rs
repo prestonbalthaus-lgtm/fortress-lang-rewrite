@@ -1248,6 +1248,24 @@ impl Checker {
         // signatures a caller reads have to be finished first.
         self.resolve_inferred_returns(component);
 
+        // A VALID OVERLOAD SET IS A PROPERTY OF THE DECLARATIONS, and a
+        // component's was checked ONLY WHERE IT WAS CALLED. The api-side check
+        // exists because an api has no calls at all; a component that never
+        // calls a set has exactly the same hole, and it is not a corner --
+        // `Compiled2.f.fss` is the specification's own example, `f(x: O, y: T)`
+        // beside `f(x: T, y: O)` with `O extends T`, ambiguous at `(O, O)` and
+        // accepted here for as long as nothing called it. Adding the call
+        // refused it; the declarations alone did not.
+        //
+        // COSTS THREE CORPUS FILES AND ALL THREE ARE must-FAIL TESTS the
+        // legacy implementation also refuses: `Compiled2.f`, `Compiled10.q`
+        // and `Compiled10.s`. They come out of
+        // tools/oracle-accepted-must-fail.txt in this commit.
+        //
+        // The trailing marker is for the MUTATION TABLE: this call and the api
+        // one are the same text, and a row must match exactly once.
+        self.overloads_are_unambiguous()?; // component side
+
         // TOP-LEVEL VALUES BEFORE EVERY BODY, because every body can name one.
         // They go in the BOTTOM scope frame and are never popped.
         let values = self.component_values(component)?;
@@ -1578,7 +1596,7 @@ impl Checker {
             }
         }
 
-        self.api_overloads_are_unambiguous()?;
+        self.overloads_are_unambiguous()?;
 
         Ok(TypedComponent {
             name: component.name.clone(),
@@ -1597,9 +1615,9 @@ impl Checker {
     }
 
     /// `overloading.tex` makes a valid overload set a property of the
-    /// DECLARATIONS, not of the calls that reach them -- and an api has no
-    /// calls at all, so M3c's check, which is driven by the tuples a call site
-    /// can produce, never runs on one. `Compiled3.w.fsi` is the witness: two
+    /// DECLARATIONS, not of the calls that reach them -- and M3c's check is
+    /// driven by the tuples a CALL SITE can produce, so it never runs on an api
+    /// (which has no calls) nor on a component's set that nothing calls. `Compiled3.w.fsi` is the witness: two
     /// declarations `f(x:O,y:T)` and `f(x:T,y:O)` with `O extends T`, which are
     /// ambiguous at `(O, O)` and which this compiler accepted in silence the
     /// day api check mode landed.
@@ -1610,7 +1628,7 @@ impl Checker {
     /// than refused -- the bound exists so a big library api cannot be made to
     /// fail by a check that is new, and a missed ambiguity is the state this
     /// replaces rather than a regression from it.
-    fn api_overloads_are_unambiguous(&self) -> Checked<()> {
+    fn overloads_are_unambiguous(&self) -> Checked<()> {
         // DECLARATION ORDER IS CARRIED HERE, for the same reason
         // `comprises::check` carries it. This rule reports the FIRST ambiguity
         // it meets and returns, and `self.functions` is a `HashMap` --
@@ -2365,7 +2383,15 @@ impl Checker {
                 arguments: render(&statics),
             });
         }
-        let returns = self.winner(name, &applicable, &statics, span)?.returns;
+        let chosen = self.winner(name, &applicable, &statics, span)?;
+        // EXPLICITLY, not as a consequence. `dispatch_target`'s cell loop makes
+        // the same check and does catch a dotted call today -- but it RETURNS
+        // EARLY for a lone concrete candidate, and that case is covered only
+        // because `agreed` happens to hand the parameter type down as a hint.
+        // Two mechanisms, one invariant: say it here.
+        let spans: Vec<Span> = typed.iter().map(|t| t.span).collect();
+        self.arguments_fit_their_slots(&chosen.params, &statics, &spans, span)?;
+        let returns = chosen.returns;
         let target = self.dispatch_target(name, &candidates, &statics, returns, span)?;
         self.require(returns, expected, span)?;
         Ok(TypedExpr {
@@ -4880,7 +4906,10 @@ impl Checker {
         // return a subtype of this one. Its existence is also what makes the
         // table total, because a declaration applicable to the static tuple is
         // applicable to every concrete tuple beneath it.
-        let returns = self.winner(name, &applicable, &statics, span)?.returns;
+        let chosen = self.winner(name, &applicable, &statics, span)?;
+        let spans: Vec<Span> = typed.iter().map(|t| t.span).collect();
+        self.arguments_fit_their_slots(&chosen.params, &statics, &spans, span)?;
+        let returns = chosen.returns;
 
         let target = self.dispatch_target(name, &candidates, &statics, returns, span)?;
         self.require(returns, expected, span)?;
@@ -5041,6 +5070,11 @@ impl Checker {
         for tuple in cartesian(&domain) {
             let applicable = self.applicable(&refs, &tuple, true);
             let winner = self.winner(name, &applicable, &tuple, span)?;
+            // AGAINST `statics`, NOT `tuple`. The cell says which symbol runs;
+            // the STATIC type says what LLVM type the value is passed at, and a
+            // cell winner may take a wider parameter than the static winner
+            // does.
+            self.arguments_fit_their_slots(&winner.params, statics, &[], span)?;
             if !self.registry.is_subtype(winner.returns, returns) {
                 return Err(TypeError::ReturnTypeNotCovariant {
                     span,
@@ -6257,6 +6291,81 @@ impl Checker {
         found == Type::Void && want != Type::Void && self.registry.is_subtype(found, want)
     }
 
+    /// THE GENERAL CASE OF THE ABOVE, and it exists because `Any` became a real
+    /// top type. `types-vals-vars.tex:121-122` -- "all types are subtypes of
+    /// `Any`" -- so `is_subtype` now says yes for a `ZZ32`, a `String`, an
+    /// array, a `Thread` handle and a tuple. NONE OF THEM CAN SIT IN A TRAIT
+    /// SLOT: that slot is a pointer to a TAGGED block, a scalar is unboxed, a
+    /// string and an array are pointers with no tag, and there is no boxing in
+    /// this backend to make one.
+    ///
+    /// `()` KEEPS ITS OWN DIAGNOSTIC and is excluded here: it has no value at
+    /// all, whatever the slot is, and `VoidNotStorable` says so in the reader's
+    /// words. These have a value and it is the wrong SHAPE.
+    ///
+    /// IT ASKS FOR THE SUBTYPE RELATION for the same reason the void one does:
+    /// without it the arm fires ahead of `Mismatch` for every wider slot and
+    /// `expected ZZ32, found String` becomes a sentence about representations.
+    /// The only slot the subtype test admits for a scalar is `Any`.
+    ///
+    /// A FUNCTION OF ITS OWN so the mutation table has a line to invert.
+    fn needs_a_trait_representation(&self, found: Type, want: Type) -> bool {
+        if found == Type::Void {
+            return false;
+        }
+        matches!(want, Type::Trait(_))
+            && !Self::occupies_a_trait_slot(found)
+            && self.registry.is_subtype(found, want)
+    }
+
+    /// What a trait-typed value IS: a pointer to a block whose first four bytes
+    /// are a concrete type tag. An object is one and a trait-typed value
+    /// already is one. Everything else in `Type` is unboxed (`ZZ32`, `ZZ64`,
+    /// `RR64`, `Boolean`, `Char`), a pointer carrying NO tag (`String`,
+    /// `Array`, and `Thread`'s `FortressThread` block), or has no single value
+    /// (`Void`, `Tuple`).
+    ///
+    /// AN ALLOWLIST ON PURPOSE, the same way `fortress_array_alloc`'s element
+    /// guard is: a new `Type` variant has to come back through here and say
+    /// which side it is on, rather than defaulting to "storable" and handing
+    /// dispatch a tag load into whatever it happens to be.
+    const fn occupies_a_trait_slot(ty: Type) -> bool {
+        matches!(ty, Type::Object(_) | Type::Trait(_))
+    }
+
+    /// Every argument of a RESOLVED call against the parameter it lands in.
+    ///
+    /// `require` cannot do this job. A call types its arguments BEFORE it knows
+    /// which declaration wins, and `agreed` hands a position its parameter type
+    /// only where every candidate agrees on it -- so `f(x: Any)` alone refuses
+    /// `f(3)` through the literal rule, and `g(x: Any)` beside `g(x: O)` gives
+    /// no hint, types the argument as `ZZ32`, and nothing has compared it to a
+    /// parameter by the time codegen emits the call.
+    ///
+    /// THE STATIC ARGUMENT TYPE IS THE ONE THAT MATTERS, never the dispatch
+    /// cell's: the emitted call passes each value at the LLVM type of its
+    /// STATIC type, whatever tag it turns out to carry at run time.
+    fn arguments_fit_their_slots(
+        &self,
+        params: &[Type],
+        statics: &[Type],
+        spans: &[Span],
+        span: Span,
+    ) -> Checked<()> {
+        for (index, (found, want)) in statics.iter().zip(params).enumerate() {
+            if !self.needs_a_trait_representation(*found, *want) {
+                continue;
+            }
+            return Err(TypeError::NoTraitRepresentation {
+                span: spans.get(index).copied().unwrap_or(span),
+                found: *found,
+                required: *want,
+                position: "a parameter of a wider type",
+            });
+        }
+        Ok(())
+    }
+
     /// Checks a computed type against its context. This is where the
     /// no-implicit-widening rule is enforced, and it never converts anything:
     /// an object in a trait slot stays the object it was.
@@ -6266,6 +6375,14 @@ impl Checker {
             Some(want) if self.void_needs_a_representation(found, want) => {
                 Err(TypeError::VoidNotStorable {
                     span,
+                    position: "a slot of a wider type",
+                })
+            }
+            Some(want) if self.needs_a_trait_representation(found, want) => {
+                Err(TypeError::NoTraitRepresentation {
+                    span,
+                    found,
+                    required: want,
                     position: "a slot of a wider type",
                 })
             }

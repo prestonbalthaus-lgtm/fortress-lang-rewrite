@@ -148,6 +148,29 @@ pub enum TypeError {
         span: Span,
         position: &'static str,
     },
+    /// A value whose type IS a subtype of the slot's and which still has no way
+    /// to sit in one. `types-vals-vars.tex:121-122` makes every type a subtype
+    /// of `Any`; a trait slot is a POINTER TO A TAGGED BLOCK -- 32-bit concrete
+    /// type tag at offset 0 -- and only an object has one. A `ZZ32` is an
+    /// unboxed `i32`, a `String` and an array are pointers with NO tag, and a
+    /// tuple has no single value at all. There is no boxing in this backend.
+    ///
+    /// SUBTYPING IS NOT STORAGE, and this is the same split `VoidNotStorable`
+    /// draws for `()` -- kept separate because `()` has no value whatever the
+    /// slot is, while these have one and it is the wrong SHAPE.
+    ///
+    /// WITHOUT IT `g(x: Any)` beside `g(x: O)`, called as `g(3)`, reached
+    /// codegen and LLVM rejected the module: `Call parameter type does not
+    /// match function signature`. A single-candidate call was already refused,
+    /// because the parameter type reaches the literal as a hint; two candidates
+    /// that disagree on a position give no hint, so the argument types as
+    /// `ZZ32` and the check has to happen after dispatch resolves.
+    NoTraitRepresentation {
+        span: Span,
+        found: Type,
+        required: Type,
+        position: &'static str,
+    },
     /// Codegen's generated `main` calls `run` with no arguments, so a `run`
     /// that declares any is a module LLVM rejects. 1.0 gives the entry point an
     /// optional `String...` parameter; this subset does not have varargs.
@@ -798,6 +821,7 @@ impl TypeError {
             | Self::ExtendsOpenComprises { span, .. }
             | Self::TypeNotImplemented { span, .. }
             | Self::VoidNotStorable { span, .. }
+            | Self::NoTraitRepresentation { span, .. }
             | Self::EntryPointTakesArguments { span, .. }
             | Self::ArityMismatch { span, .. }
             | Self::LiteralOutOfRange { span, .. }
@@ -1031,6 +1055,19 @@ impl core::fmt::Display for TypeError {
             Self::VoidNotStorable { position, .. } => {
                 write!(f, "`()` has no value, so it cannot be stored in {position}")
             }
+            Self::NoTraitRepresentation {
+                found,
+                required,
+                position,
+                ..
+            } => write!(
+                f,
+                "{} is a subtype of {} and has no representation in one: a \
+                 trait slot is a pointer to a tagged object and there is no \
+                 boxing in this compiler, so it cannot be stored in {position}",
+                found.name(),
+                required.name()
+            ),
             Self::EntryPointTakesArguments { found, .. } => write!(
                 f,
                 "`run` is the entry point and is called with no arguments, \

@@ -1,0 +1,25 @@
+component anydispatch
+
+export Executable
+
+(* AND THE NEGATIVE. A rule that refused every `Any` parameter would pass the
+   refusal test above and take the library with it: an OBJECT still goes in an
+   `Any` slot, and a scalar still picks the scalar declaration when one is
+   there to pick. *)
+trait T end
+object O extends T end
+object P extends T end
+
+g(x: Any): ZZ32 = 1
+g(x: ZZ32): ZZ32 = 2
+
+pick(x: T): ZZ32 = 3
+pick(x: O): ZZ32 = 4
+
+run(): () = do
+    println(g(O))
+    println(g(7))
+    println(pick(O))
+    println(pick(P))
+end
+end

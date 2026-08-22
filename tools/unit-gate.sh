@@ -266,8 +266,12 @@ MUTATIONS=(
   # subtype of `Any`, and `()` still having no representation are three separate
   # decisions and no one row reaches two of them.
   'crates/types/src/mono.rs|matches!(p.ty, TypeRef::Unit { .. })|matches!(p.ty, TypeRef::Tuple { .. })|stop dropping a `()` parameter at the substitution'
-  'crates/types/src/registry.rs|Type::Void => wanted == "Any",|Type::Void => false,|put `()` under nothing, so no bound it is written against discharges'
-  'crates/types/src/registry.rs|Type::Void => wanted == "Any",|Type::Void => true,|put `()` under EVERY trait rather than under `Any` alone'
+  # RETARGETED 2026-08-23. `()`'s edge to `Any` was its OWN arm here until
+  # `Any` became a real top type; the general arm above it now speaks for every
+  # type, so the line that took the edge away is that one. The second row is
+  # unchanged in what it does -- the arm it mutates just reads `false` now.
+  'crates/types/src/registry.rs|if wanted == "Any" {|if false {|put NOTHING under `Any`, so no bound written against it discharges'
+  'crates/types/src/registry.rs|Type::Void => false,|Type::Void => true,|put `()` under EVERY trait rather than under `Any` alone'
   'crates/types/src/lib.rs|found == Type::Void && want != Type::Void && self.registry.is_subtype(found, want)|found != Type::Void && want != Type::Void && self.registry.is_subtype(found, want)|let a `()` VALUE into a wider slot, which has nothing to put there'
   'crates/parser/src/lib.rs|if elems.len() == 1 {|if false {|fold a one-element parenthesised type into Tuple'
   'crates/parser/src/lib.rs|return Ok(TypeRef::Tuple { elems, span });|return Ok(TypeRef::Named { name: "ZZ32".to_owned(), args: Vec::new(), span });|make a tuple type silently become ZZ32'

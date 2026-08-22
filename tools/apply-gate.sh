@@ -288,8 +288,17 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # the measurement. The object count carries all 38 accepted must-fails, and
 # every one of those going the right way -- being REFUSED -- would take the
 # count down with it. 321 is the room that ratchet needs.
+#
+# `Any` AS A TOP TYPE, 2026-08-23: 388 objects and 80 apis. The api is
+# `CompilerLibrary/FileSupport.fsi`; the objects are `Compiled3.e`, `.l`, `.n`
+# and `.o` -- whose bounds now discharge -- MINUS `Compiled2.f`, `Compiled10.q`
+# and `Compiled10.s`, three must-FAIL tests that the component-side
+# declaration check now refuses. Net +2 objects and +1 api.
+# API_FLOOR MOVES TO 80 AND THE OBJECT FLOOR STILL DOES NOT MOVE, for the
+# reason two entries above: no accepted must-fail is inside the api count, and
+# all 38 of them are inside the object one.
 OBJECT_FLOOR=321
-API_FLOOR=79
+API_FLOOR=80
 
 passed=0
 failed=0
@@ -426,6 +435,8 @@ badarrowtype.fss|an arrow type is not implemented
 badvartuple.fsi|a parenthesised variable list declares a tuple of variables
 badlocalvarnoinit.fss|is declared with no initializer
 badvarnotype.fss|a mutable top-level value must write its type
+badanyscalar.fss|has no representation in one
+baddeclonlyoverload.fss|`g` is ambiguous for (Both)
 CASES
 
     # `badvaluebinding.fss` LEFT THIS LIST when component-level values landed,
@@ -599,6 +610,12 @@ implicit_builtin_import() {
 }
 
 MUTATIONS=(
+  # `Any` AS A TOP TYPE, three axes. The first two are the two halves of one
+  # decision -- the TYPE says yes and the STORAGE says no -- and inverting
+  # either alone must go red.
+  'crates/types/src/registry.rs|if wanted == "Any" {|if false {|stop making `Any` the top type'
+  'crates/types/src/lib.rs|&& !Self::occupies_a_trait_slot(found)|&& false|let a scalar into a trait slot'
+  'crates/types/src/lib.rs|self.overloads_are_unambiguous()?; // component side|let _unchecked = 0;|check a component overload set only where it is called'
   # `var` AT DECLARATION LEVEL, three axes. Every target line is bar-free, and
   # two of the three are caught by the MESSAGE rather than the exit code.
   'crates/parser/src/lib.rs|Some(Kind::KwVar) => Ok(Decl::Value(self.value_decl(modifiers, true)?)),|Some(Kind::KwVar) => Ok(Decl::Value(self.value_decl(modifiers, false)?)),|read a declaration-level `var` as IMMUTABLE'

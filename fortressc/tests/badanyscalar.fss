@@ -1,0 +1,21 @@
+component badanyscalar
+
+export Executable
+
+(* The hazard `Any`-as-top creates, and the one the corpus cannot write.
+   A trait slot is a pointer to a TAGGED block and a `ZZ32` is an unboxed
+   `i32`; two candidates that disagree on the position hand the argument no
+   hint, so it types as `ZZ32` and only a check after dispatch can catch it.
+   Without one this reached codegen: `Call parameter type does not match
+   function signature`, exit 70. *)
+trait T end
+object O extends T end
+
+g(x: Any): ZZ32 = 1
+g(x: O): ZZ32 = 2
+
+run(): () = do
+    println(g(O))
+    println(g(3))
+end
+end

@@ -2834,6 +2834,105 @@ fn a_mutable_top_level_value_must_write_its_type() {
     assert!(message.contains("the type of `x` is required"), "{message}");
 }
 
+/// A COMPONENT'S OVERLOAD SET IS A PROPERTY OF ITS DECLARATIONS, and it was
+/// checked ONLY WHERE IT WAS CALLED. `advanced/overloading.tex:62-92` checks
+/// the rules pairwise "whether or not any such call is written"; the api-side
+/// check existed because an api has no calls, and a component that never calls
+/// a set had exactly the same hole.
+///
+/// `Compiled2.f.fss` is the corpus witness and it is the SPECIFICATION'S OWN
+/// EXAMPLE -- `f(x: O, y: T)` beside `f(x: T, y: O)` with `O extends T`. It is
+/// a must-FAIL test that this compiler accepted for as long as nothing called
+/// `f`, and it left tools/oracle-accepted-must-fail.txt when this landed.
+#[test]
+fn an_ambiguous_overload_set_is_refused_even_where_nothing_calls_it() {
+    let message = refusal("baddeclonlyoverload.fss");
+    assert!(message.contains("`g` is ambiguous for (Both)"), "{message}");
+}
+
+/// AND THE CORPUS WITNESS, so the rule is pinned to the file 1.0 refused and
+/// not only to a fixture written to fit it.
+#[test]
+fn the_specifications_own_meet_rule_example_is_refused() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(corpus("ProjectFortress/compiler_tests/Compiled2.f.fss"))
+        .arg("--emit-obj")
+        .arg("-o")
+        .arg("/dev/null")
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{message}");
+    assert!(message.contains("`f` is ambiguous for (O, O)"), "{message}");
+}
+
+// ------------------------------------------------------- `Any` is the top
+//
+// `types-vals-vars.tex:121-122` -- "`Any` is the top of the type hierarchy: all
+// types are subtypes of `Any`". :263 and :374 say it again for tuple and arrow
+// types, and :136 lists the immediate subtypes of `Any` as tuple types, arrow
+// types, `()` and `Object` -- so a scalar reaches `Any` WITHOUT passing under
+// `Object`, which in this compiler means "carries a 32-bit type tag".
+//
+// SUBTYPING IS NOT STORAGE, and these three tests are that split: the bound
+// discharges, the slot refuses, and dispatch is unchanged.
+
+/// Every type satisfies a bound of `Any`. Six instantiations, RUN.
+#[test]
+fn every_type_satisfies_a_bound_of_any() {
+    let binary = compile_fixture("anytoptype.fss", "anytoptype");
+    let out = run(&binary);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "1\n1\n1\n1\n1\n1\n");
+}
+
+/// AND A SCALAR STILL CANNOT SIT IN A TRAIT SLOT. A trait-typed value is a
+/// pointer to a TAGGED block and there is no boxing in this backend.
+///
+/// THE CORPUS CANNOT WRITE THIS PROGRAM, which is why it is a fixture. A call
+/// with ONE candidate hands the parameter type down to the literal, so
+/// `f(x: Any)` called as `f(3)` was already refused; two candidates that
+/// disagree on the position hand down NO hint, the argument types as `ZZ32`,
+/// and nothing had compared it to a parameter by the time codegen emitted the
+/// call. LLVM rejected the module and the driver exited 70.
+#[test]
+fn a_scalar_in_a_trait_slot_is_refused_after_dispatch_resolves() {
+    let message = refusal("badanyscalar.fss");
+    assert!(
+        message.contains("has no representation in one"),
+        "{message}"
+    );
+    assert!(
+        message.contains("ZZ32 is a subtype of Any"),
+        "the diagnostic must name both types, or it reads as a plain mismatch: \
+         {message}"
+    );
+}
+
+/// AND THE NEGATIVE, because a rule that refused every `Any` parameter would
+/// pass the test above and take the library with it. An OBJECT still goes in
+/// an `Any` slot, and specificity is unchanged: a scalar argument still picks
+/// the scalar declaration over the `Any` one, and an object still picks its own
+/// over its trait's.
+#[test]
+fn an_any_parameter_still_takes_an_object_and_does_not_win_from_a_scalar() {
+    let binary = compile_fixture("anydispatch.fss", "anydispatch");
+    let out = run(&binary);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "1\n2\n4\n3\n");
+}
+
+/// `()` KEEPS ITS OWN DIAGNOSTIC. It has no value at all whatever the slot is,
+/// where a scalar has one of the wrong shape, and `VoidNotStorable` says so in
+/// the reader's words. The general rule excludes `Void` for exactly this.
+#[test]
+fn void_in_a_wider_slot_still_says_it_has_no_value() {
+    let message = refusal("badvoidvalue.fss");
+    assert!(
+        message.contains("`()` has no value"),
+        "the void diagnostic may not be swallowed by the general \
+         representation rule: {message}"
+    );
+}
+
 // -------------------------------------------------- the `var` modifier
 //
 // `Variable.rats:42-45` -- an api declares a variable with `AbsVarDecl`, which

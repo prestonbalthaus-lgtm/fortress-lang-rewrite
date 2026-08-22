@@ -1,0 +1,20 @@
+component baddeclonlyoverload
+
+export Executable
+
+(* A VALID OVERLOAD SET IS A PROPERTY OF THE DECLARATIONS, not of the calls
+   that reach them -- `advanced/overloading.tex:62-92` checks the rules
+   pairwise "whether or not any such call is written". A component's set was
+   checked ONLY where it was called, so this compiled for as long as nothing
+   called `g`. Adding the call refused it; the declarations alone did not.
+   `ProjectFortress/compiler_tests/Compiled2.f.fss` is the corpus witness and
+   the specification's own example. NOTHING CALLS `g` HERE ON PURPOSE. *)
+trait A end
+trait B end
+object Both extends { A, B } end
+
+g(x: A): ZZ32 = 1
+g(x: B): ZZ32 = 2
+
+run(): () = println(0)
+end

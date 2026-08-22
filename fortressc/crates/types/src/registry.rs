@@ -76,6 +76,23 @@ impl Registry {
         let Type::Trait(wanted) = sup else {
             return false;
         };
+        // `types-vals-vars.tex:121-122`: "`Any` is the top of the type
+        // hierarchy: all types are subtypes of `Any`." :263 and :374 say it
+        // again for tuple and arrow types, and :136 lists the IMMEDIATE
+        // subtypes of `Any` as tuple types, arrow types, `()` and `Object` --
+        // so a scalar reaches `Any` WITHOUT passing under `Object`, and this
+        // arm is deliberately not `Object`'s. `Object` here means "has a 32-bit
+        // type tag", which a scalar does not.
+        //
+        // SUBTYPING IS NOT STORAGE, and that split is the whole reason this is
+        // safe to say. A trait slot is a POINTER TO A TAGGED BLOCK and a `ZZ32`
+        // is an unboxed `i32`; what stops one reaching the other is
+        // `Checker::needs_a_trait_representation`, not this function. The `()`
+        // arm below said exactly this for one type and is now general -- it
+        // reads `false` because `Any` never gets here any more.
+        if wanted == "Any" {
+            return true;
+        }
         match sub {
             Type::Object(name) => self
                 .objects
@@ -98,8 +115,10 @@ impl Registry {
             // `Any`, and it excludes every other type." :136 lists the
             // immediate subtypes of `Any` as tuple types, arrow types, `()`
             // and `Object` -- so it does NOT sit under `Object`, and writing it
-            // that way would put it below every user trait's root.
-            Type::Void => wanted == "Any",
+            // that way would put it below every user trait's root. THE `Any`
+            // HALF MOVED UP, where it now speaks for every type; what is left
+            // here is the "and of nothing else".
+            Type::Void => false,
             _ => false,
         }
     }

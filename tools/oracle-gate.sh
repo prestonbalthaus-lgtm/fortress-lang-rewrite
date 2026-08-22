@@ -308,7 +308,19 @@ RUN_TIMEOUT     = 20
 # values and the arrow work took the pass set up by two. Raising it is what
 # stops a top-level initializer silently not running again -- the exact defect
 # `badvaluebinding.fss` was written to guard, which no list can see.
-PASS_FLOOR = 343
+# 2026-08-23: 343 -> 344, AND THE ARITHMETIC IS -3 +4 RATHER THAN +1.
+# `Any` became a real top type, and THREE OF THE 343 WERE ACCIDENTS:
+# `Compiled3.l`, `.n` and `.o` are programs 1.0 refuses for an invalid
+# overloading, and we refused them for a BROKEN BOUND -- `String does not
+# satisfy X extends Any`. Same verdict, wrong reason, and fixing the defect
+# exposed it. They are in tools/oracle-accepted-must-fail.txt now with the
+# rule that would catch them properly.
+# THE FOUR WON ARE REAL. `Compiled3.e` unblocked on the same fix, and running
+# the declaration-site overload check on COMPONENTS -- it only ever ran on
+# apis -- refuses `Compiled2.f`, `Compiled10.q` and `Compiled10.s`, which are
+# three must-fails that had been accepted for as long as nothing called the
+# set. `Compiled2.f` is the specification's own Meet Rule example.
+PASS_FLOOR = 344
 
 args, opt = sys.argv[1:], {}
 i = 0

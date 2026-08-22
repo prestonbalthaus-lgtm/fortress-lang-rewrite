@@ -10,9 +10,9 @@ ProjectFortress/compiler_tests/Compiled10.f.fss
 ProjectFortress/compiler_tests/Compiled10.i.fss
 ProjectFortress/compiler_tests/Compiled10.j.fss
 ProjectFortress/compiler_tests/Compiled10.n.fss
-ProjectFortress/compiler_tests/Compiled10.q.fss
-ProjectFortress/compiler_tests/Compiled10.s.fss
-ProjectFortress/compiler_tests/Compiled2.f.fss
+ProjectFortress/compiler_tests/Compiled3.l.fss
+ProjectFortress/compiler_tests/Compiled3.n.fss
+ProjectFortress/compiler_tests/Compiled3.o.fss
 ProjectFortress/compiler_tests/Compiled3.s.fss
 ProjectFortress/compiler_tests/Compiled5.aa.fss
 ProjectFortress/compiler_tests/Compiled5.ac.fss
@@ -152,4 +152,50 @@ ProjectFortress/compiler_tests/Compiled5.j.fss
 #                XXXequalityTesting.fss, into the slack of 40 behind
 #                OBJECT_FLOOR=321. Re-opens the day operator declarations are
 #                READ, which is SPIKE-OPEXPR's own milestone.
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# THREE IN AND THREE OUT, 2026-08-23, AT THE `Any`-AS-TOP-TYPE MERGE.
+#
+# OUT, because they are REFUSED NOW and the rule that refuses them is real:
+#
+#   Compiled2.f  Compiled10.q  Compiled10.s
+#
+# A valid overload set is a property of the DECLARATIONS
+# (advanced/overloading.tex:62-92), and a COMPONENT's set was checked only
+# where it was CALLED. `Compiled2.f` is the specification's own example --
+# `f(x: O, y: T)` beside `f(x: T, y: O)` with `O extends T`, ambiguous at
+# `(O, O)` -- and it compiled here for as long as nothing called `f`. Adding
+# a call refused it; the declarations alone did not. The api-side check
+# existed for exactly this reason and was never run on components. It is now.
+#
+# IN, and this is the part that needs the reason:
+#
+#   Compiled3.l  Compiled3.n  Compiled3.o
+#                All three are `f(x: T[\()\])` beside `f(x: S[\String\])`
+#                where `T` and `S` are generic traits and the `excludes`
+#                clause relates them at the SAME static argument only. 1.0
+#                answers "Invalid overloading of f".
+#                THEY WERE NOT REFUSED HERE BY THAT RULE. They died on
+#                `String does not satisfy X extends Any` -- a BROKEN BOUND
+#                CHECK, because `Any` was not a top type. The agreement was an
+#                accident of a defect, the same shape as XXXPreparser.c's and
+#                Compiled5.j's, and fixing the defect exposed it.
+#                WHAT WE ARE MISSING IS INTENSIONAL VALIDITY. Our overloading
+#                check is EXTENSIONAL: it enumerates tuples of CONCRETE types
+#                and asks each for a unique winner. `T[\()\]` and
+#                `S[\String\]` have no concrete subtypes at all, so the
+#                domain is empty and the check is vacuous. 1.0's Meet Rule is
+#                pairwise over the DECLARED types and needs a hypothetical
+#                type below both, which no enumeration can produce.
+#                MEASURED, NOT ASSUMED: add a concrete `object Both extends
+#                { T[\()\], S[\String\] }` and we still accept, so this is
+#                not the closed-world deviation -- it is a missing rule.
+#                Re-opens with the intensional Meet/Incompatibility rule,
+#                which also needs `excludes` to be READ rather than recorded.
+#                That rule would also refuse two unrelated traits with no meet
+#                declaration (advanced/overloading.tex:309-338's own
+#                `bar(x:Printable)` / `bar(x:Throwable)` example), which this
+#                compiler accepts today -- so it is a milestone with a
+#                measurement, not a patch.
 # ---------------------------------------------------------------------------

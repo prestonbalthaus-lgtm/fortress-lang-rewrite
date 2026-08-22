@@ -1,0 +1,21 @@
+component anytoptype
+
+export Executable
+
+(* `types-vals-vars.tex:121-122` -- "Any is the top of the type hierarchy: all
+   types are subtypes of Any". A bound of `Any` constrains nothing, so every
+   one of these instantiations must discharge. *)
+trait T end
+object O extends T end
+
+count[\E extends Any\](x: E): ZZ32 = 1
+
+run(): () = do
+    println(count[\ZZ32\](5))
+    println(count[\Char\]('a'))
+    println(count[\Boolean\](true))
+    println(count[\String\]("s"))
+    println(count[\RR64\](1.5))
+    println(count[\O\](O))
+end
+end
