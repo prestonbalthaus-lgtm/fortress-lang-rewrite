@@ -9,11 +9,21 @@
 
  ******************************************************************************)
 
+(* THE REGRESSION IS THAT `O` CAN BE CONSTRUCTED FROM ANOTHER COMPONENT AT ALL,
+   and until 2026-08-22 this file did not ASSERT it: `o = O("")` binds and
+   discards, so the program printed nothing and the harness's default check --
+   `run_out_contains=PASS`, FileTests.java:266-272 -- could never hold. Its two
+   siblings in this directory, `any.test` and `seqv.test`, carry byte-identical
+   directive sets and both print PASS; this one was written without its
+   assertion.
+   THE STRING IS CARRIED THROUGH THE OBJECT ON PURPOSE. A bare `println("PASS")`
+   would pass whether the cross-component field survived construction or not. *)
 import different_package.defines_O.{...}
 export Executable
 
 run(): () = do
-   o =  O("")
+   o = O("PASS")
+   println(o.x)
 end
 
 
