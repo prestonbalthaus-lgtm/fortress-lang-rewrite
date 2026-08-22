@@ -160,10 +160,12 @@ refusals() {
     done
 }
 
-# THE MATRIX AGGREGATE. Seven values, and the first one is the specification's
-# own: 4, then the four spellings it calls equivalent, then a rank-three literal
-# whose values carry their own coordinates, then a rank-one literal on the path
-# it always had.
+# THE MATRIX AGGREGATE, in two files that ask two different questions.
+# `arrayaggregate.fss` is ALL SQUARE, so a transposed linearisation still
+# satisfies every declared extent and only the VALUE differs -- the
+# specification's own `A(1,0) evaluates to 4`, then the four spellings it calls
+# equivalent. `arraycube.fss` is rank three and non-square, where the values
+# encode their own coordinates.
 aggregate() {
     printf '== a matrix aggregate puts its elements where the spec says ==\n'
     if ! timeout 300 "$fortressc" "$repo/fortressc/tests/arrayaggregate.fss" \
@@ -174,11 +176,28 @@ aggregate() {
     local out status
     out=$("$build/arrayaggregate" 2>&1)
     status=$?
-    if [[ $status -eq 0 && $out == $'4\n5\n5\n5\n5\n234\n7' ]]; then
-        ok "the spec's own A(1,0)=4, four equivalent spellings, a rank three cube: $(printf '%s' "$out" | tr '\n' ' ')"
+    if [[ $status -eq 0 && $out == $'4\n5\n5\n5\n5\n7' ]]; then
+        ok "the spec's own A(1,0)=4 and the four equivalent spellings: $(printf '%s' "$out" | tr '\n' ' ')"
     else
         bad 'a matrix aggregate puts its elements where the spec says' \
-            "want: 4 5 5 5 5 234 7 | got: $(printf '%s' "$out" | tr '\n' ' ')"
+            "want: 4 5 5 5 5 7 | got: $(printf '%s' "$out" | tr '\n' ' ')"
+    fi
+
+    # RANK THREE, NON-SQUARE, and separate from the square file above on
+    # purpose: a transposed literal of a NON-square shape stops compiling
+    # against its declaration, so it can never reach the value comparison that
+    # is the square file's whole job.
+    if ! timeout 300 "$fortressc" "$repo/fortressc/tests/arraycube.fss" \
+        -o "$build/arraycube" >"$build/cube.log" 2>&1; then
+        bad 'arraycube.fss compiles and links' "$(cat "$build/cube.log")"
+        return
+    fi
+    out=$("$build/arraycube" 2>&1)
+    status=$?
+    if [[ $status -eq 0 && $out == 234 ]]; then
+        ok 'a rank three `;;` literal puts 234 at a[1,2,3], its own coordinates'
+    else
+        bad 'a rank three `;;` literal places by coordinate' "status $status: $out"
     fi
 }
 

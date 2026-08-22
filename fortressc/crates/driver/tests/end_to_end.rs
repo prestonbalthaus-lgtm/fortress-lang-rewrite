@@ -2758,10 +2758,17 @@ fn a_matrix_aggregate_places_its_elements_where_the_specification_says() {
     let binary = compile_fixture("arrayaggregate.fss", "arrayaggregate");
     let out = run(&binary);
     assert_eq!(out.status.code(), Some(0));
-    assert_eq!(
-        String::from_utf8_lossy(&out.stdout),
-        "4\n5\n5\n5\n5\n234\n7\n"
-    );
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "4\n5\n5\n5\n5\n7\n");
+    let _ = std::fs::remove_file(&binary);
+
+    // Rank three and NON-square, kept in its own file: a transposed literal of
+    // a non-square shape stops compiling against its declaration, so it never
+    // reaches the value comparison above. 234 sits at `a[1,2,3]` -- the values
+    // encode their own coordinates.
+    let binary = compile_fixture("arraycube.fss", "arraycube");
+    let out = run(&binary);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "234\n");
     let _ = std::fs::remove_file(&binary);
 }
 

@@ -1,7 +1,13 @@
 component arrayaggregate
 export Executable
 
-(* THE SPECIFICATION IS THE ORACLE HERE AND IT GIVES A VALUE, NOT A SHAPE.
+(* EVERY DECLARATION IN THIS FILE IS SQUARE AND THAT IS THE POINT. A transposed
+   linearisation of a 3 by 3 is still a 3 by 3, so the declared extents all
+   check out and ONLY THE VALUE differs -- which is the claim this fixture
+   exists to test. The non-square shapes live in `arraycube.fss` and
+   `arraymulti.fss`, where a wrong stride shows up as a collision instead.
+
+   THE SPECIFICATION IS THE ORACLE HERE AND IT GIVES A VALUE, NOT A SHAPE.
    `aggregate.tex:143-150`: for `A: ZZ32[3,3] = [1 2 3; 4 5 6; 7 8 9]`, "then
    A(1,0) evaluates to 4". So `;` steps dimension 0 and whitespace steps
    dimension 1 -- rows and then columns -- and a gate that only checked the
@@ -38,22 +44,6 @@ semiThenNewline(): ZZ32 = do
     a[1,0]
 end
 
-(* RANK THREE, AND THE VALUES CARRY THEIR OWN COORDINATES so a permuted
-   linearisation cannot agree by accident: element `ijk` sits at `a[i,j,k]`.
-   `;;` steps dimension 2, which is `ProjectFortress/tests/arrayTest2.fss`'s
-   assertion and not a guess. *)
-cube(): ZZ32 = do
-    a: ZZ32[2,3,4] = [ 111 121 131;
-                       211 221 231;;
-                       112 122 132;
-                       212 222 232;;
-                       113 123 133;
-                       213 223 233;;
-                       114 124 134;
-                       214 224 234 ]
-    a[1,2,3]
-end
-
 (* A rank-one literal in the same program, on the path it always had. *)
 flat(): ZZ32 = do
     a: ZZ32[4] = [9 8 7 6]
@@ -66,7 +56,6 @@ run(): () = do
     println(newline())
     println(newlineThenSemi())
     println(semiThenNewline())
-    println(cube())
     println(flat())
 end
 end

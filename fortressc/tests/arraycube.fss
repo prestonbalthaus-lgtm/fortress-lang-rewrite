@@ -1,0 +1,24 @@
+component arraycube
+export Executable
+
+(* RANK THREE, AND THE VALUES CARRY THEIR OWN COORDINATES so a permuted
+   linearisation cannot agree by accident: element `ijk` sits at `a[i,j,k]`.
+   `;;` steps dimension 2, which is `ProjectFortress/tests/arrayTest2.fss`'s
+   assertion and not a guess. *)
+cube(): ZZ32 = do
+    a: ZZ32[2,3,4] = [ 111 121 131;
+                       211 221 231;;
+                       112 122 132;
+                       212 222 232;;
+                       113 123 133;
+                       213 223 233;;
+                       114 124 134;
+                       214 224 234 ]
+    a[1,2,3]
+end
+
+
+run(): () = do
+    println(cube())
+end
+end
