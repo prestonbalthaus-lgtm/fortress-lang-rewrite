@@ -2,7 +2,7 @@
 #
 # The array-type gate: `T[n]` and `T[m,n]`, `traits.tex:97-108`.
 #
-# Eight things cargo cannot check on its own: that `a: ZZ32[5] = [0 1 2 3 4]`
+# Nine things cargo cannot check on its own: that `a: ZZ32[5] = [0 1 2 3 4]`
 # becomes a real ELF that prints the right elements, that a declared size and a
 # literal's length are COMPARED rather than the size being dropped, that the
 # forms this subset does not build are each refused BY NAME rather than by a
@@ -10,7 +10,13 @@
 # lower to the SAME type, that an extent survives monomorphization's
 # substitution so `g[\nat n\](a: ZZ32[n])` works, that a SPACED bracket is
 # still not an array size, that a HIGHER RANK is filled and read back through
-# the right slots, and that a subscript is bounds checked in EVERY dimension.
+# the right slots, that a subscript is bounds checked in EVERY dimension, and
+# that a MATRIX AGGREGATE puts its elements where the specification says.
+#
+# THE AGGREGATE CHECK ASSERTS A VALUE AND NOT A SHAPE, which is the only way to
+# see a transposed linearisation: `aggregate.tex:143-150` says that for
+# `A: ZZ32[3,3] = [1 2 3; 4 5 6; 7 8 9]`, "then A(1,0) evaluates to 4". A gate
+# comparing extents would pass with rows and columns swapped.
 #
 # THE NON-SQUARE FIXTURE IS THE POINT OF THE RANK-TWO CHECK. A wrong stride in
 # the linearisation collides two subscripts onto one slot, and a 3 by 3 hides
@@ -140,7 +146,9 @@ refusals() {
         "badextentrange|is an extent range|a hash extent range is refused by name" \
         "badarraysize|writes no size|an array type with no size is refused by name" \
         "badmatrixtype|a vector or matrix type is not implemented|a caret shape is refused by name" \
-        "badstackedshape|found LBracket|a shape suffix may not be stacked"; do
+        "badstackedshape|found LBracket|a shape suffix may not be stacked" \
+        "badraggedarray|this array literal is ragged|a ragged aggregate is refused by name" \
+        "badpastedarray|expected ZZ32, found Array|a pasted array element is refused"; do
         IFS='|' read -r name pattern label <<<"$entry"
         err=$(timeout 300 "$fortressc" "$repo/fortressc/tests/$name.fss" --emit-obj -o /dev/null 2>&1 >/dev/null)
         status=$?
@@ -150,6 +158,28 @@ refusals() {
             bad "$label" "status $status: $err"
         fi
     done
+}
+
+# THE MATRIX AGGREGATE. Seven values, and the first one is the specification's
+# own: 4, then the four spellings it calls equivalent, then a rank-three literal
+# whose values carry their own coordinates, then a rank-one literal on the path
+# it always had.
+aggregate() {
+    printf '== a matrix aggregate puts its elements where the spec says ==\n'
+    if ! timeout 300 "$fortressc" "$repo/fortressc/tests/arrayaggregate.fss" \
+        -o "$build/arrayaggregate" >"$build/aggregate.log" 2>&1; then
+        bad 'arrayaggregate.fss compiles and links' "$(cat "$build/aggregate.log")"
+        return
+    fi
+    local out status
+    out=$("$build/arrayaggregate" 2>&1)
+    status=$?
+    if [[ $status -eq 0 && $out == $'4\n5\n5\n5\n5\n234\n7' ]]; then
+        ok "the spec's own A(1,0)=4, four equivalent spellings, a rank three cube: $(printf '%s' "$out" | tr '\n' ' ')"
+    else
+        bad 'a matrix aggregate puts its elements where the spec says' \
+            "want: 4 5 5 5 5 234 7 | got: $(printf '%s' "$out" | tr '\n' ' ')"
+    fi
 }
 
 # RANK TWO AND RANK THREE, FILLED AND READ BACK. Nothing here is square, so a
@@ -251,6 +281,12 @@ MUTATIONS=(
   'crates/types/src/registry.rs|let Ok(rank) = u8::try_from(extents.len()) else {|let Ok(rank) = u8::try_from(1usize) else {|resolve every shape suffix as rank one'
   'crates/types/src/registry.rs|if !matches!(size, TypeRef::Static { .. }) {|if false {|let a size that resolved to nothing through'
   'crates/parser/src/lib.rs|let glued_bracket = self.at(&Kind::LBracket) && self.glued_left(self.pos);|let glued_bracket = self.at(&Kind::LBracket);|let a spaced bracket be an array size'
+  # THE AGGREGATE, at each of the three places its shape can be wrong: which
+  # dimension a separator steps, whether a line break is one at all, and whether
+  # the groups have to be the same size.
+  'crates/parser/src/lib.rs|            1 => 0,|            1 => 1,|make a semicolon step the same dimension whitespace does'
+  'crates/parser/src/lib.rs|            usize::from(line_break)|            0|stop reading a bare line break as a row separator'
+  'crates/parser/src/lib.rs|Some(first) if *first == sub => {}|Some(_) => {}|accept a ragged aggregate'
 )
 
 # FORTRESSC AND --mutate DO NOT MIX, and the failure is silent. Every mutation
@@ -305,6 +341,7 @@ PY
             passed=0; failed=0
             running >/dev/null 2>&1
             multi
+            aggregate
             bounds
             one_type >/dev/null 2>&1
             refusals
@@ -343,6 +380,7 @@ case "${1:-}" in
         preflight
         running
         multi
+        aggregate
         bounds
         one_type
         refusals

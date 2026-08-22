@@ -428,30 +428,40 @@ fn check_declared_extent(written: &TypeRef, value: &Expr) -> Checked<()> {
     else {
         return Ok(());
     };
-    let Expr::ArrayLit { items, span } = value else {
-        return Ok(());
-    };
-    let [extent] = extents.as_slice() else {
-        return Ok(());
-    };
-    let Some(TypeRef::Static {
-        expr: StaticExpr::Int(declared),
+    let Expr::ArrayLit {
+        extents: written_extents,
+        span,
         ..
-    }) = extent.plain_size()
+    } = value
     else {
         return Ok(());
     };
-    let Ok(declared_len) = usize::try_from(*declared) else {
-        return Ok(());
-    };
-    if declared_len == items.len() {
+    // EVERY DIMENSION, not just the first. A rank mismatch is left to
+    // `require`, which names both types; what this owns is the SIZE, which the
+    // type does not carry.
+    if extents.len() != written_extents.len() {
         return Ok(());
     }
-    Err(TypeError::ArrayExtentMismatch {
-        span: *span,
-        declared: *declared,
-        found: items.len(),
-    })
+    for (extent, found) in extents.iter().zip(written_extents) {
+        let Some(TypeRef::Static {
+            expr: StaticExpr::Int(declared),
+            ..
+        }) = extent.plain_size()
+        else {
+            continue;
+        };
+        let Ok(declared_len) = usize::try_from(*declared) else {
+            continue;
+        };
+        if declared_len != *found {
+            return Err(TypeError::ArrayExtentMismatch {
+                span: *span,
+                declared: *declared,
+                found: *found,
+            });
+        }
+    }
+    Ok(())
 }
 
 fn substitute_self(t: &TypeRef, owner: &str) -> TypeRef {
@@ -2151,7 +2161,11 @@ impl Checker {
                 span,
             } => self.if_expr(cond, then_branch, else_branch.as_deref(), *span, expected),
             Expr::Block { items, span } => self.block(items, *span, expected),
-            Expr::ArrayLit { items, span } => self.array_literal(items, *span, expected),
+            Expr::ArrayLit {
+                items,
+                extents,
+                span,
+            } => self.array_literal(items, extents, *span, expected),
             Expr::Index {
                 base,
                 indices,
@@ -2402,16 +2416,18 @@ impl Checker {
     fn array_literal(
         &mut self,
         items: &[Expr],
+        extents: &[usize],
         span: Span,
         expected: Option<Type>,
     ) -> Checked<TypedExpr> {
-        // RANK ONE ONLY. `[1 2 3]` is the one-dimensional aggregate; the
-        // matrix form `[3 4; 5 6]` is a separate unbuilt parser feature, so a
-        // literal in a `ZZ32[2,3]` slot must not quietly take its element type
-        // and then satisfy `require`. Leaving it `None` here sends it to the
-        // ordinary mismatch, which names both types.
+        // THE ELEMENT TYPE COMES FROM THE SLOT WHATEVER THE RANK IS, but the
+        // RANK has to agree first: a `[1 2 3]` in a `ZZ32[2,3]` slot must not
+        // borrow the element type and then satisfy `require` on a rank it does
+        // not have. A mismatch here leaves `elem` as `None` and the literal is
+        // typed from its own contents, so `require` below names both types.
+        let rank = u8::try_from(extents.len()).unwrap_or(u8::MAX);
         let mut elem = match expected {
-            Some(Type::Array(e, 1)) => Some(e),
+            Some(Type::Array(e, r)) if r == rank => Some(e),
             _ => None,
         };
         if elem.is_none() {
@@ -2441,10 +2457,14 @@ impl Checker {
         for item in items {
             typed.push(self.expr(item, Some(elem.as_type()))?);
         }
-        let ty = Type::Array(elem, 1);
+        let ty = Type::Array(elem, rank);
         self.require(ty, expected, span)?;
         Ok(TypedExpr {
-            kind: TypedExprKind::ArrayLit { elem, items: typed },
+            kind: TypedExprKind::ArrayLit {
+                elem,
+                items: typed,
+                extents: extents.to_vec(),
+            },
             ty,
             span,
         })

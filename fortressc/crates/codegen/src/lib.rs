@@ -949,7 +949,11 @@ impl<'ctx> Lowering<'ctx> {
                 else_branch,
             } => self.if_expr(cond, then_branch, else_branch.as_deref(), e.ty),
             TypedExprKind::Block { items, tail } => self.block(items, tail.as_deref()),
-            TypedExprKind::ArrayLit { elem, items } => self.array_literal(*elem, items).map(Some),
+            TypedExprKind::ArrayLit {
+                elem,
+                items,
+                extents,
+            } => self.array_literal(*elem, items, extents).map(Some),
             TypedExprKind::Index {
                 base,
                 indices,
@@ -1704,21 +1708,69 @@ impl<'ctx> Lowering<'ctx> {
         &mut self,
         elem: Elem,
         items: &[TypedExpr],
+        extents: &[usize],
     ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
-        let count = self
+        let i64t = self.context.i64_type();
+        // RANK ONE TAKES THE PATH IT ALWAYS TOOK, allocator and slot shim
+        // alike, so every module that compiled before the matrix aggregate
+        // lowers byte for byte unchanged.
+        if extents.len() <= 1 {
+            let count = i64t.const_int(items.len() as u64, false).into();
+            let array = self.array_alloc(elem, count)?;
+            for (index, item) in items.iter().enumerate() {
+                let value = self.operand(item)?;
+                let at = i64t.const_int(index as u64, false).into();
+                let slot = self.slot_of(array, at)?;
+                self.store_element(elem, slot, value)?;
+            }
+            return Ok(array);
+        }
+
+        let sizes: Vec<BasicValueEnum<'ctx>> = extents
+            .iter()
+            .map(|n| i64t.const_int(*n as u64, false).into())
+            .collect();
+        let buffer = self.i64_buffer("aggregate.extents", &sizes)?;
+        let rank = i64t.const_int(extents.len() as u64, false);
+        let bytes = i64t.const_int(elem.bytes(), false);
+        let holds_pointers = self
             .context
-            .i64_type()
-            .const_int(items.len() as u64, false)
-            .into();
-        let array = self.array_alloc(elem, count)?;
+            .i32_type()
+            .const_int(u64::from(elem.is_pointer()), false);
+        let array = self
+            .call_runtime(
+                ARRAY_ALLOC_N,
+                &[rank.into(), buffer, bytes.into(), holds_pointers.into()],
+                true,
+            )?
+            .ok_or_else(|| CodegenError::internal("the allocator returned nothing".to_owned()))?;
+
+        // ITEMS ARE ALREADY ROW MAJOR -- the parser placed them -- so the
+        // coordinate of element `n` is just `n` written out in mixed radix.
+        // Stored through `fortress_array_slot_n` like every other subscript
+        // rather than by computing an address here: the bounds check lives in
+        // exactly one place and this is not a second one.
         for (index, item) in items.iter().enumerate() {
             let value = self.operand(item)?;
-            let at = self
-                .context
-                .i64_type()
-                .const_int(index as u64, false)
-                .into();
-            let slot = self.slot_of(array, at)?;
+            let mut rest = index;
+            let mut at = vec![0usize; extents.len()];
+            for d in (0..extents.len()).rev() {
+                let n = extents.get(d).copied().unwrap_or(1).max(1);
+                if let Some(slot) = at.get_mut(d) {
+                    *slot = rest % n;
+                }
+                rest /= n;
+            }
+            let coords: Vec<BasicValueEnum<'ctx>> = at
+                .iter()
+                .map(|c| i64t.const_int(*c as u64, false).into())
+                .collect();
+            let indices = self.i64_buffer("aggregate.at", &coords)?;
+            let slot = self
+                .call_runtime(ARRAY_SLOT_N, &[array, rank.into(), indices], true)?
+                .ok_or_else(|| {
+                    CodegenError::internal("the slot shim returned nothing".to_owned())
+                })?;
             self.store_element(elem, slot, value)?;
         }
         Ok(array)

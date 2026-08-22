@@ -670,7 +670,10 @@ pub enum TypedExprKind {
     },
     ArrayLit {
         elem: Elem,
+        /// ROW MAJOR, whatever order the source wrote them in.
         items: Vec<TypedExpr>,
+        /// One per dimension, outermost first; `[items.len()]` at rank one.
+        extents: Vec<usize>,
     },
     Index {
         base: Box<TypedExpr>,

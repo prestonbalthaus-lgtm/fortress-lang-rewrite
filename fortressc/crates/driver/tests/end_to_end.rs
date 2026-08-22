@@ -2744,6 +2744,45 @@ fn a_multi_dimensional_array_is_filled_and_read_back() {
     let _ = std::fs::remove_file(&binary);
 }
 
+/// THE MATRIX AGGREGATE, and the assertion is a VALUE because only a value can
+/// see a transposed linearisation. `aggregate.tex:143-150` is the oracle: for
+/// `A: ZZ32[3,3] = [1 2 3; 4 5 6; 7 8 9]`, "then A(1,0) evaluates to 4". So `;`
+/// steps dimension 0 and whitespace steps dimension 1.
+///
+/// The four spellings after it are the ones `aggregate.tex:192-196` calls
+/// equivalent -- `Expr.Array.b` through `.e` -- and the rank-three cube encodes
+/// each element's own coordinates, so a permuted order cannot agree by
+/// accident.
+#[test]
+fn a_matrix_aggregate_places_its_elements_where_the_specification_says() {
+    let binary = compile_fixture("arrayaggregate.fss", "arrayaggregate");
+    let out = run(&binary);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "4\n5\n5\n5\n5\n234\n7\n"
+    );
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// A literal whose groups differ in size names no rectangle, and matrix pasting
+/// -- an array as an ELEMENT of an array literal, `aggregate.tex:180-188` -- is
+/// not built. Both refused by name rather than by an odometer quietly taking
+/// each extent to be the largest index it reached.
+#[test]
+fn a_ragged_or_pasted_aggregate_is_refused_by_name() {
+    let message = refusal("badraggedarray.fss");
+    assert!(
+        message.contains("this array literal is ragged"),
+        "{message}"
+    );
+    let message = refusal("badpastedarray.fss");
+    assert!(
+        message.contains("expected ZZ32, found Array[\\ZZ32\\]"),
+        "{message}"
+    );
+}
+
 /// EVERY DIMENSION IS CHECKED ON ITS OWN. `a[0,4]` on a 2 by 3 linearises to
 /// offset 4, which is inside the six slots the array holds -- so a check made
 /// after the linearisation lets it through and hands back `a[1,1]`. Measured,

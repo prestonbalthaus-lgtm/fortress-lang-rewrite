@@ -1,0 +1,72 @@
+component arrayaggregate
+export Executable
+
+(* THE SPECIFICATION IS THE ORACLE HERE AND IT GIVES A VALUE, NOT A SHAPE.
+   `aggregate.tex:143-150`: for `A: ZZ32[3,3] = [1 2 3; 4 5 6; 7 8 9]`, "then
+   A(1,0) evaluates to 4". So `;` steps dimension 0 and whitespace steps
+   dimension 1 -- rows and then columns -- and a gate that only checked the
+   SHAPE would pass on a transposed one. *)
+spec(): ZZ32 = do
+    a: ZZ32[3,3] = [1 2 3; 4 5 6; 7 8 9]
+    a[1,0]
+end
+
+(* FOUR SPELLINGS THE SPECIFICATION CALLS EQUIVALENT, `aggregate.tex:192-196`:
+   a semicolon, a bare line break, a line break then a semicolon, and a
+   semicolon then a line break. All four are `Expr.Array.b` through `.e` and
+   all four must give 5. *)
+semi(): ZZ32 = do
+    a: ZZ32[2,2] = [3 4; 5 6]
+    a[1,0]
+end
+
+newline(): ZZ32 = do
+    a: ZZ32[2,2] = [3 4
+                    5 6]
+    a[1,0]
+end
+
+newlineThenSemi(): ZZ32 = do
+    a: ZZ32[2,2] = [ 3 4
+                   ; 5 6 ]
+    a[1,0]
+end
+
+semiThenNewline(): ZZ32 = do
+    a: ZZ32[2,2] = [3 4;
+                    5 6]
+    a[1,0]
+end
+
+(* RANK THREE, AND THE VALUES CARRY THEIR OWN COORDINATES so a permuted
+   linearisation cannot agree by accident: element `ijk` sits at `a[i,j,k]`.
+   `;;` steps dimension 2, which is `ProjectFortress/tests/arrayTest2.fss`'s
+   assertion and not a guess. *)
+cube(): ZZ32 = do
+    a: ZZ32[2,3,4] = [ 111 121 131;
+                       211 221 231;;
+                       112 122 132;
+                       212 222 232;;
+                       113 123 133;
+                       213 223 233;;
+                       114 124 134;
+                       214 224 234 ]
+    a[1,2,3]
+end
+
+(* A rank-one literal in the same program, on the path it always had. *)
+flat(): ZZ32 = do
+    a: ZZ32[4] = [9 8 7 6]
+    a[2]
+end
+
+run(): () = do
+    println(spec())
+    println(semi())
+    println(newline())
+    println(newlineThenSemi())
+    println(semiThenNewline())
+    println(cube())
+    println(flat())
+end
+end

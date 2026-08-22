@@ -954,8 +954,13 @@ impl<'a> Expander<'a> {
                 items: self.block(items, subst)?,
                 span: *span,
             },
-            Expr::ArrayLit { items, span } => Expr::ArrayLit {
+            Expr::ArrayLit {
+                items,
+                extents,
+                span,
+            } => Expr::ArrayLit {
                 items: self.exprs(items, subst)?,
+                extents: extents.clone(),
                 span: *span,
             },
             // Refused by the checker, but expansion runs first and its elements

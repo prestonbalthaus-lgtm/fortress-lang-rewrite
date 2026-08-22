@@ -1,0 +1,13 @@
+component badpastedarray
+export Executable
+
+(* MATRIX PASTING, `aggregate.tex:180-188`: an element of an array literal may
+   itself be an array and is flattened into the enclosing one. Not built --
+   an element here must be a scalar -- and refused rather than silently taken
+   as an element type nothing can store. *)
+run(): () = do
+    b: ZZ32[2] = [1 2]
+    a: ZZ32[2,2] = [1 2; 3 b]
+    println(a[0,0])
+end
+end

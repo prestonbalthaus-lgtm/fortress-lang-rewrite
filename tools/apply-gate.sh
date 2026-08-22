@@ -223,7 +223,23 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # BODY of all 411 modules that compiled before is byte for byte unchanged, with
 # the two unconditional runtime `declare` lines filtered; the gates are where
 # the feature is proved.
-OBJECT_FLOOR=308
+#
+# THE MATRIX AGGREGATE `[3 4; 5 6]`: 358 objects, 64 apis. ELEVEN files, zero
+# lost, and the IR body of all 422 modules that compiled before is byte for byte
+# unchanged. The floor rises to 358 - 39 = 319.
+#   arrayBig  arrayTest1  arrayTest2
+#   Expr.Array.{a,b,c,d,e,f}   Overview.Expression.aggregate.{b,c}
+# THE PREDICTION WAS ELEVEN AND THE DELIVERY IS ELEVEN, which is the first time
+# on this project a first-blocker count has held -- and it held because the
+# count was taken with the compiler after `T[m,n]` and `a[i,j]` had already
+# landed, so nothing was hiding behind them. The SETS differ: `arrayTest3` needs
+# matrix PASTING and stays refused, and three files that were behind other walls
+# came through.
+# THE ORACLE IS THE SPECIFICATION AND NOT THE COUNT. No `.test` file names any
+# of the eleven, so part A of oracle-gate cannot see them; `aggregate.tex:150`
+# can -- "then A(1,0) evaluates to 4" -- and arrayTest2 encodes each element's
+# coordinates in its own value.
+OBJECT_FLOOR=319
 API_FLOOR=64
 
 passed=0

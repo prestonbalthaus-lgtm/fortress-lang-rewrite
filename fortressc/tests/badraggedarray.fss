@@ -1,0 +1,12 @@
+component badraggedarray
+export Executable
+
+(* `aggregate.tex:184-187`: "the elements along a row (or column) must have the
+   same number of columns (or rows)". A literal whose rows differ names no
+   rectangle, and an odometer that took each extent to be the largest index it
+   happened to reach would accept this as a 2 by 2 with a hole in it. *)
+run(): () = do
+    a: ZZ32[2,2] = [1 2; 3]
+    println(a[0,0])
+end
+end

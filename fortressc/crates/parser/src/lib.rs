@@ -3613,42 +3613,225 @@ impl<'t, 'a> Parser<'t, 'a> {
         run.len() == len
     }
 
+    /// `[1 2 3]`, `[1 2; 3 4]`, `[1 2;; 3 4]`, and a bare newline as a row
+    /// separator. `aggregate.tex:29-34`: `RectElements ::= Expr MultiDimCons*`,
+    /// `MultiDimCons ::= RectSeparator Expr`, `RectSeparator ::= ';'+ |
+    /// Whitespace`.
+    ///
+    /// THE SEPARATOR LEVEL IS WHAT DECIDES THE SHAPE, and the mapping from
+    /// level to DIMENSION is not the identity. `aggregate.tex:143-150` gives
+    /// the oracle as a value rather than a shape: for
+    /// `A: ZZ32[3,3] = [1 2 3; 4 5 6; 7 8 9]`, "then `A(1,0)` evaluates to 4".
+    /// So `;` steps dimension 0 and whitespace steps dimension 1 -- rows and
+    /// then columns -- and `ProjectFortress/tests/arrayTest2.fss` pins the rest:
+    /// a `ZZ32[2,3,4]` written with `;;` asserts `a[0,0,1]` is the first
+    /// element of the SECOND `;;` group, so `;;` steps dimension 2.
+    ///
+    /// A NEWLINE IS A LEVEL-ONE SEPARATOR and `SpecData/.../Expr.Array.b`
+    /// through `.e` are four spellings the specification calls equivalent --
+    /// `;`, a newline, a newline then `;`, and `;` then a newline. So the run
+    /// between two elements is read as a WHOLE: its level is the number of
+    /// semicolons in it, or one if it has none and holds a line break.
+    /// COST OF THE NEWLINE RULE, measured before it was written: ZERO. Not one
+    /// of the 411 files that compile writes a bracket literal with a line break
+    /// inside it, so no existing program changes meaning.
     fn array_literal(&mut self) -> Parsed<Expr> {
         let start = self.expect(&Kind::LBracket, "`[`")?.span;
-        let mut items = Vec::new();
+        let mut items: Vec<Expr> = Vec::new();
+        // One per GAP, so `levels.len() + 1 == items.len()` whenever the
+        // literal is non-empty.
+        let mut levels: Vec<usize> = Vec::new();
         self.skip_newlines();
         if !self.at(&Kind::RBracket) {
             loop {
-                // `aggregate.tex:120-121` separates elements by whitespace:
-                // `RectSeparator ::= ';'+ | Whitespace`. `self.expr()` swallows
-                // a whitespace-separated run as one juxtaposition, so `[1 2 3]`
-                // used to be ONE element holding 6. 128 corpus sites over 65
-                // files write the juxtaposed spelling.
-                //
+                // `self.expr()` swallows a whitespace-separated run as one
+                // juxtaposition, so `[1 2 3]` would be ONE element holding 6.
+                // 128 corpus sites over 65 files write the juxtaposed spelling.
                 // Split after the fact rather than by suppressing juxtaposition
                 // inside the brackets: the flag version needs five save/restore
                 // sites and buys nothing. It does NOT see a run buried under an
                 // infix operator -- `[a b + c d]` is one Infix over two Juxts --
-                // and a newline inside the brackets is still eaten rather than
-                // read as a row separator. Both are open, and both are
-                // multi-dimensional-array questions rather than this one.
+                // which is unchanged and still open.
                 match self.expr()? {
                     Expr::Juxt { items: run, .. } => items.extend(run),
                     single => items.push(single),
                 }
-                self.skip_newlines();
-                if !self.at(&Kind::Comma) {
+                // A juxtaposition run is `n` elements with `n - 1` gaps and
+                // every one of them is whitespace.
+                levels.resize(items.len().saturating_sub(1), 0);
+                let level = self.separator_run();
+                if self.at(&Kind::RBracket) {
                     break;
                 }
-                self.pos += 1;
-                self.skip_newlines();
+                if self.at(&Kind::Comma) {
+                    self.pos += 1;
+                    self.skip_newlines();
+                    levels.push(level);
+                    continue;
+                }
+                if level == 0 {
+                    // Nothing separated the two, so nothing follows: let
+                    // `expect` below name the token it actually found.
+                    break;
+                }
+                levels.push(level);
             }
         }
         let close = self.expect(&Kind::RBracket, "`]`")?.span;
+        let span = Span::new(start.start, close.end);
+        let (items, extents) = Self::rectangle(items, &levels, span)?;
         Ok(Expr::ArrayLit {
             items,
-            span: Span::new(start.start, close.end),
+            extents,
+            span,
         })
+    }
+
+    /// The run of separators between two elements, as its LEVEL. Semicolons and
+    /// line breaks are read together because the specification calls the four
+    /// spellings equivalent, and a run of `; ;` with a space in it is still two
+    /// semicolons -- `Expr.Array.f` writes exactly that.
+    fn separator_run(&mut self) -> usize {
+        let mut semicolons = 0;
+        let mut line_break = false;
+        loop {
+            if self.at(&Kind::Semi) {
+                semicolons += 1;
+            } else if self.at(&Kind::Newline) {
+                line_break = true;
+            } else {
+                break;
+            }
+            self.pos += 1;
+        }
+        if semicolons > 0 {
+            semicolons
+        } else {
+            usize::from(line_break)
+        }
+    }
+
+    /// Elements in source order plus the level of each gap, to elements in
+    /// ROW-MAJOR order plus one extent per dimension.
+    ///
+    /// TWO PASSES AND THE FIRST ONE IS THE CHECK. An odometer alone would take
+    /// each extent to be the largest index it happened to reach, which accepts
+    /// `[1 2; 3]` as a 2 by 2 with a hole in it. `shape` recurses over the
+    /// separator levels and refuses a group whose length differs from its
+    /// siblings', by name and with both lengths.
+    fn rectangle(
+        items: Vec<Expr>,
+        levels: &[usize],
+        span: Span,
+    ) -> Parsed<(Vec<Expr>, Vec<usize>)> {
+        if items.is_empty() {
+            return Ok((items, vec![0]));
+        }
+        let top = levels.iter().copied().max().unwrap_or(0);
+        if top == 0 {
+            let n = items.len();
+            return Ok((items, vec![n]));
+        }
+        // Highest level first: `[groups, rows, columns]` for a `;;` literal.
+        let by_level = Self::shape(levels, 0, items.len(), top, span)?;
+        let rank = top + 1;
+        let mut extents = vec![0usize; rank];
+        for (level, count) in by_level.iter().rev().enumerate() {
+            if let Some(slot) = extents.get_mut(Self::dimension_of(level)) {
+                *slot = *count;
+            }
+        }
+
+        let mut strides = vec![1usize; rank];
+        for d in (0..rank.saturating_sub(1)).rev() {
+            let next = strides
+                .get(d + 1)
+                .copied()
+                .unwrap_or(1)
+                .saturating_mul(extents.get(d + 1).copied().unwrap_or(1));
+            if let Some(slot) = strides.get_mut(d) {
+                *slot = next;
+            }
+        }
+        let mut placed: Vec<Option<Expr>> = (0..items.len()).map(|_| None).collect();
+        let mut at = vec![0usize; rank];
+        for (index, item) in items.into_iter().enumerate() {
+            let offset: usize = at
+                .iter()
+                .zip(&strides)
+                .map(|(c, s)| c.saturating_mul(*s))
+                .sum();
+            if let Some(slot) = placed.get_mut(offset) {
+                *slot = Some(item);
+            }
+            if let Some(level) = levels.get(index) {
+                if let Some(slot) = at.get_mut(Self::dimension_of(*level)) {
+                    *slot += 1;
+                }
+                for lower in 0..*level {
+                    if let Some(slot) = at.get_mut(Self::dimension_of(lower)) {
+                        *slot = 0;
+                    }
+                }
+            }
+        }
+        // `shape` proved the literal rectangular, so every slot was written.
+        let items = placed.into_iter().flatten().collect();
+        Ok((items, extents))
+    }
+
+    /// Which DIMENSION a separator of this level steps. Whitespace steps the
+    /// horizontal one -- `aggregate.tex:146-148`, "the horizontal dimension of
+    /// an array is the last dimension mentioned in the array index" -- and `;`
+    /// steps the vertical one, so the two lowest levels are swapped and every
+    /// level above them is its own dimension.
+    const fn dimension_of(level: usize) -> usize {
+        match level {
+            0 => 1,
+            1 => 0,
+            other => other,
+        }
+    }
+
+    /// The extent at each level from `level` down to zero, highest first.
+    fn shape(
+        levels: &[usize],
+        lo: usize,
+        hi: usize,
+        level: usize,
+        span: Span,
+    ) -> Parsed<Vec<usize>> {
+        if level == 0 {
+            return Ok(vec![hi - lo]);
+        }
+        let mut groups: Vec<(usize, usize)> = Vec::new();
+        let mut start = lo;
+        for gap in lo..hi.saturating_sub(1) {
+            if levels.get(gap).copied().unwrap_or(0) == level {
+                groups.push((start, gap + 1));
+                start = gap + 1;
+            }
+        }
+        groups.push((start, hi));
+        let mut inner: Option<Vec<usize>> = None;
+        for (from, to) in &groups {
+            let sub = Self::shape(levels, *from, *to, level - 1, span)?;
+            match &inner {
+                None => inner = Some(sub),
+                Some(first) if *first == sub => {}
+                Some(first) => {
+                    return Err(ParseError::ArrayLiteralRagged {
+                        span,
+                        level: level - 1,
+                        expected: first.first().copied().unwrap_or(0),
+                        found: sub.first().copied().unwrap_or(0),
+                    })
+                }
+            }
+        }
+        let mut out = vec![groups.len()];
+        out.extend(inner.unwrap_or_default());
+        Ok(out)
     }
 
     /// `while cond do ... end`. The only loop in the language until generators

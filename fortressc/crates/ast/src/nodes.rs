@@ -762,8 +762,25 @@ pub enum Expr {
     },
     /// `[1, 2, 3]`. Homogeneous and one dimensional; the element type comes
     /// from the elements, or from context when the literal is empty.
+    /// `[1 2 3]`, `[1 2; 3 4]`, `[1 2;; 3 4]`. ONE NODE FOR EVERY RANK, because
+    /// `aggregate.tex:29-34` makes them one production: `RectElements ::= Expr
+    /// MultiDimCons*` with `RectSeparator ::= ';'+ | Whitespace`.
+    ///
+    /// `items` IS ROW MAJOR AND THAT IS NOT THE ORDER THE SOURCE WRITES. The
+    /// separator level decides which dimension an element steps: `;` steps
+    /// dimension 0, whitespace steps dimension 1, and `;;` steps dimension 2 --
+    /// so in a rank-three literal the OUTERMOST group in the source is the
+    /// FASTEST index in row-major order. The parser computes each element's
+    /// coordinate tuple and places it, rather than concatenating.
+    ///
+    /// `aggregate.tex:143-150` is the oracle for the two-dimensional case and
+    /// it is a value, not a shape: for `A: ZZ32[3,3] = [1 2 3; 4 5 6; 7 8 9]`,
+    /// "then `A(1,0)` evaluates to 4".
     ArrayLit {
         items: Vec<Expr>,
+        /// One per dimension, outermost first. A rank-one literal writes
+        /// `[items.len()]`, so every reader asks the same question.
+        extents: Vec<usize>,
         span: Span,
     },
     /// `a[i]` and `a[i,j]`, a tight subscript. Spaced, `a [i]` is a

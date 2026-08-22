@@ -50,6 +50,16 @@ pub enum ParseError {
         span: Span,
         found: usize,
     },
+    /// `[1 2; 3]`. Every group at a separator level must hold the same number
+    /// of subgroups, or the literal names no rectangle at all.
+    /// `aggregate.tex:184-187` says it outright: "the elements along a row (or
+    /// column) must have the same number of columns (or rows)".
+    ArrayLiteralRagged {
+        span: Span,
+        level: usize,
+        expected: usize,
+        found: usize,
+    },
     /// An integer literal in static-argument position that does not fit `i64`.
     /// Arbitrary-precision `ZZ` is its own spike -- it needs a heap
     /// representation and runtime shims -- so this is a diagnostic and not a
@@ -183,6 +193,7 @@ impl ParseError {
             | Self::StaticValueParameterBound { span, .. }
             | Self::SubscriptedAssignmentReturnType { span, .. }
             | Self::SubscriptedAssignmentValueArity { span, .. }
+            | Self::ArrayLiteralRagged { span, .. }
             | Self::StaticExpressionOutOfRange { span, .. }
             | Self::LocalFunctionDeclarationUnsupported { span }
             | Self::WhereClauseFormUnsupported { span, .. }
@@ -234,6 +245,21 @@ impl core::fmt::Display for ParseError {
                 f,
                 "a subscripted assignment operator declares `{written}` as its result \
                  type; if a result type is given it must be `()`"
+            ),
+            Self::ArrayLiteralRagged {
+                level,
+                expected,
+                found,
+                ..
+            } => write!(
+                f,
+                "this array literal is ragged: a group separated by {} holds {found} \
+                 element(s) where an earlier one holds {expected}",
+                if *level == 0 {
+                    "whitespace".to_owned()
+                } else {
+                    format!("`{}`", ";".repeat(*level))
+                }
             ),
             Self::SubscriptedAssignmentValueArity { found, .. } => write!(
                 f,
