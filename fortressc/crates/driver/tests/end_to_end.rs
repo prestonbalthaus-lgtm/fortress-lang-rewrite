@@ -3362,9 +3362,13 @@ fn a_bodiless_overload_set_may_differ_in_its_static_parameters() {
 ///
 /// BOTH ORDERS, and the second file exists because the mutation table found
 /// that one of them could not see the difference: a relaxation that asks only
-/// about the declaration IN HAND rather than about the pair is refused by one
-/// order and accepted by the other, and `mixedoverload.fsi` alone happened to
-/// be the order that still refused.
+/// about the declaration IN HAND rather than about the pair meets the bodied
+/// declaration second in one order and first in the other.
+///
+/// THE ASSERTION IS ON THE MESSAGE AND THAT IS THE POINT. A body inside an api
+/// is refused by a SECOND rule -- "an `api` is a set of declarations" -- either
+/// way, so `exit 1` alone passes on both readings and says nothing about
+/// whether the pair was ever compared.
 #[test]
 fn a_declaration_with_a_body_is_not_exempt_from_uniformity() {
     for name in ["mixedoverload.fsi", "mixedoverloadrev.fsi"] {
