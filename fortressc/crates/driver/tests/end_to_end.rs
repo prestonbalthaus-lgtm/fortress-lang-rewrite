@@ -2383,10 +2383,19 @@ fn the_bootstrap_root_parses_in_full() {
     // Pinning it here is what stops the next reader assuming tuples are still
     // the blocker on this file. They are not.
     assert!(
-        message
-            .contains("`||` is declared twice on the same argument types (FlatString, FlatString)"),
-        "the remaining blocker should be FlatString's self-position operator \
-         pair, reached through the import: {message}"
+        !message.contains("is declared twice on the same argument types"),
+        "two BODILESS declarations of one signature are one declaration; that \
+         wall may not come back: {message}"
+    );
+    // REPINNED A THIRD TIME, AND THE NEW WALL IS NOT A LANGUAGE FEATURE AT ALL.
+    // `RR32` is declared in `ProjectFortress/LibraryBuiltin/CompilerBuiltin.fsi`
+    // and this compiler cannot import it yet. FortressLibrary.fsi is past every
+    // LANGUAGE wall it has had -- the scalar supertrait, tuple types, and the
+    // self-position pair -- and now waits on the builtin library.
+    assert!(
+        message.contains("unknown type `RR32`"),
+        "the remaining blocker should be a builtin the library cannot import: \
+         {message}"
     );
 }
 
@@ -2528,25 +2537,105 @@ fn a_tuple_whose_value_is_used_is_still_refused() {
     let _ = std::fs::remove_file(&src);
 }
 
-/// THE SELF-POSITION PAIR, ISOLATED, because the library reaches it through an
-/// import and an imported span is rendered against the WRONG FILE (see the
-/// wall test above, which reports :19:20 -- a comment). Ten lines that need no
-/// import at all, so the span is right and the pair is unmistakable.
+/// THE SELF-POSITION PAIR IS ONE DECLARATION, and this is what unblocks the
+/// standard library. `Library/FlatString.fsi` writes both
+/// `opr ||(self, b:F)` and `opr ||(a:F, self)`; they differ only in which
+/// operand is the receiver and are NOT distinguishable by type.
 ///
-/// `opr ||(self, b:F)` and `opr ||(a:F, self)` differ only in WHICH operand is
-/// the receiver. Both are `(F, F)`, so both are one signature.
+/// A SELF-POSITION RULE WOULD BE WRONG. `traits.tex:484-494` says a functional
+/// method has `self` at an ARBITRARY position and that such declarations "can
+/// be viewed as top-level function declarations"; the spec's own example
+/// (`SpecData/examples/basic/Trait.Method.a.fss`) puts `f(self, t:T)` beside
+/// `f(s:S, self)` and rewrites them as `f1(a:A, t:T)` and `f2(s:S, a:A)` --
+/// distinct only because `T` and `S` are, and that file declares
+/// `trait T excludes A`. Two declarations that flatten to ONE type vector are
+/// one declaration.
+///
+/// What is true is narrower: the refusal exists because dispatch cannot choose
+/// between two IMPLEMENTATIONS. With no bodies there is nothing to choose.
 #[test]
-fn two_operator_declarations_differing_only_in_self_position_collide() {
+fn two_bodiless_declarations_of_one_signature_are_one_declaration() {
     let src = output_path("selfpos").with_extension("fsi");
     std::fs::write(
         &src,
-        "api selfpos\n         trait S end\n         object F extends { S }\n         opr ||(self, b:F): S\n         opr ||(a:F, self): S\n         end\n         end\n",
+        "api selfpos\n\
+         trait S end\n\
+         object F extends { S }\n\
+         opr ||(self, b:F): S\n\
+         opr ||(a:F, self): S\n\
+         end\n\
+         end\n",
     )
     .expect("could not write fixture");
     let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
         .arg(&src)
         .arg("-o")
         .arg(output_path("selfpos-out"))
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success() && !message.contains("declared twice"),
+        "{message}"
+    );
+    let _ = std::fs::remove_file(&src);
+}
+
+/// THE OTHER SIDE, and without it the rule reads as "self position makes them
+/// different", which is exactly what it is not. Give either declaration a BODY
+/// and the ambiguity is real again -- two implementations, one signature, no
+/// way to choose -- so the refusal comes back.
+#[test]
+fn one_signature_with_two_bodies_still_collides_whatever_the_self_position() {
+    let src = output_path("selfpos2").with_extension("fss");
+    std::fs::write(
+        &src,
+        "component selfpos2\n\
+         export Executable\n\
+         trait S end\n\
+         object F extends { S }\n\
+         opr ||(self, b:F): S = self\n\
+         opr ||(a:F, self): S = self\n\
+         end\n\
+         run(): () = ()\n\
+         end\n",
+    )
+    .expect("could not write fixture");
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(&src)
+        .arg("-o")
+        .arg(output_path("selfpos2-out"))
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        message.contains("`||` is declared twice on the same argument types (F, F)"),
+        "{message}"
+    );
+    let _ = std::fs::remove_file(&src);
+}
+
+/// AND A DISAGREEMENT ON THE RESULT IS STILL AN ERROR even with no bodies: two
+/// declarations asserting DIFFERENT results for one signature do not say the
+/// same thing, so they are not one declaration.
+#[test]
+fn two_bodiless_declarations_that_disagree_on_the_result_still_collide() {
+    let src = output_path("selfpos3").with_extension("fsi");
+    std::fs::write(
+        &src,
+        "api selfpos3\n\
+         trait S end\n\
+         object F extends { S }\n\
+         opr ||(self, b:F): S\n\
+         opr ||(a:F, self): F\n\
+         end\n\
+         end\n",
+    )
+    .expect("could not write fixture");
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(&src)
+        .arg("-o")
+        .arg(output_path("selfpos3-out"))
         .output()
         .expect("could not run fortressc");
     let message = String::from_utf8_lossy(&out.stderr);

@@ -1010,12 +1010,48 @@ impl Checker {
                     .get(&m.name)
                     .and_then(|set| set.iter().find(|other| other.params == params))
                 {
-                    return Err(TypeError::DuplicateOverload {
-                        span: m.span,
-                        first: other.span,
-                        arguments: render(&params),
-                        name: m.name.clone(),
-                    });
+                    // TWO BODILESS DECLARATIONS OF ONE SIGNATURE ARE ONE
+                    // DECLARATION, and this is what unblocks the standard
+                    // library.
+                    //
+                    // `Library/FlatString.fsi` writes BOTH
+                    //   opr ||(self, b:FlatString): String
+                    //   opr ||(a:FlatString, self): String
+                    // which differ only in which operand is the receiver. They
+                    // are NOT distinguishable by type and the specification
+                    // says why: `traits.tex:484-494` -- "a functional method
+                    // declaration has a parameter named self at an ARBITRARY
+                    // position... Semantically, functional method declarations
+                    // can be viewed as TOP-LEVEL FUNCTION DECLARATIONS". Its
+                    // own worked example, `SpecData/examples/basic/
+                    // Trait.Method.a.fss`, writes `f(self, t:T)` beside
+                    // `f(s:S, self)` and rewrites them as `f1(a:A, t:T)` and
+                    // `f2(s:S, a:A)` -- which are distinct ONLY because T and S
+                    // are, and the file declares `trait T excludes A`.
+                    //
+                    // SO A SELF-POSITION RULE WOULD BE WRONG. Treating
+                    // `(self, b:F)` and `(a:F, self)` as different declarations
+                    // contradicts that reduction and would leave a call with
+                    // two applicable declarations and no most-specific winner,
+                    // resolved arbitrarily -- a silent wrong answer.
+                    //
+                    // WHAT IS ACTUALLY TRUE is narrower: the error exists
+                    // because DISPATCH CANNOT CHOOSE between two
+                    // implementations. With no bodies there is nothing to
+                    // choose, and if the two also agree on the return type they
+                    // assert the same thing. That is a redundant redeclaration,
+                    // not an ambiguity. Either one having a body brings the
+                    // ambiguity back and the refusal with it.
+                    let redundant = m.body.is_none() && !other.concrete && other.returns == returns;
+                    if !redundant {
+                        return Err(TypeError::DuplicateOverload {
+                            span: m.span,
+                            first: other.span,
+                            arguments: render(&params),
+                            name: m.name.clone(),
+                        });
+                    }
+                    continue;
                 }
                 let symbol = functional_symbol(
                     owner,
