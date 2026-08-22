@@ -1,0 +1,21 @@
+component radixnumeral
+export Executable
+
+(* `lexical-structure.tex:1121-1129` GIVES THE LETTERS VALUES NO STANDARD PARSER
+   KNOWS: `X` and `x` are TEN, and `E` and `e` are ELEVEN AT RADIX TWELVE and
+   fourteen everywhere else. The first two lines are the cross-check that finds
+   a decoder using the ordinary alphabet: `1xe_12` and `1ab_12` are the two
+   spellings of the same duodecimal number, and
+   `ProjectFortress/tests/NumeralTest.fss:42` asserts it is 275. *)
+
+run(): () = do
+    println(1xe_12)
+    println(1ab_12)
+    println(1e_16)
+    println(0fff_16)
+    println(0fff_SIXTEEN)
+    println(1000_2)
+    println(101'0100_2)
+    println(7FFF_16 = 32767)
+end
+end

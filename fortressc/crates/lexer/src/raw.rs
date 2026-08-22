@@ -328,16 +328,116 @@ const QUOTE: char = '"';
 
 fn numeral(lex: &mut Lexer<Raw>) -> FilterResult<(), LexErrorKind> {
     let text = lex.slice();
-    if lex.remainder().starts_with('_') {
-        return FilterResult::Error(LexErrorKind::RadixNumeralUnsupported);
-    }
     if text.chars().filter(|c| *c == '.').count() > 1 {
         return FilterResult::Error(LexErrorKind::MultipleDecimalPoints);
+    }
+    // A RADIX SPECIFIER IS WHAT MAKES LETTERS LEGAL IN A NUMERAL, and without
+    // one they are not: `2x` and `1e10` are `NumeralWithLetters`, which is the
+    // check below and is why the two cases have to be told apart here rather
+    // than by the regex.
+    if let Some((digits, specifier)) = text.rsplit_once('_') {
+        let Some(radix) = radix_of(specifier) else {
+            return FilterResult::Error(LexErrorKind::MalformedRadixNumeral);
+        };
+        let clean = digits.replace(crate::NUMERAL_SEPARATORS, "");
+        // `Literal.rats:22-23` makes a radix literal an INTEGER literal; a
+        // fractional one would need the value to be exact in that base.
+        if clean.is_empty() || clean.contains('.') {
+            return FilterResult::Error(LexErrorKind::MalformedRadixNumeral);
+        }
+        if !well_formed_radix_digits(&clean, radix) {
+            return FilterResult::Error(LexErrorKind::MalformedRadixNumeral);
+        }
+        return FilterResult::Emit(());
     }
     if text.chars().any(|c| c.is_ascii_alphabetic()) {
         return FilterResult::Error(LexErrorKind::NumeralWithLetters);
     }
     FilterResult::Emit(())
+}
+
+/// `lexical-structure.tex:1096-1135`, all five of its static errors and in its
+/// own order. THE DIGIT VALUES ARE NOT `char::is_digit`'s, which is why this
+/// exists at all: `X` and `x` are TEN, and `E` and `e` are ELEVEN AT RADIX 12
+/// and fourteen everywhere else. `ProjectFortress/tests/NumeralTest.fss:42`
+/// writes `1xe_12` and asserts it is 275 -- 144 + 120 + 11 -- which no
+/// implementation using the ordinary alphabet can produce.
+fn well_formed_radix_digits(clean: &str, radix: u32) -> bool {
+    let letters: Vec<char> = clean.chars().filter(char::is_ascii_alphabetic).collect();
+    // "the numeral contains both uppercase and lowercase letters", :1132.
+    if letters.iter().any(char::is_ascii_uppercase) && letters.iter().any(char::is_ascii_lowercase)
+    {
+        return false;
+    }
+    if radix == 12 {
+        // ":1108-1113" -- radix twelve has its OWN alphabet, and it may not mix
+        // the two spellings of ten and eleven.
+        if !letters
+            .iter()
+            .all(|c| matches!(c.to_ascii_uppercase(), 'A' | 'B' | 'X' | 'E'))
+        {
+            return false;
+        }
+        let roman = letters
+            .iter()
+            .any(|c| matches!(c.to_ascii_uppercase(), 'X' | 'E'));
+        let alpha = letters
+            .iter()
+            .any(|c| matches!(c.to_ascii_uppercase(), 'A' | 'B'));
+        if roman && alpha {
+            return false;
+        }
+    } else if !letters.iter().all(|c| c.is_ascii_hexdigit()) {
+        // ":1103-1106".
+        return false;
+    }
+    // ":1115-1118", a digit or letter denoting a value at or above the radix.
+    clean
+        .chars()
+        .all(|c| digit_value(c, radix).is_some_and(|v| v < radix))
+}
+
+/// `lexical-structure.tex:1121-1129`. `E` is the one letter whose value depends
+/// on the radix, and `X` is the one that is not a hexadecimal digit at all.
+pub(crate) fn digit_value(c: char, radix: u32) -> Option<u32> {
+    match c.to_ascii_uppercase() {
+        'X' => Some(10),
+        'E' if radix == 12 => Some(11),
+        other => other.to_digit(16).or(match other {
+            'E' => Some(14),
+            _ => None,
+        }),
+    }
+}
+
+/// `Literal.rats:42-64`. A radix is written as digits or as one of fifteen
+/// NAMES, and `NodeUtil.validRadix` bounds it at 2 through 16 -- the same
+/// bound `char::is_digit` takes.
+pub(crate) fn radix_of(specifier: &str) -> Option<u32> {
+    const NAMES: [(&str, u32); 15] = [
+        ("TWO", 2),
+        ("THREE", 3),
+        ("FOUR", 4),
+        ("FIVE", 5),
+        ("SIX", 6),
+        ("SEVEN", 7),
+        ("EIGHT", 8),
+        ("NINE", 9),
+        ("TEN", 10),
+        ("ELEVEN", 11),
+        ("TWELVE", 12),
+        ("THIRTEEN", 13),
+        ("FOURTEEN", 14),
+        ("FIFTEEN", 15),
+        ("SIXTEEN", 16),
+    ];
+    if let Some((_, radix)) = NAMES.iter().find(|(name, _)| *name == specifier) {
+        return Some(*radix);
+    }
+    specifier
+        .parse::<u32>()
+        .ok()
+        .filter(|r| (2..=16).contains(r))
 }
 
 #[derive(Logos, Debug, Clone, PartialEq)]
@@ -354,7 +454,15 @@ pub(crate) enum Raw {
     #[regex(r"[A-Za-z_][A-Za-z0-9_']*")]
     Word,
 
-    #[regex(r"[0-9][0-9A-Za-z]*(?:['\u{202F}.][0-9A-Za-z]+)*", numeral)]
+    /// The optional `_radix` tail is `Literal.rats:29-30`,
+    /// `NumericLiteralWithRadix ::= NumericWord RestNumericWord* "_"
+    /// RadixSpecifier`. It is part of the SAME token because the specifier
+    /// changes what the digits before it MEAN, and a separate token would let
+    /// whitespace between them.
+    #[regex(
+        r"[0-9][0-9A-Za-z]*(?:['\u{202F}.][0-9A-Za-z]+)*(?:_[0-9A-Za-z]+)?",
+        numeral
+    )]
     Numeral,
 
     // `Literal.rats:151-155` gives a string literal TWO delimiter pairs, and

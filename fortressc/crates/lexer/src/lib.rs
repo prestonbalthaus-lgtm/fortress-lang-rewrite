@@ -17,7 +17,7 @@ pub use token::{Kind, Token};
 use fortress_ast::Span;
 use logos::Logos as _;
 
-const NUMERAL_SEPARATORS: [char; 2] = ['\'', '\u{202F}'];
+pub(crate) const NUMERAL_SEPARATORS: [char; 2] = ['\'', '\u{202F}'];
 
 /// Tokenizes `source`. Fails on the first error rather than recovering, per the
 /// M1 design.
@@ -102,6 +102,31 @@ pub fn lex(source: &str) -> Result<Vec<Token<'_>>, LexError> {
 /// Group separators are deleted before the value is computed, so `1'000'000`
 /// and `1000000` are the same numeral (`ExprFactory.java:612-613`).
 fn numeral_kind(text: &str) -> Kind<'_> {
+    // A RADIX LITERAL IS DECODED HERE AND CARRIED AS DECIMAL DIGITS, so nothing
+    // downstream needs to know a base existed: the parser turns `digits` into a
+    // value and `7FFF_16` and `32767` reach it identically.
+    if let Some((digits, specifier)) = text.rsplit_once('_') {
+        if let Some(radix) = raw::radix_of(specifier) {
+            let clean = digits.replace(NUMERAL_SEPARATORS, "");
+            // `raw::digit_value` and NOT `from_str_radix`: `X` is ten and `E`
+            // is eleven at radix twelve, which no standard parser knows. The
+            // scanner has already refused every digit at or above the radix.
+            let mut value: u128 = 0;
+            let mut ok = !clean.is_empty();
+            for c in clean.chars() {
+                match raw::digit_value(c, radix) {
+                    Some(d) => value = value * u128::from(radix) + u128::from(d),
+                    None => ok = false,
+                }
+            }
+            if ok {
+                return Kind::IntLit {
+                    text,
+                    digits: value.to_string(),
+                };
+            }
+        }
+    }
     let stripped: String = text
         .chars()
         .filter(|c| !NUMERAL_SEPARATORS.contains(c))

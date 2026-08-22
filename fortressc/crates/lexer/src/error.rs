@@ -36,7 +36,11 @@ pub enum LexErrorKind {
     /// `lexical-structure.tex:869-877` -- a PREPROCESSING feature with a table
     /// of Unicode names behind it, refused by name rather than guessed at.
     CharacterNameUnsupported,
-    RadixNumeralUnsupported,
+    /// A radix numeral whose specifier is not 2 through 16, whose digits do
+    /// not all denote a value below its radix, or which breaks one of
+    /// `lexical-structure.tex:1096-1135`'s other three rules -- a fractional
+    /// value, radix twelve mixing `A`/`B` with `X`/`E`, or mixed case.
+    MalformedRadixNumeral,
     /// A string opened with one mark and closed with the other.
     /// `Literal.rats:158-167` has an explicit error production for each
     /// mixed pair, and the corpus has a must-fail test for it.
@@ -77,7 +81,10 @@ impl LexErrorKind {
             Self::CharacterNameUnsupported => {
                 "naming a character inside a character literal is not in the M1 subset"
             }
-            Self::RadixNumeralUnsupported => "radix numerals are not in the M1 subset",
+            Self::MalformedRadixNumeral => {
+                "a radix numeral's specifier must be 2 through 16 and every digit must denote \
+                 a value below it"
+            }
             Self::MismatchedStringMarks => {
                 "the opening and closing marks of a string literal must match"
             }

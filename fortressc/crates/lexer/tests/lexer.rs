@@ -441,9 +441,36 @@ fn non_ascii_is_rejected_outside_comments_and_strings() {
     assert_eq!(kinds("\"\u{2211}\"").len(), 2);
 }
 
+/// `lexical-structure.tex:1121-1129` gives the letters values no standard
+/// integer parser knows: `X` is TEN, and `E` is ELEVEN AT RADIX TWELVE and
+/// fourteen everywhere else. `ProjectFortress/tests/NumeralTest.fss:42` asserts
+/// `1xe_12` is 275, which is 144 + 120 + 11.
 #[test]
-fn out_of_subset_literals_fail_with_specific_errors() {
-    assert_eq!(err("7FFF_16"), LexErrorKind::RadixNumeralUnsupported);
+fn a_radix_numeral_uses_the_specifications_digit_values() {
+    let digits = |src: &str| match kinds(src).first() {
+        Some(Kind::IntLit { digits, .. }) => digits.clone(),
+        other => panic!("not an integer literal: {other:?}"),
+    };
+    assert_eq!(digits("7FFF_16"), "32767");
+    assert_eq!(digits("0fff_SIXTEEN"), "4095");
+    assert_eq!(digits("1000_2"), "8");
+    // The two spellings of one duodecimal number.
+    assert_eq!(digits("1xe_12"), "275");
+    assert_eq!(digits("1ab_12"), "275");
+    // `E` is FOURTEEN when the radix is not twelve.
+    assert_eq!(digits("1e_16"), "30");
+    // A digit-group separator survives the radix path.
+    assert_eq!(digits("101\u{0027}0100_2"), "84");
+
+    // Radix twelve may not mix its two alphabets, :1108-1113.
+    assert_eq!(err("1xb_12"), LexErrorKind::MalformedRadixNumeral);
+    // Mixed case, :1132. A value at or above the radix, :1115-1118.
+    assert_eq!(err("1Ab_16"), LexErrorKind::MalformedRadixNumeral);
+    assert_eq!(err("19_2"), LexErrorKind::MalformedRadixNumeral);
+    assert_eq!(err("1g_16"), LexErrorKind::MalformedRadixNumeral);
+    assert_eq!(err("123_99"), LexErrorKind::MalformedRadixNumeral);
+    // Letters with NO radix specifier stay their own diagnostic.
+    assert_eq!(err("2x"), LexErrorKind::NumeralWithLetters);
 }
 
 /// `lexical-structure.tex:862-877` lists four shapes a character literal may

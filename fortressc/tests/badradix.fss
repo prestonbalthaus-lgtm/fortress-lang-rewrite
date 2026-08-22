@@ -1,0 +1,9 @@
+component badradix
+export Executable
+
+(* Radix twelve may not MIX the two spellings of ten and eleven,
+   `lexical-structure.tex:1108-1113`. Without the rule `1xb_12` reads as
+   1*144 + 10*12 + 11, a plausible number the specification calls a static
+   error. *)
+run(): () = println(1xb_12)
+end
