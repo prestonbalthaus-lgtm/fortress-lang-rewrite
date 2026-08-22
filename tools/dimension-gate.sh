@@ -225,7 +225,7 @@ MUTATIONS=(
   # DIMENSION's derivation too, which would make `dim X = pi` a dimension.
   'crates/types/src/dimensions.rs|const DIMENSIONLESS_CONSTANTS: [&str; 1] = ["pi"];|const DIMENSIONLESS_CONSTANTS: [&str; 1] = ["__none"];|stop admitting a dimensionless constant in a unit definition'
   'crates/types/src/dimensions.rs|            resolve_names(derivation, &known.dims, "dimension", &[])?;|            resolve_names(derivation, &known.dims, "dimension", &DIMENSIONLESS_CONSTANTS)?;|admit a constant in a dimension derivation as well'
-  'crates/types/src/registry.rs|if let Some(kind) = self.dimensions.describes(other) {|if let Some(kind) = None::<&str> {|let a dimension name reach the unknown-type diagnostic'
+  'crates/types/src/registry.rs|if let Some(kind) = self.dimensions.describes(name) {|if let Some(kind) = None::<&str> {|let a dimension name reach the unknown-type diagnostic'
   'crates/types/src/dimensions.rs|if seen.insert(name, span).is_some() {|if false {|stop refusing a dimension declared twice'
   'crates/types/src/dimensions.rs|if declared.contains_key(dim.name.as_str()) {|if false {|let a dimension and a type share one name'
   'crates/types/src/mono.rs|if param.kind.is_dimensional() {|if false {|let a unit static parameter be instantiated'
