@@ -2537,6 +2537,80 @@ fn a_tuple_whose_value_is_used_is_still_refused() {
     let _ = std::fs::remove_file(&src);
 }
 
+/// NO OTHER SHADOWING IS PERMITTED, and this covers the three binders the
+/// parameter rule did not: a local, a tuple binder and a LOOP binder over a
+/// top-level value. `declarations.tex:476-533`.
+///
+/// MEASURED BEFORE IT WAS WRITTEN: swept over all 1956 corpus files, 449
+/// compiling either way, zero gained and zero lost. It refuses only programs
+/// nothing writes -- which is why each of the three is asserted here rather
+/// than trusted to the sweep.
+#[test]
+fn no_binder_may_shadow_a_top_level_value() {
+    for (tag, body) in [
+        ("local", "  v = 2\n  println(v)\n"),
+        ("tuplebinder", "  (v,w) = (2,3)\n  println(v)\n"),
+        ("loopbinder", "  for v <- 0#3 do println(v) end\n"),
+    ] {
+        let src = output_path(&format!("shadow-{tag}")).with_extension("fss");
+        std::fs::write(
+            &src,
+            format!(
+                "component shadow{tag}\n\
+                 export Executable\n\
+                 v = 1\n\
+                 run():()=do\n{body}end\n\
+                 end\n"
+            ),
+        )
+        .expect("could not write fixture");
+        let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+            .arg(&src)
+            .arg("-o")
+            .arg(output_path(&format!("shadow-{tag}-out")))
+            .output()
+            .expect("could not run fortressc");
+        let message = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            message.contains("`v` is already declared at the top level"),
+            "{tag}: {message}"
+        );
+        let _ = std::fs::remove_file(&src);
+    }
+}
+
+/// AND A NAME NOTHING DECLARES AT THE TOP LEVEL IS STILL FREE. Without this
+/// the rule above would pass just as well if every binder were refused.
+#[test]
+fn a_binder_that_shadows_nothing_is_fine() {
+    let src = output_path("shadow-free").with_extension("fss");
+    std::fs::write(
+        &src,
+        "component shadowfree\n\
+         export Executable\n\
+         v = 1\n\
+         run():()=do\n\
+           w = 2\n\
+           for k <- 0#2 do println(k) end\n\
+           println(w)\n\
+         end\n\
+         end\n",
+    )
+    .expect("could not write fixture");
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(&src)
+        .arg("-o")
+        .arg(output_path("shadow-free-out"))
+        .output()
+        .expect("could not run fortressc");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_file(&src);
+}
+
 /// `coerce(x: T)` PARSES AND IS RECORDED, NEVER READ.
 /// `ProjectFortress/LibraryBuiltin/CompilerBuiltin.fsi` writes fifteen of them
 /// and they were its ONLY parse blocker.

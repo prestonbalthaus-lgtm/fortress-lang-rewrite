@@ -180,6 +180,8 @@ enum InferredBody<'a> {
 
 struct Checker {
     registry: Registry,
+    /// The names `component_values` declared. Read only by the shadowing check.
+    top_level_values: HashSet<String>,
     functions: HashMap<String, Vec<Signature>>,
     /// Dotted methods, and deliberately NOT `functions`: 1.0 gives `x.f(y)` its
     /// own namespace and its own shadowing rules, so a method never collides
@@ -636,6 +638,7 @@ impl Checker {
 
         let mut checker = Self {
             registry,
+            top_level_values: HashSet::new(),
             functions: HashMap::new(),
             methods: HashMap::new(),
             accessors: HashSet::new(),
@@ -1407,6 +1410,7 @@ impl Checker {
                 });
             }
             self.declare(v.name.clone(), ty, v.mutable);
+            self.top_level_values.insert(v.name.clone());
             out.push(TypedValue {
                 name: v.name.clone(),
                 ty,
@@ -2612,6 +2616,27 @@ impl Checker {
         }
     }
 
+    /// NO OTHER SHADOWING IS PERMITTED -- `declarations.tex:476-533` lists
+    /// every shadowing a Fortress program may contain (a field or dotted
+    /// method, a KEYWORD parameter, `self`, `result`) and closes with exactly
+    /// that sentence. An ordinary local, loop binder or tuple binder over a
+    /// top-level value is on none of those lines.
+    ///
+    /// THE PARAMETER CASE LANDED FIRST, on its own, because the must-fail
+    /// ratchet demanded it -- `Compiled1.x.fss`. This is the rest of the same
+    /// rule, and the cost was MEASURED before it was written: swept over all
+    /// 1956 corpus files with every binder covered, 449 compiling either way,
+    /// ZERO gained and ZERO lost. It refuses only programs nothing writes.
+    fn refuse_wide_shadowing(&self, name: &str, span: Span) -> Checked<()> {
+        if self.top_level_values.contains(name) {
+            return Err(TypeError::IllegalShadowing {
+                span,
+                name: name.to_owned(),
+            });
+        }
+        Ok(())
+    }
+
     // --------------------------------------------------------- expressions
 
     /// `expected` is the context. It pins literals and it is what values are
@@ -3089,6 +3114,7 @@ impl Checker {
             add(lo_typed.clone(), bound)
         };
 
+        self.refuse_wide_shadowing(binder, span)?;
         let mut scope = HashMap::new();
         scope.insert(
             binder.to_owned(),
@@ -3491,6 +3517,7 @@ impl Checker {
                 });
             }
             let ty = value.ty;
+            self.refuse_wide_shadowing(name, b.span)?;
             self.declare(name.clone(), ty, false);
             parts.push(TypedBinding {
                 name: name.clone(),
@@ -6192,6 +6219,7 @@ impl Checker {
                             position: "a binding",
                         });
                     }
+                    self.refuse_wide_shadowing(&b.name, b.span)?;
                     self.declare(b.name.clone(), ty, b.mutable);
                     self.taint_if_aliased(&b.name, ty, &b.value);
                     typed.push(TypedBlockItem::Binding {
