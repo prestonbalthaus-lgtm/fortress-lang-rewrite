@@ -2176,7 +2176,7 @@ impl Checker {
             .captures
             .into_iter()
             .map(|(name, ty)| TypedCapture {
-                by_ref: self.lookup(&name).is_some_and(|l| l.mutable),
+                by_ref: self.captured_by_reference(&name),
                 name,
                 ty,
             })
@@ -2273,6 +2273,23 @@ impl Checker {
             ty,
             span,
         }))
+    }
+
+    /// Whether a spawned body must capture `name` by REFERENCE. A mutable
+    /// must be, even when the body only reads it, because the parent runs
+    /// alongside and can change it -- see `spawn` above for the hang that
+    /// proves it.
+    ///
+    /// A METHOD RATHER THAN A CLOSURE AT THE CALL SITE, and that is not
+    /// taste. A mutation table splits its rows on `|`, so a row cannot contain
+    /// a closure's bars at all: `is_some_and(|l| l.mutable)` was unmutatable,
+    /// and the row written for it was shredded by the split and reported as a
+    /// build failure. Both lines below are bar-free.
+    fn captured_by_reference(&self, name: &str) -> bool {
+        match self.lookup(name) {
+            Some(local) => local.mutable,
+            None => false,
+        }
     }
 
     fn declare(&mut self, name: String, ty: Type, mutable: bool) {

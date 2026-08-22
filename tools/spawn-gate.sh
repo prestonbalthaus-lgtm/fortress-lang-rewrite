@@ -202,10 +202,10 @@ FSS
 # --------------------------------------------------------------- mutations
 
 MUTATIONS=(
-  'crates/types/src/lib.rs|                by_ref: self.lookup(&name).is_some_and(|l| l.mutable),|                by_ref: false,|capture a mutable the body only READS by value again'
+  'crates/types/src/lib.rs|            Some(local) => local.mutable,|            Some(_) => false,|capture a mutable the body only READS by value again'
   'crates/types/src/registry.rs|            return matches!(*want, Type::Trait("Any"));|            return false;|drop the covariance to `Any`, so no Spawn file types'
   'runtime/shims.c|    if (!fortress_runner_started) {|    if (0) {|never start the runner, so nothing runs without a join'
-  'runtime/shims.c|        pthread_cond_broadcast(&fortress_spawn_done);|        (void)0;|drop the completion broadcast, so every join blocks for ever'
+  'runtime/shims.c|    pthread_cond_broadcast(&fortress_spawn_done);|    (void)0;|drop the completion broadcast, so every join blocks for ever'
   'crates/types/src/lib.rs|            return Err(TypeError::SpawnInsideAtomic { span });|            {}|let `spawn` inside `atomic` through'
 )
 
