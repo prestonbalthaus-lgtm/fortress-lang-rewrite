@@ -924,3 +924,225 @@ void *fortress_array_slot_n(void *array, long long rank, const long long *indice
     }
     return arrayn_data(a) + (size_t)offset * (size_t)a->elem_bytes;
 }
+
+/* ------------------------------------------------------------------ M6
+ *
+ * `spawn`. A queue and ONE DEDICATED RUNNER THREAD, created lazily at the
+ * first spawn and independent of FORTRESS_WORKERS.
+ *
+ * WHY THE RUNNER IS NOT OPTIONAL, and this is the whole design in three corpus
+ * files. Write P for "when does a spawned body run":
+ *
+ *   Spawn2  the parent spins `while (x = 0) do end` and the child sets x.
+ *           There is NO join before the spin, so P must let the child make
+ *           progress without the parent draining anything. That KILLS
+ *           run-it-at-a-join-point.
+ *   Spawn3  the child spins `while (x = 0) do end` and the parent sets x AFTER
+ *           the spawn. Running the child to completion at the spawn site is an
+ *           infinite loop. That KILLS run-it-at-the-spawn-site.
+ *   Spawn6  asserts `ready()` is FALSE immediately after spawning a ten
+ *           million iteration body. Kills run-it-at-the-spawn-site again, and
+ *           independently.
+ *
+ * The intersection of "progress without a join" and "not finished at the spawn
+ * site" is a genuinely concurrent execution context. No drain policy escapes
+ * it, so there is no worker count at which this can degenerate to inline.
+ *
+ * THAT IS WHY THE RUNNER IGNORES FORTRESS_WORKERS. That variable sizes LOOP
+ * parallelism, and tools/oracle-gate.sh exports 1 -- at which the loop pool
+ * spawns ZERO threads. A queue served only by pool workers would have no
+ * runner at all under the gate's own configuration, and Spawn2 would hang.
+ * Spawn liveness and loop parallelism are different questions and this is
+ * where they come apart.
+ *
+ * ONE runner and not one thread per spawn: Library/Lazy.fss:39 spawns per lazy
+ * thunk, and unbounded thread creation costs a stack per stop-the-world
+ * collection, which the heap note above already calls the dominant parallel-GC
+ * cost.
+ *
+ * STARVATION IS CONSTRUCTIBLE AND IS NOT BUILT FOR. Two spawned bodies where
+ * the first blocks on the second deadlock behind one runner. Nothing that
+ * compiles exercises it -- Lazy.fss does not compile -- and the alternative is
+ * a growable pool whose bound is the same argument one level up. Documented,
+ * not solved.
+ */
+#define FORTRESS_THREAD_QUEUED  0
+#define FORTRESS_THREAD_RUNNING 1
+#define FORTRESS_THREAD_DONE    2
+
+typedef void *(*fortress_thread_body)(void *env);
+
+typedef struct FortressThread {
+    fortress_thread_body body;
+    void *env;
+    void *result;
+    struct FortressThread *next;
+    int state;
+} FortressThread;
+
+static pthread_mutex_t fortress_spawn_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t fortress_spawn_go = PTHREAD_COND_INITIALIZER;
+static pthread_cond_t fortress_spawn_done = PTHREAD_COND_INITIALIZER;
+static FortressThread *fortress_spawn_head = NULL;
+static FortressThread *fortress_spawn_tail = NULL;
+static int fortress_runner_started = 0;
+
+/* Unlink the head of the queue. The caller holds the lock. */
+static FortressThread *fortress_spawn_take(void) {
+    FortressThread *t = fortress_spawn_head;
+    if (t == NULL) {
+        return NULL;
+    }
+    fortress_spawn_head = t->next;
+    if (fortress_spawn_head == NULL) {
+        fortress_spawn_tail = NULL;
+    }
+    t->next = NULL;
+    return t;
+}
+
+/* Run one task to completion and publish its result. The caller must have
+ * moved it to RUNNING under the lock already, so no second thread can take it.
+ *
+ * `fortress_in_parallel` is PINNED here. A `for` inside a spawned body would
+ * otherwise reach the loop pool and overwrite the single `fortress_task` that a
+ * loop running on the main thread is using -- and Compiled160.fss:22-25 and
+ * Compiled6.aa.fss:18-21 are exactly `spawn <for loop>`. One pool, one level,
+ * and a spawned body is already off the main line. */
+static void fortress_spawn_run(FortressThread *t) {
+    int saved = fortress_in_parallel;
+    fortress_in_parallel = 1;
+    void *value = t->body(t->env);
+    fortress_in_parallel = saved;
+
+    pthread_mutex_lock(&fortress_spawn_lock);
+    t->result = value;
+    t->state = FORTRESS_THREAD_DONE;
+    pthread_cond_broadcast(&fortress_spawn_done);
+    pthread_mutex_unlock(&fortress_spawn_lock);
+}
+
+static void *fortress_runner(void *unused) {
+    (void)unused;
+    for (;;) {
+        pthread_mutex_lock(&fortress_spawn_lock);
+        while (fortress_spawn_head == NULL) {
+            pthread_cond_wait(&fortress_spawn_go, &fortress_spawn_lock);
+        }
+        FortressThread *t = fortress_spawn_take();
+        t->state = FORTRESS_THREAD_RUNNING;
+        pthread_mutex_unlock(&fortress_spawn_lock);
+        fortress_spawn_run(t);
+    }
+    return NULL;
+}
+
+/*
+ * THE RUNNER IS DETACHED AND NEVER JOINED, which is the same decision as
+ * `stop()` being abandon. A spawned body may not terminate -- Spawn3's does not
+ * until the parent stores -- so an atexit that joined would turn a correct
+ * program into a hang at exit. Process teardown ends it.
+ */
+static void fortress_runner_start(void) {
+    pthread_attr_t attr;
+    pthread_t id;
+    if (pthread_attr_init(&attr) != 0) {
+        return;
+    }
+    (void)pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    /* GC_pthread_create, via the redirect GC_THREADS turns on. A raw
+     * pthread_create here aborts on the first collection. */
+    if (pthread_create(&id, &attr, fortress_runner, NULL) == 0) {
+        fortress_runner_started = 1;
+    }
+    (void)pthread_attr_destroy(&attr);
+}
+
+/*
+ * SCANNED, NOT ATOMIC, and it is the same argument array storage makes: the
+ * handle holds `env` and `result`, and the environment is the only thing
+ * keeping the parent's captured values reachable while the runner has them.
+ * On the atomic allocator the collector would free what a running thread is
+ * still writing through.
+ */
+void *fortress_spawn(fortress_thread_body body, void *env) {
+    FortressThread *t = fortress_alloc_scanned(sizeof(FortressThread));
+    t->body = body;
+    t->env = env;
+    t->result = NULL;
+    t->next = NULL;
+    t->state = FORTRESS_THREAD_QUEUED;
+
+    pthread_mutex_lock(&fortress_spawn_lock);
+    if (fortress_spawn_tail == NULL) {
+        fortress_spawn_head = t;
+    } else {
+        fortress_spawn_tail->next = t;
+    }
+    fortress_spawn_tail = t;
+    if (!fortress_runner_started) {
+        fortress_runner_start();
+    }
+    pthread_cond_signal(&fortress_spawn_go);
+    pthread_mutex_unlock(&fortress_spawn_lock);
+    return t;
+}
+
+/*
+ * Join. An UNSTARTED task is STOLEN onto the calling thread rather than waited
+ * for, which is what keeps a program correct when the runner could not be
+ * created at all -- `pthread_create` failing would otherwise be a hang instead
+ * of a slow program. It is also the only thing that runs a queued task when the
+ * runner is busy with an earlier one that never finishes.
+ */
+void *fortress_thread_val(void *handle) {
+    FortressThread *t = handle;
+    pthread_mutex_lock(&fortress_spawn_lock);
+    if (t->state == FORTRESS_THREAD_QUEUED) {
+        /* Unlink it before anyone else can take it. */
+        FortressThread **link = &fortress_spawn_head;
+        FortressThread *prev = NULL;
+        while (*link != NULL && *link != t) {
+            prev = *link;
+            link = &(*link)->next;
+        }
+        if (*link == t) {
+            *link = t->next;
+            if (fortress_spawn_tail == t) {
+                fortress_spawn_tail = prev;
+            }
+            t->next = NULL;
+            t->state = FORTRESS_THREAD_RUNNING;
+            pthread_mutex_unlock(&fortress_spawn_lock);
+            fortress_spawn_run(t);
+            return t->result;
+        }
+    }
+    while (t->state != FORTRESS_THREAD_DONE) {
+        pthread_cond_wait(&fortress_spawn_done, &fortress_spawn_lock);
+    }
+    void *value = t->result;
+    pthread_mutex_unlock(&fortress_spawn_lock);
+    return value;
+}
+
+void fortress_thread_wait(void *handle) { (void)fortress_thread_val(handle); }
+
+int fortress_thread_ready(void *handle) {
+    FortressThread *t = handle;
+    pthread_mutex_lock(&fortress_spawn_lock);
+    int done = t->state == FORTRESS_THREAD_DONE;
+    pthread_mutex_unlock(&fortress_spawn_lock);
+    return done;
+}
+
+/*
+ * ABANDON, and a NAMED DEVIATION from 1.0, which gives `stop()` a meaning close
+ * to cancellation. Every one of the six Spawn corpus files calls it LAST, and
+ * Spawn6 stops a mid-flight ten million iteration body and then returns from
+ * `run()` -- so process exit is what actually ends it there, whatever this
+ * function does. Real cancellation needs a safe point in generated code, which
+ * is its own milestone; a `pthread_cancel` at an arbitrary instruction can end
+ * a thread holding the atomic mutex.
+ */
+void fortress_thread_stop(void *handle) { (void)handle; }
