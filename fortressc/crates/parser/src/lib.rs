@@ -1502,32 +1502,26 @@ impl<'t, 'a> Parser<'t, 'a> {
         if !accessor && !mutable && self.at(&Kind::Reserved("coerce")) {
             let start = self.span_here();
             self.pos += 1;
-            // A BALANCED PAREN RUN AND THEN THE REST OF THE LINE, rather than
-            // `params()` and `type_ref()`. Nothing reads what is in here, so
-            // depending on their contracts would buy an obligation and no
-            // information -- and `coerce(x: RR32) widens = ...` carries a
-            // modifier and a body that neither of them would consume.
-            let mut depth = 0usize;
-            while !self.at_eof() {
-                if self.at(&Kind::LParen) {
-                    depth += 1;
-                } else if self.at(&Kind::RParen) {
-                    depth -= 1;
-                    self.pos += 1;
-                    if depth == 0 {
-                        break;
-                    }
-                    continue;
-                } else if depth == 0 && self.at(&Kind::Newline) {
-                    break;
-                }
+            // THE PARAMETER TYPES ARE KEPT and everything after them is not.
+            // The types are an edge in the trait hierarchy and the cycle check
+            // reads them; the `widens` modifier and any body are consumed and
+            // dropped, because nothing reads those.
+            let mut from = Vec::new();
+            if self.at(&Kind::LParen) {
                 self.pos += 1;
+                for p in self.params()? {
+                    from.push(p.ty);
+                }
+                if self.at(&Kind::RParen) {
+                    self.pos += 1;
+                }
             }
             while !self.at(&Kind::Newline) && !self.at_eof() && !self.at(&Kind::KwEnd) {
                 self.pos += 1;
             }
             let end = self.previous_span();
             return Ok(Member::Coercion {
+                from,
                 span: Span::new(start.start, end.end),
             });
         }

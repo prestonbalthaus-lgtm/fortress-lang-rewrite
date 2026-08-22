@@ -726,6 +726,48 @@ impl Checker {
             }
             direct.insert(name, supers);
         }
+        // A COERCION IS AN EDGE IN THE HIERARCHY FOR CYCLE PURPOSES AND FOR
+        // NOTHING ELSE, which is why it goes in a SECOND graph rather than
+        // into `direct`.
+        //
+        // `ProjectFortress/compiler_tests/Compiled6.p.fss` writes
+        // `trait A extends B` with `coerce(x:B)` inside it, and 1.0 refuses it
+        // with "Cyclic type hierarchy: Type B transitively extends/coerces to
+        // itself" -- one edge from `extends` and one from the coercion. Landing
+        // `coerce` as a recorded-and-never-read member accepted that program,
+        // and the must-fail ratchet is what said so.
+        //
+        // THE DIRECTION: `coerce(x: B)` inside `A` means a `B` BECOMES an `A`,
+        // so the edge runs B -> A, opposite to the `A extends B` edge above.
+        //
+        // IT MUST NOT REACH `supertraits`. A coercion is not subtyping: a `B`
+        // is convertible to an `A`, not an `A`. Putting it in the closure would
+        // make `is_subtype` answer yes and every dispatch built on that wrong.
+        let mut cycle = direct.clone();
+        for decl in &component.decls {
+            let Decl::Trait(t) = decl else { continue };
+            let owner = intern(&t.name);
+            for member in &t.members {
+                let Member::Coercion { from, .. } = member else {
+                    continue;
+                };
+                for reference in from {
+                    // LENIENT ON PURPOSE: `coerce(x: RR32)` names a scalar and
+                    // there is no node for it in this graph. An unresolvable or
+                    // non-declared source simply contributes no edge; the
+                    // coercion is still recorded and still unread everywhere
+                    // else.
+                    let resolved = match self.registry.resolve(reference) {
+                        Ok(Type::Trait(n) | Type::Object(n)) => n,
+                        _ => continue,
+                    };
+                    cycle.entry(resolved).or_default().push(owner);
+                }
+            }
+        }
+        if cycle != direct {
+            close_traits(&cycle, &spans)?;
+        }
         for (name, closed) in close_traits(&direct, &spans)? {
             if let Some(info) = self.registry.traits.get_mut(name) {
                 info.supertraits = closed;

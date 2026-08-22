@@ -306,6 +306,17 @@ pub enum Member {
     /// them and is the ONLY parse blocker in that file; nothing else in the
     /// corpus declares one outside an api.
     Coercion {
+        /// The types this coercion accepts. RECORDED AND READ BY EXACTLY ONE
+        /// THING: the trait-cycle check.
+        ///
+        /// `coerce` was landed carrying a span alone, and that was WRONG in a
+        /// way the must-fail ratchet caught the same day.
+        /// `ProjectFortress/compiler_tests/Compiled6.p.fss` writes
+        /// `trait A extends B` with `coerce(x:B)` inside it, and 1.0 refuses it
+        /// for "Cyclic type hierarchy: Type B transitively extends/coerces to
+        /// itself". A coercion is an EDGE in that hierarchy, so a compiler that
+        /// cannot see it accepts a program 1.0 rejects.
+        from: Vec<TypeRef>,
         span: Span,
     },
 }

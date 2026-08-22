@@ -774,7 +774,16 @@ impl<'a> Expander<'a> {
         for (index, m) in members.iter().enumerate() {
             let built = match m {
                 // Nothing to substitute into: recorded and not read.
-                Member::Coercion { span } => Member::Coercion { span: *span },
+                // The parameter TYPES are substituted -- a coercion inside a
+                // generic can name its owner's static parameter, and the cycle
+                // check reads what comes out.
+                Member::Coercion { from, span } => Member::Coercion {
+                    from: from
+                        .iter()
+                        .map(|t| self.ty(t, subst))
+                        .collect::<Result<Vec<_>, _>>()?,
+                    span: *span,
+                },
                 Member::Field(f) => Member::Field(FieldDecl {
                     name: f.name.clone(),
                     ty: self.ty(&f.ty, subst)?,

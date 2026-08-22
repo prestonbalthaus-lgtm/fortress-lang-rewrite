@@ -2611,19 +2611,32 @@ fn a_binder_that_shadows_nothing_is_fine() {
     let _ = std::fs::remove_file(&src);
 }
 
-/// `coerce(x: T)` PARSES AND IS RECORDED, NEVER READ.
-/// `ProjectFortress/LibraryBuiltin/CompilerBuiltin.fsi` writes fifteen of them
-/// and they were its ONLY parse blocker.
+/// `coerce(x: T)` PARSES. Fifteen of them were the ONLY parse blocker in
+/// `ProjectFortress/LibraryBuiltin/CompilerBuiltin.fsi`, which is where the
+/// standard library's `RR32`, `IntLiteral` and `FloatLiteral` live.
 ///
 /// A VARIANT OF ITS OWN, NOT A METHOD NAMED `coerce`: parsed as a method it
 /// would join an overload set and could win a dispatch, which is a silent
-/// wrong answer. `Member::Coercion` cannot.
+/// wrong answer in a feature that has no semantics yet.
 #[test]
-fn a_coercion_declaration_parses_and_is_not_a_method() {
+fn a_coercion_declaration_parses() {
+    let src = output_path("coerceok").with_extension("fss");
+    std::fs::write(
+        &src,
+        "component coerceok\n\
+         export Executable\n\
+         trait B end\n\
+         trait C\n\
+         coerce(x: B)\n\
+         end\n\
+         run(): () = ()\n\
+         end\n",
+    )
+    .expect("could not write fixture");
     let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
-        .arg(corpus("ProjectFortress/compiler_tests/Compiled6.p.fss"))
+        .arg(&src)
         .arg("-o")
-        .arg(output_path("c6p-out"))
+        .arg(output_path("coerceok-out"))
         .output()
         .expect("could not run fortressc");
     assert!(
@@ -2631,10 +2644,70 @@ fn a_coercion_declaration_parses_and_is_not_a_method() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let _ = std::fs::remove_file(output_path("c6p-out"));
+    let _ = std::fs::remove_file(&src);
 }
 
-/// AND IT DOES NOT SHADOW A REAL METHOD OF THE SAME NAME. A coercion is not in
+/// A COERCION IS AN EDGE IN THE TYPE HIERARCHY, and this is what recording it
+/// without reading it got wrong. `Compiled6.p.fss` writes `trait A extends B`
+/// with `coerce(x:B)` inside it: one edge from `extends`, one from the
+/// coercion, and 1.0 refuses it with "Cyclic type hierarchy: Type B
+/// transitively extends/coerces to itself".
+///
+/// LANDING `coerce` ACCEPTED THAT PROGRAM and the must-fail ratchet is what
+/// said so -- pass fell below its floor and a new acceptance appeared in the
+/// same run. Nothing else in the suite could see it.
+#[test]
+fn a_coercion_closing_a_cycle_is_refused() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(corpus("ProjectFortress/compiler_tests/Compiled6.p.fss"))
+        .arg("-o")
+        .arg(output_path("c6p-out"))
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        message.contains("extends itself, directly or through another trait"),
+        "{message}"
+    );
+}
+
+/// AND THE COERCION EDGE MUST NOT REACH SUBTYPING. A coercion says a `B` is
+/// CONVERTIBLE to an `A`, not that it IS one -- putting it in the supertrait
+/// closure would make `is_subtype` answer yes and every dispatch built on that
+/// wrong. Here `C` coerces from `B`, so a `B` may not be passed where a `C` is
+/// required.
+#[test]
+fn a_coercion_is_not_a_subtyping_edge() {
+    let src = output_path("coercesub").with_extension("fss");
+    std::fs::write(
+        &src,
+        "component coercesub\n\
+         export Executable\n\
+         trait B end\n\
+         object Bee extends B end\n\
+         trait C\n\
+         coerce(x: B)\n\
+         end\n\
+         f(c: C): () = ()\n\
+         run(): () = f(Bee)\n\
+         end\n",
+    )
+    .expect("could not write fixture");
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(&src)
+        .arg("-o")
+        .arg(output_path("coercesub-out"))
+        .output()
+        .expect("could not run fortressc");
+    assert!(
+        !out.status.success(),
+        "a coercion is not subtyping: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_file(&src);
+}
+
+/// AND IT DOES NOT SHADOW A REAL METHOD OF THE SAME NAME./// AND IT DOES NOT SHADOW A REAL METHOD OF THE SAME NAME. A coercion is not in
 /// the dotted namespace at all, so declaring one beside a method called
 /// `coerce` must not collide -- which is exactly what parsing it as a method
 /// would have caused.
