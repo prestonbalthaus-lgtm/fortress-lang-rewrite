@@ -20,6 +20,34 @@
  *
  * Every case is run under an alarm, because a wrong answer here does not
  * return: it never returns.
+ *
+ * MUTATION TABLE, run against runtime/shims.c with the tree committed first.
+ * Expectations are BASELINED FROM A PRE-MUTATION RUN, never written in.
+ *
+ *   no-runner            delete the fortress_runner_start() call    HUNG:spawn2
+ *   ready-always-true    `int done = 1;`                          FAILED:spawn6
+ *   no-steal             `if (0)` on the QUEUED branch of val()      HUNG:steal
+ *   no-done-broadcast    delete the completion broadcast             HUNG:steal
+ *
+ * 4/4 refused. ONE DOCUMENTED ESCAPE, and it is right to escape:
+ *
+ *   runner-state-write   delete `t->state = RUNNING` in the runner     SURVIVED
+ *
+ * because that write is not load bearing. The runner UNLINKS the task from the
+ * queue before running it, so val() looking for a QUEUED task to steal already
+ * fails to find it and falls through to the wait. `ready()` compares against
+ * DONE, so QUEUED and RUNNING are the same answer there. No assertion this
+ * suite can make separates the two states, and inventing one would be testing
+ * the field rather than the behaviour.
+ *
+ * `no-done-broadcast` was predicted at `join` and refuses one case EARLIER, at
+ * `steal` -- which also joins. The prediction was wrong and the row is kept at
+ * the measured value, not the intended one.
+ *
+ * THE `fortress_in_parallel` PIN IS NOT COVERED HERE. It only matters for a
+ * `for` inside a spawned body, which needs the compiler. Its row belongs to the
+ * spawn gate, not to this file, and saying so is better than a row that cannot
+ * refuse.
  */
 #include <signal.h>
 #include <stdio.h>
@@ -169,8 +197,46 @@ static void case_steal(void) {
     long got = (long)(intptr_t)fortress_thread_val(t);
     ok("steal   a queued task runs on the caller when the runner is busy",
        got == 7);
+
+    /* RELEASE THE HOG AND JOIN IT, and the join is not tidiness. `never` is
+     * this frame's stack. Returning while the hog still spins on &never leaves
+     * it reading memory the NEXT case's frame reuses -- and it holds the only
+     * runner, so the next case's task never leaves the queue. That is the
+     * documented starvation hazard, reached by a leak in the test rather than
+     * by a program, and it cost a hang in `join` to find. */
     never = 1;
+    fortress_thread_val(hog);
     fortress_thread_stop(hog);
+    fortress_thread_stop(t);
+}
+
+/* ---- THE BLOCKING JOIN, and it is here because a mutation SURVIVED without
+ *      it. Removing `pthread_cond_broadcast(&fortress_spawn_done)` left every
+ *      case above green: each one joins so soon after spawning that the task is
+ *      still QUEUED, so val() STEALS it and runs it on the calling thread, and
+ *      the condvar is never touched. Nothing exercised the wait path at all.
+ *
+ *      So this case forces the task to be RUNNING before the parent joins: the
+ *      child publishes `started`, the parent spins for it, and only then
+ *      releases the child and joins. That join cannot be a steal. ---- */
+static void *body_started_then_wait(void *raw) {
+    struct env *e = raw;
+    *e->y = 1;                 /* started */
+    while (*e->x == 0) {       /* held until the parent releases */
+    }
+    return (void *)(intptr_t)42;
+}
+
+static void case_join_running(void) {
+    volatile long release = 0, started = 0;
+    struct env e = {&release, &started, 0};
+    void *t = fortress_spawn(body_started_then_wait, &e);
+    while (started == 0) {
+        /* the task is now RUNNING on the runner, not QUEUED */
+    }
+    release = 1;
+    long got = (long)(intptr_t)fortress_thread_val(t);
+    ok("join    val() on a RUNNING task blocks and then returns", got == 42);
     fortress_thread_stop(t);
 }
 
@@ -183,6 +249,7 @@ int main(void) {
     static const struct case_entry cases[] = {
         {"spawn1", case_spawn1}, {"spawn2", case_spawn2}, {"spawn3", case_spawn3},
         {"spawn5", case_spawn5}, {"spawn6", case_spawn6}, {"steal", case_steal},
+        {"join", case_join_running},
     };
     fortress_runtime_init();
     signal(SIGALRM, on_alarm);
