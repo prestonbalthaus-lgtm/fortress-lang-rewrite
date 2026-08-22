@@ -3,19 +3,20 @@
 #![allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 
 use fortress_types::{
-    check, intern_types, Type, TypeError, TypedComponent, TypedExpr, TypedExprKind,
+    check, intern_types, Type, TypeError, TypedComponent, TypedExpr, TypedExprKind, Uniformity,
 };
 
 fn typed(src: &str) -> TypedComponent {
     let tokens = fortress_lexer::lex(src).unwrap_or_else(|e| panic!("lex: {e}"));
     let ast = fortress_parser::parse(&tokens).unwrap_or_else(|e| panic!("parse: {e}"));
-    check(&ast).unwrap_or_else(|e| panic!("typecheck failed: {e}\nsource:\n{src}"))
+    check(&ast, Uniformity::Enforced)
+        .unwrap_or_else(|e| panic!("typecheck failed: {e}\nsource:\n{src}"))
 }
 
 fn type_error(src: &str) -> TypeError {
     let tokens = fortress_lexer::lex(src).unwrap_or_else(|e| panic!("lex: {e}"));
     let ast = fortress_parser::parse(&tokens).unwrap_or_else(|e| panic!("parse: {e}"));
-    match check(&ast) {
+    match check(&ast, Uniformity::Enforced) {
         Ok(_) => panic!("expected a type error from:\n{src}"),
         Err(e) => e,
     }

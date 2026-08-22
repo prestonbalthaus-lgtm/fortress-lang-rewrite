@@ -2299,6 +2299,11 @@ fn a_postfix_operator_declaration_parses() {
 ///         which DEV-6 records as enforced and permanent
 /// `resolve()` needs an api to PARSE, not to check, so the phase-3 value does
 /// not depend on either.
+///
+/// THE :758 WALL IS PAID and the wall behind it has a different owner. The
+/// legacy library's own uniformity violation is exempted BY PATH -- see
+/// `fortress_types::Uniformity` -- and the root now reaches :1117, 359 lines
+/// further on, where it asks for more than `MAX_INSTANTIATIONS` allows.
 #[test]
 fn the_bootstrap_root_parses_in_full() {
     let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
@@ -2314,8 +2319,43 @@ fn the_bootstrap_root_parses_in_full() {
         "FortressLibrary.fsi must not fail to PARSE: {message}"
     );
     assert!(
+        message.contains("4096 instantiations"),
+        "the remaining blocker should be the instantiation budget: {message}"
+    );
+}
+
+/// AND THE EXEMPTION IS WHAT MOVED IT. Without this the test above passes
+/// whether the exemption is doing anything or not -- the file could have
+/// reached :1117 for some unrelated reason and nothing would say so.
+#[test]
+fn the_bootstrap_root_still_violates_uniformity_without_the_exemption() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(corpus("Library/FortressLibrary.fsi"))
+        .arg("--no-legacy-library-uniformity")
+        .arg("--emit-obj")
+        .arg("-o")
+        .arg("/dev/null")
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert!(
         message.contains("differ in their static parameters"),
-        "the remaining blocker should be the library's own uniformity violation: {message}"
+        "forcing the exemption off must restore the :758 refusal: {message}"
+    );
+}
+
+/// THE EXEMPTION IS EARNED BY BEING THE LEGACY LIBRARY, NEVER BY WHAT IS
+/// WRITTEN. `copiedcond.fsi` is `FortressLibrary.fsi:757-758`'s shape copied
+/// verbatim into a file outside `Library/`, and it stays refused. Without this
+/// fixture the exemption would be indistinguishable from having relaxed the
+/// rule for everyone -- which was measured and costs a must-fail acceptance,
+/// `ProjectFortress/compiler_tests/Compiled6.ak.fss`.
+#[test]
+fn the_uniformity_exemption_does_not_reach_outside_the_legacy_library() {
+    let message = refusal("copiedcond.fsi");
+    assert!(
+        message.contains("differ in their static parameters"),
+        "{message}"
     );
 }
 

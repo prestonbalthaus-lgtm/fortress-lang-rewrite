@@ -97,9 +97,31 @@ struct Instance {
     decl: Decl,
 }
 
-pub fn expand(component: &Component) -> Result<Component, TypeError> {
+pub fn expand(component: &Component, uniformity: Uniformity) -> Result<Component, TypeError> {
     check_template_headers(component)?;
-    Expander::new(component)?.run(component)
+    Expander::new(component, uniformity)?.run(component)
+}
+
+/// Whether the static-parameter uniformity rule below is enforced against this
+/// component's own declarations.
+///
+/// `ExemptLegacyLibrary` exists because the SHIPPED 1.0 LIBRARY BREAKS A RULE
+/// 1.0 STATES. `Library/FortressLibrary.fsi:758` declares `__cond[\E,R\]`
+/// beside `__cond[\E\]`, and `Library/QuickSort.fsi` is refused for the same
+/// class. The rule is not being relaxed: it is suspended for the legacy
+/// library's own source, which this project treats as a MEASUREMENT INPUT
+/// rather than as code it owns (DEV-14).
+///
+/// IT IS DELIBERATELY NOT GENERAL, and the cost of making it general is
+/// measured: suspending the rule for every component gains three corpus files
+/// and ONE OF THE THREE IS A MUST-FAIL TEST --
+/// `ProjectFortress/compiler_tests/Compiled6.ak.fss`, whose `XXX6ak.test`
+/// expects two errors. A new must-fail acceptance is a regression, not a
+/// baseline, so the general version cannot be taken.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Uniformity {
+    Enforced,
+    ExemptLegacyLibrary,
 }
 
 struct Expander<'a> {
@@ -134,7 +156,7 @@ struct Expander<'a> {
 }
 
 impl<'a> Expander<'a> {
-    fn new(component: &'a Component) -> Result<Self, TypeError> {
+    fn new(component: &'a Component, uniformity: Uniformity) -> Result<Self, TypeError> {
         let mut generics: BTreeMap<String, Vec<&'a Decl>> = BTreeMap::new();
         for decl in &component.decls {
             if static_params(decl).is_empty() {
@@ -145,7 +167,9 @@ impl<'a> Expander<'a> {
                 .or_default()
                 .push(decl);
         }
-        check_uniformity(component)?;
+        if uniformity == Uniformity::Enforced {
+            check_uniformity(component)?;
+        }
         let mut generic_functional = BTreeSet::new();
         let mut generic_methods = BTreeSet::new();
         for decl in &component.decls {

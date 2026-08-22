@@ -272,11 +272,62 @@ overload_set() {
     fi
 }
 
+# The legacy library's own source breaks the uniformity rule 1.0 states, so the
+# rule is suspended FOR THAT SOURCE and for nothing else. Both directions are
+# asserted here, because either alone passes with the scope wrong: the accept
+# alone passes if the exemption is universal, and the refusal alone passes if
+# the exemption does not exist.
+uniformity_exemption() {
+    printf '== the uniformity exemption is scoped to the legacy library ==\n'
+    local fixture=$repo/fortressc/tests/copiedcond.fsi
+    local outside=$build/copiedcond.fsi
+    local inside=$build/Library/copiedcond.fsi
+    mkdir -p "$build/Library"
+    cp "$fixture" "$outside"
+    cp "$fixture" "$inside"
+
+    local err status
+    err=$(timeout 300 "$fortressc" "$outside" --emit-obj -o /dev/null 2>&1 >/dev/null)
+    status=$?
+    if refused_cleanly "$status" && [[ $err == *'differ in their static parameters'* ]]; then
+        ok 'the same declarations outside a Library directory are refused'
+    else
+        bad 'the same declarations outside a Library directory are refused' "status $status: $err"
+    fi
+
+    err=$(timeout 300 "$fortressc" "$inside" --emit-obj -o /dev/null 2>&1 >/dev/null)
+    status=$?
+    if [[ $status -eq 0 ]]; then
+        ok 'inside a Library directory the rule is suspended'
+    else
+        bad 'inside a Library directory the rule is suspended' "status $status: $err"
+    fi
+
+    err=$(timeout 300 "$fortressc" "$inside" --no-legacy-library-uniformity \
+            --emit-obj -o /dev/null 2>&1 >/dev/null)
+    status=$?
+    if refused_cleanly "$status" && [[ $err == *'differ in their static parameters'* ]]; then
+        ok 'forcing the exemption off restores the refusal inside Library'
+    else
+        bad 'forcing the exemption off restores the refusal inside Library' "status $status: $err"
+    fi
+}
+
 # --------------------------------------------------------------- mutations
 
 MUTATIONS=(
   'crates/types/src/mono.rs|for ((mangled, slot), instance) in &self.instances {|for ((mangled, slot), instance) in self.instances.iter().rev() {|emit instantiations in reverse name order'
-  'crates/types/src/mono.rs|check_uniformity(component)?;|let _ = check_uniformity(component);|stop enforcing the uniformity rule'
+  # RE-TARGETED when the legacy-library exemption landed: the call is now
+  # inside `if uniformity == Uniformity::Enforced`, so the old pattern reported
+  # COULD NOT BE APPLIED. Inverting the test is the one-token change that keeps
+  # every binding used -- `if false` would leave `uniformity` unread.
+  'crates/types/src/mono.rs|if uniformity == Uniformity::Enforced {|if uniformity != Uniformity::Enforced {|stop enforcing the uniformity rule'
+  # THE EXEMPTION MUST NOT REACH OUTSIDE THE LEGACY LIBRARY. Without this row
+  # the exemption is guarded by nothing: `badoverload.fss` is refused whether
+  # the scope is a path test or `true`, because it is not in a Library
+  # directory either way -- so only a fixture that IS outside and a mutation
+  # that widens the scope can tell the two apart.
+  'crates/driver/src/main.rs|if LEGACY_LIBRARY_DIRS.contains(&name) {|if true {|widen the legacy-library exemption to every path'
   # RE-TARGETED at the consolidation. `self.discharge_bounds(component)?;` has
   # TWO hits since api check mode landed -- `run` and `check_api` both call it --
   # so the row reported COULD NOT BE APPLIED. Mutating the LOOP INSIDE the
@@ -383,6 +434,7 @@ case "${1:-}" in
         ordering
         determinism
         refusals
+        uniformity_exemption
         ;;
 esac
 

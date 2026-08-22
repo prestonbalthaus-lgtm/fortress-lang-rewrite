@@ -19,7 +19,7 @@ mod mono;
 mod registry;
 mod types;
 
-pub use mono::{expand, mangle_static, MAX_INSTANTIATIONS};
+pub use mono::{expand, mangle_static, Uniformity, MAX_INSTANTIATIONS};
 
 pub use error::TypeError;
 pub use types::{
@@ -53,8 +53,8 @@ type Checked<T> = Result<T, TypeError>;
 /// split is what keeps M3c's dispatch tables correct: `registry.concrete` and
 /// every 32-bit tag freeze in `Checker::new`, so the set of concrete types has
 /// to be closed before that happens.
-pub fn check(component: &Component) -> Checked<TypedComponent> {
-    let ground = mono::expand(component)?;
+pub fn check(component: &Component, uniformity: Uniformity) -> Checked<TypedComponent> {
+    let ground = mono::expand(component, uniformity)?;
     // Closure lowering sits BETWEEN the two for the same reason expansion sits
     // before the checker: it appends object declarations, and tags freeze in
     // `Checker::new`. It runs after expansion so it never meets a static
