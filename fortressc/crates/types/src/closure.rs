@@ -19,12 +19,18 @@
 //! wrong.
 //!
 //! WHAT IT DOES NOT DO, all deliberate and all named:
-//!   * `fn` syntax, so no anonymous closure and no captured environment. A
-//!     generated object here has ZERO constructor parameters -- but it is
-//!     `Some(vec![])` and not `None`, so it is constructed at each use rather
-//!     than being a singleton, because captures-as-constructor-parameters is
-//!     the shape the real feature takes and the difference would be invisible
-//!     until the day it mattered.
+//!   * STALE UNTIL 2026-08-22, AND CORRECTED HERE. This list said "`fn`
+//!     syntax, so no anonymous closure and no captured environment". BOTH
+//!     LAND NOW and the comment predated the feature -- measured with the
+//!     compiler, one construct at a time, while pricing the Generator
+//!     protocol: an anonymous `fn` with no capture runs, and one WITH a
+//!     capture runs and gets the capture right (`apply2(fn(x:ZZ32):ZZ32 => x k,
+//!     4)` with `k = 3` prints 12, not 8). Reading this paragraph is what made
+//!     that milestone look like it needed a BUILD. See
+//!     docs/superpowers/specs/2026-08-22-generator-protocol-measured.md.
+//!     What remains true is the SHAPE: captures are constructor parameters, so
+//!     a generated object with none is still `Some(vec![])` and not `None` and
+//!     is constructed at each use rather than being a singleton.
 //!   * Arrows whose domain is a tuple, or an arrow inside a generic body. Both
 //!     keep the diagnostic they already have.
 //!   * The synthetic objects are NOT counted against `MAX_INSTANTIATIONS`,
