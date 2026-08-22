@@ -328,6 +328,11 @@ MUTATIONS=(
   # directory either way -- so only a fixture that IS outside and a mutation
   # that widens the scope can tell the two apart.
   'crates/driver/src/main.rs|if LEGACY_LIBRARY_DIRS.contains(&name) {|if true {|widen the legacy-library exemption to every path'
+  # AND THE OTHER DIRECTION, which the row above cannot reach. Widening is
+  # caught by `badoverload.fss` alone -- it is outside a Library directory, so
+  # widening makes it compile. NARROWING is caught by nothing except the
+  # fixture inside one, which is the whole reason that fixture exists.
+  'crates/driver/src/main.rs|const LEGACY_LIBRARY_DIRS: [&str; 2] = ["Library", "CompilerLibrary"];|const LEGACY_LIBRARY_DIRS: [&str; 2] = ["NoSuchDirectory", "CompilerLibrary"];|narrow the legacy-library exemption so no path matches'
   # RE-TARGETED at the consolidation. `self.discharge_bounds(component)?;` has
   # TWO hits since api check mode landed -- `run` and `check_api` both call it --
   # so the row reported COULD NOT BE APPLIED. Mutating the LOOP INSIDE the
@@ -395,6 +400,7 @@ PY
             ordering
             determinism
             refusals
+            uniformity_exemption
             if [[ $failed -gt 0 ]]; then
                 printf 'REFUSED  %d check(s) failed, which is the point\n' "$failed"
             else
