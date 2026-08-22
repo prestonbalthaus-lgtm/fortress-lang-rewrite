@@ -495,6 +495,23 @@ pub enum TypeError {
         name: String,
         cells: usize,
     },
+    /// A parameter with the same name as a top-level value.
+    /// `declarations.tex:476-533` lists every shadowing a Fortress program may
+    /// contain -- a field or dotted method, a KEYWORD parameter, `self`,
+    /// `result` -- and closes with "No other shadowing is permitted".
+    IllegalShadowing {
+        span: Span,
+        name: String,
+    },
+    /// `x := 0` at component level with no declared type. The GRAMMAR forbids
+    /// it: `variables.tex:22-27` gives the untyped form as
+    /// `VarImmutableMods? BindIdOrBindIdTuple = Expr` -- immutable modifiers
+    /// and `=` only -- and `:=` appears only in the alternatives that carry a
+    /// `: Type`.
+    MutableValueNeedsType {
+        span: Span,
+        name: String,
+    },
     /// Top-level values whose initializers depend on each other in a ring.
     /// `variables.tex:122-123` lets an initializer refer to a value declared
     /// LATER, so declaration order is not evaluation order -- but a cycle has
@@ -816,6 +833,8 @@ impl TypeError {
             | Self::ApiDeclarationHasBody { span, .. }
             | Self::MissingBody { span, .. }
             | Self::TraitCycle { span, .. }
+            | Self::IllegalShadowing { span, .. }
+            | Self::MutableValueNeedsType { span, .. }
             | Self::CyclicValueInitialization { span, .. }
             | Self::DuplicateBinderName { span, .. }
             | Self::TupleArityMismatch { span, .. }
@@ -1412,6 +1431,16 @@ impl core::fmt::Display for TypeError {
             Self::ParallelFormUnsupported { form, .. } => write!(
                 f,
                 "{form} is parsed but not implemented in parallel loops"
+            ),
+            Self::IllegalShadowing { name, .. } => write!(
+                f,
+                "`{name}` is already declared at the top level, and a \
+                 parameter may not shadow it"
+            ),
+            Self::MutableValueNeedsType { name, .. } => write!(
+                f,
+                "the type of `{name}` is required: a top-level value declared \
+                 with `:=` must write its type"
             ),
             Self::CyclicValueInitialization { names, .. } => write!(
                 f,

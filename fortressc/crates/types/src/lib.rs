@@ -1113,6 +1113,25 @@ impl Checker {
             }
             let mut params = Vec::with_capacity(f.params.len());
             for p in &f.params {
+                // NO OTHER SHADOWING IS PERMITTED -- `declarations.tex:533`,
+                // closing a list of exactly four allowed shadowings, none of
+                // which is an ordinary parameter over a top-level value.
+                // `Compiled1.x.fss` writes `v = 1` and then `f(v: ZZ32) = v`,
+                // and 1.0 answers "Variable v is already declared".
+                //
+                // THE NARROW CASE ONLY. The full rule also covers locals, loop
+                // binders and tuple binders; this is the one the corpus writes
+                // and the one the ratchet caught. Widening it is a milestone
+                // with its own measurement.
+                if component.decls.iter().any(|d| match d {
+                    Decl::Value(v) => v.name == p.name,
+                    _ => false,
+                }) {
+                    return Err(TypeError::IllegalShadowing {
+                        span: p.span,
+                        name: p.name.clone(),
+                    });
+                }
                 let ty = self.storable(&p.ty, "a parameter")?;
                 // `body: None` ONLY INSIDE AN api, and that is the whole
                 // discriminator: an api is checked and never lowered, so it may
@@ -1293,6 +1312,21 @@ impl Checker {
             .collect();
         if declared.is_empty() {
             return Ok(Vec::new());
+        }
+        // A MUTABLE TOP-LEVEL VALUE MUST WRITE ITS TYPE, and the GRAMMAR is
+        // the authority rather than an inference rule: `variables.tex:22-27`
+        // gives the untyped form as
+        // `VarImmutableMods? BindIdOrBindIdTuple = Expr` -- IMMUTABLE
+        // modifiers and `=` only -- while `:=` appears solely in the
+        // alternatives carrying a `: Type`. `Compiled5.k.fss` writes `x := 0`
+        // and 1.0 answers "The type of x is required".
+        for v in &declared {
+            if v.mutable && v.ty.is_none() {
+                return Err(TypeError::MutableValueNeedsType {
+                    span: v.span,
+                    name: v.name.clone(),
+                });
+            }
         }
         let names: BTreeSet<String> = declared.iter().map(|v| v.name.clone()).collect();
 

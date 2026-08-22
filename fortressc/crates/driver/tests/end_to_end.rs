@@ -2537,6 +2537,49 @@ fn a_tuple_whose_value_is_used_is_still_refused() {
     let _ = std::fs::remove_file(&src);
 }
 
+/// A MUTABLE TOP-LEVEL VALUE MUST WRITE ITS TYPE, and the GRAMMAR is the
+/// authority: `variables.tex:22-27` gives the untyped form as
+/// `VarImmutableMods? BindIdOrBindIdTuple = Expr` -- immutable modifiers and
+/// `=` only -- while `:=` appears solely in the alternatives carrying a
+/// `: Type`. 1.0 answers `Compiled5.k.fss` with "The type of x is required".
+///
+/// CAUGHT BY THE MUST-FAIL RATCHET, not by a test: landing component-level
+/// values made this program compile, and the oracle gate went red on a NEW
+/// acceptance.
+#[test]
+fn a_mutable_top_level_value_must_write_its_type() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(corpus("ProjectFortress/compiler_tests/Compiled5.k.fss"))
+        .arg("-o")
+        .arg(output_path("c5k-out"))
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert!(message.contains("the type of `x` is required"), "{message}");
+}
+
+/// AND A PARAMETER MAY NOT SHADOW A TOP-LEVEL VALUE.
+/// `declarations.tex:476-533` lists every shadowing a Fortress program may
+/// contain -- a field or dotted method, a KEYWORD parameter, `self`, `result`
+/// -- and closes with "No other shadowing is permitted in a Fortress program".
+/// An ordinary parameter is not on that list. `Compiled1.x.fss` writes `v = 1`
+/// and then `f(v: ZZ32) = v`, and 1.0 answers "Variable v is already
+/// declared". Caught by the same ratchet.
+#[test]
+fn a_parameter_may_not_shadow_a_top_level_value() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(corpus("ProjectFortress/compiler_tests/Compiled1.x.fss"))
+        .arg("-o")
+        .arg(output_path("c1x-out"))
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        message.contains("`v` is already declared at the top level"),
+        "{message}"
+    );
+}
+
 /// A TUPLE-DOMAIN ARROW IS N PARAMETERS, verified BY VALUE.
 /// `basic/overloading.tex:125` -- a functional has a single parameter WHICH MAY
 /// BE A TUPLE -- so `(A,B) -> C` mints an `apply(x: A, y: B): C` and needs no
