@@ -3,20 +3,19 @@
 #![allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 
 use fortress_types::{
-    check, intern_types, Type, TypeError, TypedComponent, TypedExpr, TypedExprKind, Uniformity,
+    check, intern_types, Type, TypeError, TypedComponent, TypedExpr, TypedExprKind,
 };
 
 fn typed(src: &str) -> TypedComponent {
     let tokens = fortress_lexer::lex(src).unwrap_or_else(|e| panic!("lex: {e}"));
     let ast = fortress_parser::parse(&tokens).unwrap_or_else(|e| panic!("parse: {e}"));
-    check(&ast, Uniformity::Enforced)
-        .unwrap_or_else(|e| panic!("typecheck failed: {e}\nsource:\n{src}"))
+    check(&ast).unwrap_or_else(|e| panic!("typecheck failed: {e}\nsource:\n{src}"))
 }
 
 fn type_error(src: &str) -> TypeError {
     let tokens = fortress_lexer::lex(src).unwrap_or_else(|e| panic!("lex: {e}"));
     let ast = fortress_parser::parse(&tokens).unwrap_or_else(|e| panic!("parse: {e}"));
-    match check(&ast, Uniformity::Enforced) {
+    match check(&ast) {
         Ok(_) => panic!("expected a type error from:\n{src}"),
         Err(e) => e,
     }
@@ -1312,10 +1311,7 @@ fn an_arrow_over_liftable_types_becomes_a_trait_and_the_rest_stay_refused() {
         let src = "component t\nf(g: (ZZ32, ZZ32) -> ZZ32): ZZ32 = 1\nend\n";
         let tokens = fortress_lexer::lex(src).expect("lex");
         let ast = fortress_parser::parse(&tokens).expect("parse");
-        assert!(
-            check(&ast, Uniformity::Enforced).is_ok(),
-            "a tuple domain lifts"
-        );
+        assert!(check(&ast).is_ok(), "a tuple domain lifts");
     }
 
     // What is NOT liftable keeps the diagnostic it had, because `apply` would
@@ -1558,7 +1554,7 @@ fn an_api_signature_may_name_a_tuple() {
     let source = "api t\n                  f(x: (ZZ32, ZZ32)): ZZ32\n                  g(): (ZZ32, String)\n                  end\n";
     let tokens = fortress_lexer::lex(source).expect("lex");
     let ast = fortress_parser::parse(&tokens).expect("parse");
-    let checked = check(&ast, Uniformity::Enforced);
+    let checked = check(&ast);
     assert!(
         checked.is_ok(),
         "an api has no body to lower: {:?}",

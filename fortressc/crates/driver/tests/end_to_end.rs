@@ -2308,8 +2308,8 @@ fn a_postfix_operator_declaration_parses() {
 /// not depend on either.
 ///
 /// THE :758 WALL IS PAID and the wall behind it has a different owner. The
-/// legacy library's own uniformity violation is exempted BY PATH -- see
-/// `fortress_types::Uniformity`.
+/// legacy library's own uniformity violation is exempted BY CONTENT -- DEV-15,
+/// a pair of bodiless declarations -- see `mono::is_signature_only`.
 ///
 /// AND :1117 IS PAID TOO. That was `MAX_INSTANTIATIONS`, and it was not a
 /// budget that wanted raising: `trait Indexed[\E,I\]` at :1138 declares
@@ -3303,41 +3303,29 @@ fn a_generic_methods_arrow_may_name_its_owners_static_parameter() {
     );
 }
 
-/// AND THE PATH EXEMPTION NO LONGER MOVES IT. This asserted the opposite until
-/// DEV-15 landed: forcing `--no-legacy-library-uniformity` used to restore the
-/// :758 refusal, and now it changes NOTHING, because `__cond[\E,R\]` and
-/// `__cond[\E\]` are both bodiless and the CONTENT rule pays for them.
+/// AND :758 IS PAID BY CONTENT, NOT BY PATH. DEV-14 suspended the uniformity
+/// rule for anything under a `Library` directory and is RETIRED: DEV-15 pays
+/// for `__cond[\E,R\]` beside `__cond[\E\]` because both are bodiless, and
+/// it pays for them wherever the file sits.
 ///
-/// THIS TEST IS THE EVIDENCE FOR RETIRING DEV-14, and it is the reason the
-/// retirement is a measurement rather than a preference. Swept over all 136
-/// files under `Library/` and `CompilerLibrary/`: the flag changes neither the
-/// exit status nor one byte of the diagnostic for any of them.
+/// THE ASSERTION IS ON THE LIBRARY ROOT AND ON A COPY OF IT SOMEWHERE ELSE,
+/// because either alone passes with the scope wrong: the root alone passes if
+/// a path exemption is still hiding somewhere, and `copiedcond.fsi` alone --
+/// see `a_bodiless_overload_set_may_differ_in_its_static_parameters` -- does
+/// not say the real file moved.
 #[test]
-fn the_path_exemption_no_longer_moves_the_bootstrap_root() {
-    let run = |extra: &[&str]| {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_fortressc"));
-        cmd.arg(corpus("Library/FortressLibrary.fsi"));
-        for a in extra {
-            cmd.arg(a);
-        }
-        let out = cmd
-            .arg("--emit-obj")
-            .arg("-o")
-            .arg("/dev/null")
-            .output()
-            .expect("could not run fortressc");
-        (
-            out.status.code(),
-            String::from_utf8_lossy(&out.stderr).into_owned(),
-        )
-    };
-    let (with_code, with_message) = run(&[]);
-    let (without_code, without_message) = run(&["--no-legacy-library-uniformity"]);
-    assert_eq!(with_code, without_code, "{without_message}");
-    assert_eq!(with_message, without_message);
+fn the_bootstrap_root_pays_758_by_content_and_not_by_path() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(corpus("Library/FortressLibrary.fsi"))
+        .arg("--emit-obj")
+        .arg("-o")
+        .arg("/dev/null")
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
     assert!(
-        !with_message.contains("differ in their static parameters"),
-        ":758 is paid by DEV-15 and no longer appears: {with_message}"
+        !message.contains("differ in their static parameters"),
+        ":758 must be paid by DEV-15, with no path exemption left: {message}"
     );
 }
 
@@ -3352,7 +3340,6 @@ fn the_path_exemption_no_longer_moves_the_bootstrap_root() {
 fn a_bodiless_overload_set_may_differ_in_its_static_parameters() {
     let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
         .arg(fixture("copiedcond.fsi"))
-        .arg("--no-legacy-library-uniformity")
         .arg("--emit-obj")
         .arg("-o")
         .arg("/dev/null")

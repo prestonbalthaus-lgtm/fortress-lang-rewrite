@@ -355,11 +355,11 @@ MUTATIONS=(
   # parameter.
   'crates/types/src/closure.rs|Member::Method(m) if !m.static_params.is_empty() => {}|Member::Method(m) if m.static_params.is_empty() => {}|rewrite generic method signatures and skip non-generic ones'
   'crates/types/src/mono.rs|for ((mangled, slot), instance) in &self.instances {|for ((mangled, slot), instance) in self.instances.iter().rev() {|emit instantiations in reverse name order'
-  # RE-TARGETED when the legacy-library exemption landed: the call is now
-  # inside `if uniformity == Uniformity::Enforced`, so the old pattern reported
-  # COULD NOT BE APPLIED. Inverting the test is the one-token change that keeps
-  # every binding used -- `if false` would leave `uniformity` unread.
-  'crates/types/src/mono.rs|if uniformity == Uniformity::Enforced {|if uniformity != Uniformity::Enforced {|stop enforcing the uniformity rule'
+  # RE-TARGETED TWICE. It was a bare call, then it moved inside
+  # `if uniformity == Uniformity::Enforced`, and DEV-15 retired that condition
+  # along with the whole path exemption -- so it is a bare call again and
+  # swallowing the `Result` is the one-token change that stops it enforcing.
+  'crates/types/src/mono.rs|check_uniformity(component)?;|let _ = check_uniformity(component);|stop enforcing the uniformity rule'
   # DEV-15, ALL THREE AXES. The relaxation is a property of the PAIR, of the
   # BODY and of the DECLARATION KIND, and one row cannot reach more than one of
   # them. Every target line here is bar-free on purpose; `NOTHING_ELSE_IS_A_
@@ -368,17 +368,10 @@ MUTATIONS=(
   'crates/types/src/mono.rs|let exempt = signature && first.signature;|let exempt = signature;|widen DEV-15 to a pair with a body on one side'
   'crates/types/src/mono.rs|f.body.is_none()|f.body.is_some()|call a function with a BODY the signature and a bodiless one not'
   'crates/types/src/mono.rs|const NOTHING_ELSE_IS_A_SIGNATURE: bool = false;|const NOTHING_ELSE_IS_A_SIGNATURE: bool = true;|make a trait or an object a signature too'
-  # THE EXEMPTION MUST NOT REACH OUTSIDE THE LEGACY LIBRARY. Without this row
-  # the exemption is guarded by nothing: `badoverload.fss` is refused whether
-  # the scope is a path test or `true`, because it is not in a Library
-  # directory either way -- so only a fixture that IS outside and a mutation
-  # that widens the scope can tell the two apart.
-  'crates/driver/src/main.rs|if LEGACY_LIBRARY_DIRS.contains(&name) {|if true {|widen the legacy-library exemption to every path'
-  # AND THE OTHER DIRECTION, which the row above cannot reach. Widening is
-  # caught by `badoverload.fss` alone -- it is outside a Library directory, so
-  # widening makes it compile. NARROWING is caught by nothing except the
-  # fixture inside one, which is the whole reason that fixture exists.
-  'crates/driver/src/main.rs|const LEGACY_LIBRARY_DIRS: [&str; 2] = ["Library", "CompilerLibrary"];|const LEGACY_LIBRARY_DIRS: [&str; 2] = ["NoSuchDirectory", "CompilerLibrary"];|narrow the legacy-library exemption so no path matches'
+  # THE TWO PATH-EXEMPTION ROWS THAT STOOD HERE ARE GONE WITH DEV-14. They
+  # mutated `LEGACY_LIBRARY_DIRS`, which no longer exists: the exemption is
+  # earned by writing no body, not by sitting in a directory, and the four
+  # DEV-15 rows above are what guard the replacement.
   # RE-TARGETED at the consolidation. `self.discharge_bounds(component)?;` has
   # TWO hits since api check mode landed -- `run` and `check_api` both call it --
   # so the row reported COULD NOT BE APPLIED. Mutating the LOOP INSIDE the

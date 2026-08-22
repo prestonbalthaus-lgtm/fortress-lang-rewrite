@@ -25,7 +25,6 @@ struct Options {
     resolve_imports: bool,
     check_exports: bool,
     emit_obj: bool,
-    legacy_library_uniformity: bool,
     cc: String,
     cpu: String,
 }
@@ -37,42 +36,18 @@ impl Options {
     fn is_api_file(&self) -> bool {
         self.source.extension().is_some_and(|e| e == "fsi")
     }
-
-    fn uniformity(&self) -> fortress_types::Uniformity {
-        if self.legacy_library_uniformity {
-            fortress_types::Uniformity::ExemptLegacyLibrary
-        } else {
-            fortress_types::Uniformity::Enforced
-        }
-    }
 }
 
-/// The directory names that make a file the legacy 1.0 library's own source.
-/// Named rather than inlined so that `tools/generics-gate.sh` has a line to
-/// mutate: a mutation string is split on a vertical bar, so neither an `||`
-/// nor a match alternative can appear in one.
-const LEGACY_LIBRARY_DIRS: [&str; 2] = ["Library", "CompilerLibrary"];
-
-/// The legacy 1.0 library's own source, by path. A directory component named
-/// `Library` or `CompilerLibrary` is the whole test, which is the same rule
-/// `resolve.rs` already uses to find an api on the source path.
-///
-/// PATH AND NOT CONTENT, deliberately. The exemption has to suspend a rule
-/// this compiler enforces, so it must be impossible to earn by writing
-/// something -- only by BEING the file we are porting from. A user component
-/// that copies `__cond` out of the library is still refused, and the gate
-/// asserts exactly that.
-fn in_legacy_library(path: &Path) -> bool {
-    for part in path.components() {
-        let Some(name) = part.as_os_str().to_str() else {
-            continue;
-        };
-        if LEGACY_LIBRARY_DIRS.contains(&name) {
-            return true;
-        }
-    }
-    false
-}
+// DEV-14, THE PATH EXEMPTION, IS RETIRED HERE (2026-08-22). It suspended the
+// uniformity rule for any file under a directory named `Library` or
+// `CompilerLibrary`, because the shipped 1.0 library breaks a rule 1.0 states.
+// DEV-15 pays for that by CONTENT instead -- a pair of bodiless declarations --
+// and it pays for every file this was paying for: all 136 files under those two
+// directories compile identically with the exemption forced off, neither status
+// nor one byte of diagnostic differing. What was left was strictly WIDER than
+// DEV-15 and would have blanket-exempted a BODIED violation under `Library/`,
+// which is the one thing DEV-15 is careful not to do. See
+// `docs/superpowers/specs/2026-08-22-dev15-bodiless-uniformity.md`.
 
 fn parse_args(args: &[String]) -> Option<Options> {
     let mut source: Option<PathBuf> = None;
@@ -92,8 +67,6 @@ fn parse_args(args: &[String]) -> Option<Options> {
     // The comparison is still TypeRef-level; see `conform.rs`.
     let mut check_exports = true;
     let mut emit_obj = false;
-    // Tri-state until the source path is known: `None` means "decide by path".
-    let mut legacy_library_uniformity: Option<bool> = None;
     let mut cc = DEFAULT_CC.to_owned();
     let mut cpu = fortress_codegen::DEFAULT_CPU.to_owned();
     let mut rest = args.iter();
@@ -107,8 +80,6 @@ fn parse_args(args: &[String]) -> Option<Options> {
             "--check-exports" => check_exports = true,
             "--no-check-exports" => check_exports = false,
             "--emit-obj" => emit_obj = true,
-            "--legacy-library-uniformity" => legacy_library_uniformity = Some(true),
-            "--no-legacy-library-uniformity" => legacy_library_uniformity = Some(false),
             "--cc" => cc = rest.next()?.clone(),
             "--target-cpu" => cpu = rest.next()?.clone(),
             flag if flag.starts_with('-') => return None,
@@ -118,8 +89,6 @@ fn parse_args(args: &[String]) -> Option<Options> {
 
     let source = source?;
     let output = output.unwrap_or_else(|| source.with_extension(""));
-    let legacy_library_uniformity =
-        legacy_library_uniformity.unwrap_or_else(|| in_legacy_library(&source));
     Some(Options {
         source,
         output,
@@ -127,7 +96,6 @@ fn parse_args(args: &[String]) -> Option<Options> {
         resolve_imports,
         check_exports,
         emit_obj,
-        legacy_library_uniformity,
         cc,
         cpu,
     })
@@ -393,7 +361,7 @@ fn compile(options: &Options) -> Result<(), Failure> {
             )));
         }
     }
-    let typed = fortress_types::check(component, options.uniformity()).map_err(|e| {
+    let typed = fortress_types::check(component).map_err(|e| {
         Failure::Diagnostic(render(
             path,
             &source,
