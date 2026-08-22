@@ -4081,6 +4081,17 @@ impl<'t, 'a> Parser<'t, 'a> {
             return Ok(BlockItem::Binding(binding));
         }
         self.pos = save;
+        // `(a, b) = e`. THIS MUST BE TRIED BEFORE THE EXPRESSION PATH, and it
+        // is the whole reason the node exists. `try_binding` above requires an
+        // `Ident`, so a `(` falls straight through to `self.expr()` below and
+        // `(min, max) = (i MIN j, i MAX j)` parses as INFIX EQUALITY -- a
+        // discarded Boolean comparison. `tupleTest1.fss` and `tupleTest2.fss`
+        // have no asserts and no `.test`, so they would compile, exit 0, do
+        // nothing at all, and be counted as files gained.
+        if let Some(binding) = self.try_tuple_binding()? {
+            return Ok(BlockItem::TupleBinding(binding));
+        }
+        self.pos = save;
         // `f(x) = e`: a local function declaration, not a discarded equality.
         // Guarded on tokens rather than on the parsed tree, because a body that
         // is itself an equality (`isZero(x) = x = 0`) collects into a chain and
@@ -4434,6 +4445,55 @@ impl<'t, 'a> Parser<'t, 'a> {
             body: Box::new(body),
             span,
         })
+    }
+
+    /// `(a, b) = e`, and nothing else: every name is a bare identifier, there
+    /// are at least two, and the closing paren is followed by a definition `=`.
+    ///
+    /// TOKEN-GUARDED AND BACKTRACKING, like the `f(x) = e` probe below it. A
+    /// tuple EXPRESSION in statement position is legal (`(a, b)` alone), and so
+    /// is an equality between two of them, so nothing here may commit until the
+    /// whole shape has been seen.
+    ///
+    /// A NESTED BINDER `((a, b), c)` IS NOT IN THE SUBSET and falls out of this
+    /// shape rather than being refused: no corpus file writes one -- measured
+    /// over all 1956 -- so it stays an ordinary expression and gets the
+    /// diagnostic that position already had.
+    fn try_tuple_binding(&mut self) -> Parsed<Option<fortress_ast::TupleBinding>> {
+        let save = self.pos;
+        let start = self.span_here();
+        if !self.at(&Kind::LParen) {
+            return Ok(None);
+        }
+        self.pos += 1;
+        let mut names = Vec::new();
+        loop {
+            let Some(Kind::Ident(name)) = self.peek_kind() else {
+                self.pos = save;
+                return Ok(None);
+            };
+            names.push((*name).to_owned());
+            self.pos += 1;
+            if self.at(&Kind::Comma) {
+                self.pos += 1;
+                continue;
+            }
+            break;
+        }
+        if names.len() < 2 || !self.at(&Kind::RParen) {
+            self.pos = save;
+            return Ok(None);
+        }
+        self.pos += 1;
+        if !self.definition_equals_at(self.pos) {
+            self.pos = save;
+            return Ok(None);
+        }
+        self.pos += 1;
+        self.skip_newlines();
+        let value = self.expr()?;
+        let span = Span::new(start.start, value.span().end);
+        Ok(Some(fortress_ast::TupleBinding { names, value, span }))
     }
 
     fn try_binding(&mut self) -> Parsed<Option<Binding>> {

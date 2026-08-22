@@ -7,7 +7,8 @@ pub use nodes::{
     Assign, BinOp, Binding, BlockItem, BoundObligation, CaseArm, Component, CutMember, Decl,
     DimDecl, DimExpr, Expr, ExtentForm, ExtentRange, FieldDecl, Fixity, FnDecl, ImportDecl,
     ImportItems, ImportedName, Member, MethodDecl, Modifiers, ObjectDecl, Param, ShapeSpelling,
-    StaticExpr, StaticKind, StaticOp, StaticParam, TraitDecl, TypeCaseArm, TypeRef, UnOp, UnitDecl,
+    StaticExpr, StaticKind, StaticOp, StaticParam, TraitDecl, TupleBinding, TypeCaseArm, TypeRef,
+    UnOp, UnitDecl,
 };
 
 /// Byte offsets into the source. Line and column are derived on demand by the

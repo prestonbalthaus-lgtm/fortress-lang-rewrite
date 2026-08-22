@@ -252,6 +252,11 @@ fn collect_targets(e: &TypedExpr, out: &mut Vec<String>) {
                     fortress_types::TypedBlockItem::Binding { value, .. } => {
                         collect_targets(value, out);
                     }
+                    fortress_types::TypedBlockItem::TupleBinding { parts, .. } => {
+                        for part in parts {
+                            collect_targets(&part.value, out);
+                        }
+                    }
                     fortress_types::TypedBlockItem::Assign { value, .. } => {
                         collect_targets(value, out);
                     }

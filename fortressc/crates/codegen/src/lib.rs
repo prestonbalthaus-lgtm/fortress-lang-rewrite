@@ -2837,6 +2837,25 @@ impl<'ctx> Lowering<'ctx> {
                         scope.insert(name.clone(), slot);
                     }
                 }
+                // NOTHING MATERIALISES. The checker already split the binder
+                // into one part per name, so this is a run of ordinary
+                // immutable bindings and no tuple value is ever built. That is
+                // the whole non-materialising convention, and it is why the
+                // milestone introduces no boxing.
+                //
+                // Left to right, sequentially: 1.0 makes a tuple's elements
+                // implicit threads and `parallelism.tex:88-90` lets an
+                // implementation serialise any group of them, which is the
+                // same licence `also do` runs on here.
+                TypedBlockItem::TupleBinding { parts, .. } => {
+                    for part in parts {
+                        let lowered = self.operand(&part.value)?;
+                        lowered.set_name(&part.name);
+                        if let Some(scope) = self.scopes.last_mut() {
+                            scope.insert(part.name.clone(), Slot::Value(lowered));
+                        }
+                    }
+                }
                 TypedBlockItem::Assign {
                     target, op, value, ..
                 } => {

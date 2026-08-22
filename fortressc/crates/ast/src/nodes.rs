@@ -986,8 +986,29 @@ pub struct TypeCaseArm {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BlockItem {
     Binding(Binding),
+    /// `(a, b) = e`. A SEPARATE NODE and not a pattern on [`Binding`], whose
+    /// `name` is one `String` that every pass reads directly.
+    ///
+    /// IT MUST EXIST BEFORE A TUPLE IS AN EXPRESSION, and that ordering is the
+    /// whole reason it is here. Without a binder form the parser falls through
+    /// to an expression and `(min, max) = (i MIN j, i MAX j)` parses as INFIX
+    /// EQUALITY -- a discarded Boolean comparison. `tupleTest1.fss` and
+    /// `tupleTest2.fss` have no asserts and no `.test`, so they would compile,
+    /// exit 0, do nothing, and be counted as files gained.
+    TupleBinding(TupleBinding),
     Assign(Assign),
     Expr(Expr),
+}
+
+/// `(a, b) = e`, and `(a, b) : (T, U) = e` is NOT in the subset -- no corpus
+/// file annotates one, and the element types come from the initializer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TupleBinding {
+    /// Two or more, by construction: the parser only builds this when it has
+    /// seen a comma inside the parentheses.
+    pub names: Vec<String>,
+    pub value: Expr,
+    pub span: Span,
 }
 
 /// `x := e` or `a[i] := e`. The target is checked in the types crate, which is

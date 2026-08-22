@@ -2390,6 +2390,93 @@ fn the_bootstrap_root_parses_in_full() {
     );
 }
 
+/// `(a, b) = (e1, e2)` BINDS, and this test asserts the VALUES because the
+/// failure mode it guards is silent.
+///
+/// Without a binder node the parser falls through to an expression and this is
+/// INFIX EQUALITY -- a discarded Boolean. `tupleTest1.fss` and `tupleTest2.fss`
+/// have no asserts and no `.test`, so that reading compiles, exits 0, does
+/// nothing, and counts as two files gained. Only the values can tell the two
+/// apart, so exit codes are not enough here.
+#[test]
+fn a_tuple_binding_binds_its_names_and_does_not_compare_them() {
+    let src = output_path("tuplebind").with_extension("fss");
+    std::fs::write(
+        &src,
+        "component tuplebind\n         export Executable\n         run():()=do\n           (a,b) = (1,2)\n           println(a)\n           println(b)\n         end\n         end\n",
+    )
+    .expect("could not write fixture");
+    let exe = output_path("tuplebind-out");
+    let built = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(&src)
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .expect("could not run fortressc");
+    assert!(
+        built.status.success(),
+        "{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let ran = Command::new(&exe).output().expect("could not run");
+    assert_eq!(String::from_utf8_lossy(&ran.stdout), "1\n2\n");
+    let _ = std::fs::remove_file(&src);
+    let _ = std::fs::remove_file(&exe);
+}
+
+/// THE ELEMENTS ARE CHECKED BEFORE ANY NAME IS DECLARED, so `(a2,b2) = (b,a)`
+/// reads the OUTER bindings. Declaring as it went would make the second element
+/// see the name this statement is introducing.
+#[test]
+fn a_tuple_binding_evaluates_its_elements_before_binding_any_name() {
+    let src = output_path("tupleswap").with_extension("fss");
+    std::fs::write(
+        &src,
+        "component tupleswap\n         export Executable\n         run():()=do\n           a = 1\n           b = 2\n           (a2,b2) = (b,a)\n           println(a2)\n           println(b2)\n         end\n         end\n",
+    )
+    .expect("could not write fixture");
+    let exe = output_path("tupleswap-out");
+    let built = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(&src)
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .expect("could not run fortressc");
+    assert!(
+        built.status.success(),
+        "{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let ran = Command::new(&exe).output().expect("could not run");
+    assert_eq!(String::from_utf8_lossy(&ran.stdout), "2\n1\n");
+    let _ = std::fs::remove_file(&src);
+    let _ = std::fs::remove_file(&exe);
+}
+
+/// A REAL CORPUS PROGRAM, and it self-checks: `Compiled5.Binding.fss` computes
+/// `fib 20` through two destructurings per recursion and prints 6765. A binder
+/// that bound the wrong element, or bound nothing, would not print that.
+#[test]
+fn the_corpus_destructuring_program_computes_the_right_answer() {
+    let exe = output_path("compiled5binding");
+    let built = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(corpus(
+            "ProjectFortress/compiler_tests/Compiled5.Binding.fss",
+        ))
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .expect("could not run fortressc");
+    assert!(
+        built.status.success(),
+        "{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let ran = Command::new(&exe).output().expect("could not run");
+    assert_eq!(String::from_utf8_lossy(&ran.stdout), "6765\n");
+    let _ = std::fs::remove_file(&exe);
+}
+
 /// THE SELF-POSITION PAIR, ISOLATED, because the library reaches it through an
 /// import and an imported span is rendered against the WRONG FILE (see the
 /// wall test above, which reports :19:20 -- a comment). Ten lines that need no

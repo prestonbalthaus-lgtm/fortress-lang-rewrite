@@ -973,6 +973,16 @@ impl Pass {
                         None => scope.declare_opaque(name),
                     }
                 }
+                // Every name a tuple binder introduces is opaque here: its type
+                // comes from the initializer and this pass only needs to know
+                // the name is BOUND, so a later use resolves to the local
+                // rather than to a top-level declaration.
+                BlockItem::TupleBinding(b) => {
+                    self.rewrite_expr(&mut b.value, scope)?;
+                    for name in &b.names {
+                        scope.declare_opaque(name);
+                    }
+                }
                 BlockItem::Assign(a) => {
                     let Assign { target, value, .. } = a;
                     self.rewrite_expr(target, scope)?;
@@ -1155,6 +1165,14 @@ fn free_names(e: &Expr, bound: &mut Vec<BTreeSet<String>>, out: &mut BTreeSet<St
                         free_names(&b.value, bound, out);
                         if let Some(frame) = bound.last_mut() {
                             frame.insert(b.name.clone());
+                        }
+                    }
+                    BlockItem::TupleBinding(b) => {
+                        free_names(&b.value, bound, out);
+                        if let Some(frame) = bound.last_mut() {
+                            for name in &b.names {
+                                frame.insert(name.clone());
+                            }
                         }
                     }
                     BlockItem::Assign(a) => {

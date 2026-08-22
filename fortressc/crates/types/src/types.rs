@@ -892,6 +892,26 @@ pub enum TypedBlockItem {
         span: Span,
     },
     Expr(TypedExpr),
+    /// `(a, b) = e`, ALREADY SPLIT. The checker emits one entry per name with
+    /// the element that fills it, so codegen sees ordinary bindings and NOTHING
+    /// MATERIALISES -- no tuple value is ever built, stored or passed.
+    ///
+    /// That is the non-materialising convention the round-2 deferred doc calls
+    /// option (2), and it is what keeps this milestone free of boxing: a tuple
+    /// has no run-time representation here because no run-time value of one is
+    /// ever created.
+    TupleBinding {
+        parts: Vec<TypedBinding>,
+        span: Span,
+    },
+}
+
+/// One name of a destructured tuple, and the element that fills it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypedBinding {
+    pub name: String,
+    pub ty: Type,
+    pub value: TypedExpr,
 }
 
 /// What a `Thread[\T\]` handle can be asked. Four, and no more: 1.0's

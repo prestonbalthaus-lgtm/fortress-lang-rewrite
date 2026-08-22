@@ -25,12 +25,12 @@ pub use mono::{expand, mangle_static, Uniformity, MAX_INSTANTIATIONS};
 pub use error::TypeError;
 pub use types::{
     intern, intern_type, intern_types, ArithOp, AssignTarget, CompareOp, DispatchFn, DispatchNode,
-    Elem, MpiOp, Target, ThreadOp, Type, TypedBlockItem, TypedCapture, TypedComponent, TypedExpr,
-    TypedExprKind, TypedField, TypedFn, TypedObject, TypedParam, TypedReduction, TypedTypeCaseArm,
-    ARRAY_ALLOC, ARRAY_ALLOC_N, ARRAY_LENGTH, ARRAY_SLOT, ARRAY_SLOT_N, ASSERT_FAILED,
-    ATOMIC_ENTER, ATOMIC_LEAVE, CASE_FAILED, DISPATCH_FAILED, ENV_ALLOC, FIRST_TAG, OBJECT_ALLOC,
-    PARALLEL_FOR, REDUCTION_ALLOC, REDUCTION_WORKERS, SPAWN, THREAD_READY, THREAD_STOP, THREAD_VAL,
-    THREAD_WAIT,
+    Elem, MpiOp, Target, ThreadOp, Type, TypedBinding, TypedBlockItem, TypedCapture,
+    TypedComponent, TypedExpr, TypedExprKind, TypedField, TypedFn, TypedObject, TypedParam,
+    TypedReduction, TypedTypeCaseArm, ARRAY_ALLOC, ARRAY_ALLOC_N, ARRAY_LENGTH, ARRAY_SLOT,
+    ARRAY_SLOT_N, ASSERT_FAILED, ATOMIC_ENTER, ATOMIC_LEAVE, CASE_FAILED, DISPATCH_FAILED,
+    ENV_ALLOC, FIRST_TAG, OBJECT_ALLOC, PARALLEL_FOR, REDUCTION_ALLOC, REDUCTION_WORKERS, SPAWN,
+    THREAD_READY, THREAD_STOP, THREAD_VAL, THREAD_WAIT,
 };
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -3080,6 +3080,7 @@ impl Checker {
             }
             Expr::Block { items, .. } => items.iter().any(|item| match item {
                 BlockItem::Binding(b) => self.reads_shared(&b.value, floor),
+                BlockItem::TupleBinding(b) => self.reads_shared(&b.value, floor),
                 BlockItem::Assign(a) => self.reads_shared(&a.value, floor),
                 BlockItem::Expr(e) => self.reads_shared(e, floor),
             }),
@@ -3149,6 +3150,67 @@ impl Checker {
             Expr::Field { base, .. } | Expr::Index { base, .. } => Self::target_root(base),
             _ => None,
         }
+    }
+
+    /// `(a, b) = e`. THE TUPLE NEVER MATERIALISES.
+    ///
+    /// The only form in the subset is one whose right-hand side is SYNTACTICALLY
+    /// a tuple, and that is what makes the whole milestone free of a
+    /// representation: `(min, max) = (i MIN j, i MAX j)` is two bindings, each
+    /// checked and declared on its own. No tuple value is built, stored or
+    /// passed, so there is nothing to box.
+    ///
+    /// A CALL ON THE RIGHT IS REFUSED BY NAME. `(x, y) = double[\String\]("t")`
+    /// -- `SpecData/examples/basic/Expr.VarRef.fss` -- needs a multi-value
+    /// RETURN, which is a representation question and a separate step. Refusing
+    /// it here is what stops it becoming a silently wrong extraction.
+    ///
+    /// EVALUATION ORDER: left to right, sequentially. 1.0 makes the elements of
+    /// a tuple implicit threads (`parallelism.tex:88-90`), and that same
+    /// sentence permits an implementation to serialise ANY group of them --
+    /// which is the licence `also do` already runs on here.
+    fn tuple_binding(&mut self, b: &fortress_ast::TupleBinding) -> Checked<TypedBlockItem> {
+        let Expr::Tuple { items, .. } = &b.value else {
+            return Err(TypeError::TupleNotStorable {
+                span: b.value.span(),
+                position: "the initializer of a tuple binding, unless it is written as a tuple",
+            });
+        };
+        if items.len() != b.names.len() {
+            return Err(TypeError::TupleArityMismatch {
+                span: b.span,
+                names: b.names.len(),
+                values: items.len(),
+            });
+        }
+        // CHECKED FIRST, DECLARED AFTER, and the order is load bearing: in
+        // `(a, b) = (b, a)` both right-hand names must still mean the OUTER
+        // bindings. Declaring as we go would make the second element read the
+        // `a` this statement is introducing.
+        let mut values = Vec::with_capacity(items.len());
+        for item in items {
+            values.push(self.expr(item, None)?);
+        }
+        let mut parts = Vec::with_capacity(values.len());
+        for (name, value) in b.names.iter().zip(values) {
+            if value.ty == Type::Void {
+                return Err(TypeError::VoidNotStorable {
+                    span: value.span,
+                    position: "a binding",
+                });
+            }
+            let ty = value.ty;
+            self.declare(name.clone(), ty, false);
+            parts.push(TypedBinding {
+                name: name.clone(),
+                ty,
+                value,
+            });
+        }
+        Ok(TypedBlockItem::TupleBinding {
+            parts,
+            span: b.span,
+        })
     }
 
     fn assign(&mut self, a: &Assign) -> Checked<TypedBlockItem> {
@@ -5849,6 +5911,7 @@ impl Checker {
                         span: b.span,
                     });
                 }
+                BlockItem::TupleBinding(b) => typed.push(self.tuple_binding(b)?),
                 BlockItem::Assign(a) => typed.push(self.assign(a)?),
                 BlockItem::Expr(e) => {
                     // Only the final expression is in value position.

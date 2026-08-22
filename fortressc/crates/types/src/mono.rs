@@ -1218,6 +1218,13 @@ impl<'a> Expander<'a> {
                     mutable: b.mutable,
                     span: b.span,
                 }),
+                // Substitution walks INTO the initializer: a static parameter
+                // mentioned there has to be replaced like any other.
+                BlockItem::TupleBinding(b) => BlockItem::TupleBinding(fortress_ast::TupleBinding {
+                    names: b.names.clone(),
+                    value: self.expr(&b.value, subst)?,
+                    span: b.span,
+                }),
                 BlockItem::Assign(a) => BlockItem::Assign(Assign {
                     target: self.expr(&a.target, subst)?,
                     op: a.op,

@@ -495,6 +495,13 @@ pub enum TypeError {
         name: String,
         cells: usize,
     },
+    /// `(a, b) = (1, 2, 3)`. The binder and the initializer disagree on how
+    /// many elements there are.
+    TupleArityMismatch {
+        span: Span,
+        names: usize,
+        values: usize,
+    },
     /// A tuple in a position a DEFINED function would have to lower. Naming
     /// one in an `api` signature is fine; an api is never lowered.
     TupleNotStorable {
@@ -796,6 +803,7 @@ impl TypeError {
             | Self::ApiDeclarationHasBody { span, .. }
             | Self::MissingBody { span, .. }
             | Self::TraitCycle { span, .. }
+            | Self::TupleArityMismatch { span, .. }
             | Self::TupleNotStorable { span, .. }
             | Self::SpawnInsideAtomic { span }
             | Self::ThreadValueNotRepresentable { span, .. }
@@ -1389,6 +1397,11 @@ impl core::fmt::Display for TypeError {
             Self::ParallelFormUnsupported { form, .. } => write!(
                 f,
                 "{form} is parsed but not implemented in parallel loops"
+            ),
+            Self::TupleArityMismatch { names, values, .. } => write!(
+                f,
+                "this binding names {names} value(s) and its initializer has \
+                 {values}"
             ),
             Self::TupleNotStorable { position, .. } => write!(
                 f,
