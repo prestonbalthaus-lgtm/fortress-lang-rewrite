@@ -370,6 +370,7 @@ juxtshadow|12|a parameter shadowing a function name stays multiplication
 juxtnullary|42|`answer ()` is the zero-argument call
 chainmixed|YES|a chain mixes equivalence with one ordering sense
 rr64literal|1.75|an integer literal in RR64 position is a float constant
+varvalue|15\n101\n7|a `var` top-level value is storage and an assignment target
 CASES
 }
 
@@ -400,22 +401,31 @@ evaluated_once() {
 # the message distinguishes them.
 refusals() {
     printf '== the refusals ==\n'
+    # THE NAME CARRIES ITS EXTENSION. An api-side refusal has to be listed here
+    # too, and every one of the `var` rows below is separated from its mutation
+    # by the MESSAGE and not by the exit code: drop the parenthesised-list
+    # refusal and `identifier` reports a missing name, drop the
+    # delayed-initialization one and the block reports `expected an
+    # expression`. Both are still exit 1.
     local name phrase err status
     while IFS='|' read -r name phrase; do
         [[ -z $name ]] && continue
-        err=$("$fortressc" "$repo/fortressc/tests/$name.fss" --emit-obj -o /dev/null 2>&1 >/dev/null)
+        err=$("$fortressc" "$repo/fortressc/tests/$name" --emit-obj -o /dev/null 2>&1 >/dev/null)
         status=$?
         if refused_cleanly "$status" && [[ $err == *"$phrase"* ]]; then
-            ok "$name.fss is refused (exit $status)"
+            ok "$name is refused (exit $status)"
         else
-            bad "$name.fss is refused" "status $status: $err"
+            bad "$name is refused" "status $status: $err"
         fi
     done <<'CASES'
-juxtnary|a juxtaposition of 3 elements led by a function is not implemented
-juxtsingleton|neither multiplication nor concatenation
-localfn|a local function declaration is not implemented
-badchainsense|chained ordering operators must have the same sense
-badarrowtype|an arrow type is not implemented
+juxtnary.fss|a juxtaposition of 3 elements led by a function is not implemented
+juxtsingleton.fss|neither multiplication nor concatenation
+localfn.fss|a local function declaration is not implemented
+badchainsense.fss|chained ordering operators must have the same sense
+badarrowtype.fss|an arrow type is not implemented
+badvartuple.fsi|a parenthesised variable list declares a tuple of variables
+badlocalvarnoinit.fss|is declared with no initializer
+badvarnotype.fss|a mutable top-level value must write its type
 CASES
 
     # `badvaluebinding.fss` LEFT THIS LIST when component-level values landed,
@@ -589,6 +599,11 @@ implicit_builtin_import() {
 }
 
 MUTATIONS=(
+  # `var` AT DECLARATION LEVEL, three axes. Every target line is bar-free, and
+  # two of the three are caught by the MESSAGE rather than the exit code.
+  'crates/parser/src/lib.rs|Some(Kind::KwVar) => Ok(Decl::Value(self.value_decl(modifiers, true)?)),|Some(Kind::KwVar) => Ok(Decl::Value(self.value_decl(modifiers, false)?)),|read a declaration-level `var` as IMMUTABLE'
+  'crates/parser/src/lib.rs|let parenthesised_list = self.at(&Kind::LParen);|let parenthesised_list = false;|stop refusing a parenthesised variable list by name'
+  'crates/parser/src/lib.rs|_ if modifier && ty.is_some() => {|_ if false => {|stop refusing a local `var` with no initializer by name'
   'crates/types/src/lib.rs|if self.lookup(name).is_some() {|if false {|drop the shadowing guard on a function element'
   # THE IMPLICIT BUILTIN IMPORT, four axes. Its SCOPE is two decisions -- api
   # rather than component, and not the builtin itself -- and the two defects it

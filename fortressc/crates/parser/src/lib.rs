@@ -1147,7 +1147,12 @@ impl<'t, 'a> Parser<'t, 'a> {
             // `VarWTypes` admits `(x: T, y: U)` and `BindIdOrBindIdTuple`
             // admits `(x, y)`. Refused HERE rather than at `identifier`,
             // which would report a missing name for a list that is written.
-            if self.at(&Kind::LParen) {
+            //
+            // NAMED rather than written inline so the mutation table has a
+            // BAR-FREE, UNIQUE line to target: `if self.at(&Kind::LParen) {`
+            // appears twice in this file.
+            let parenthesised_list = self.at(&Kind::LParen);
+            if parenthesised_list {
                 return Err(ParseError::VariableListUnsupported {
                     span: self.span_here(),
                 });
