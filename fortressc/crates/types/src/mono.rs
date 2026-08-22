@@ -773,6 +773,8 @@ impl<'a> Expander<'a> {
         let mut out = Vec::with_capacity(members.len());
         for (index, m) in members.iter().enumerate() {
             let built = match m {
+                // Nothing to substitute into: recorded and not read.
+                Member::Coercion { span } => Member::Coercion { span: *span },
                 Member::Field(f) => Member::Field(FieldDecl {
                     name: f.name.clone(),
                     ty: self.ty(&f.ty, subst)?,

@@ -1979,7 +1979,8 @@ impl Checker {
             .iter()
             .filter_map(|m| match m {
                 Member::Field(f) => Some(f),
-                Member::Method(_) => None,
+                // A coercion declares no field, so it occupies no layout slot.
+                Member::Method(_) | Member::Coercion { .. } => None,
             })
             .collect();
         let mut out = Vec::with_capacity(body.len());

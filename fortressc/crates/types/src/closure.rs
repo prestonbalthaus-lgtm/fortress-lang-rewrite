@@ -343,6 +343,8 @@ impl Pass {
 
     fn rewrite_member_types(&mut self, m: &mut Member) -> Result<(), TypeError> {
         match m {
+            // Recorded and not read; there is no type in it to rewrite.
+            Member::Coercion { .. } => {}
             Member::Field(f) => self.rewrite_type(&mut f.ty)?,
             // A GENERIC METHOD IS NOT REWRITTEN, for the same reason
             // monomorphization files it instead of expanding it: its static

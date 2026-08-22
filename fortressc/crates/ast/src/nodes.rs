@@ -294,6 +294,20 @@ pub enum Member {
     /// is comes from whether it declares a `self` parameter, and it is never
     /// desugared into the other.
     Method(MethodDecl),
+    /// `coerce(x: T)` -- a COERCION declaration, `conversions-coercions.tex`.
+    ///
+    /// RECORDED AND NOT READ, which is the `opr`/modifier pattern this project
+    /// already uses, and here it is what makes the member SAFE rather than
+    /// merely unimplemented. Parsing one as an ordinary `Method` named
+    /// `coerce` would put it in an overload set and let it win a dispatch --
+    /// a silent wrong answer. A variant of its own cannot.
+    ///
+    /// `ProjectFortress/LibraryBuiltin/CompilerBuiltin.fsi` writes fifteen of
+    /// them and is the ONLY parse blocker in that file; nothing else in the
+    /// corpus declares one outside an api.
+    Coercion {
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

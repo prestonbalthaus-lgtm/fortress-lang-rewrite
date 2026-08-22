@@ -955,7 +955,8 @@ fn method_names(members: &[fortress_ast::Member]) -> Vec<String> {
         .iter()
         .filter_map(|m| match m {
             fortress_ast::Member::Method(m) => Some(m.name.clone()),
-            fortress_ast::Member::Field(_) => None,
+            // A coercion declares no method name; it is recorded and not read.
+            fortress_ast::Member::Field(_) | fortress_ast::Member::Coercion { .. } => None,
         })
         .collect()
 }

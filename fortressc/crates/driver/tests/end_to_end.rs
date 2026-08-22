@@ -2537,6 +2537,62 @@ fn a_tuple_whose_value_is_used_is_still_refused() {
     let _ = std::fs::remove_file(&src);
 }
 
+/// `coerce(x: T)` PARSES AND IS RECORDED, NEVER READ.
+/// `ProjectFortress/LibraryBuiltin/CompilerBuiltin.fsi` writes fifteen of them
+/// and they were its ONLY parse blocker.
+///
+/// A VARIANT OF ITS OWN, NOT A METHOD NAMED `coerce`: parsed as a method it
+/// would join an overload set and could win a dispatch, which is a silent
+/// wrong answer. `Member::Coercion` cannot.
+#[test]
+fn a_coercion_declaration_parses_and_is_not_a_method() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(corpus("ProjectFortress/compiler_tests/Compiled6.p.fss"))
+        .arg("-o")
+        .arg(output_path("c6p-out"))
+        .output()
+        .expect("could not run fortressc");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_file(output_path("c6p-out"));
+}
+
+/// AND IT DOES NOT SHADOW A REAL METHOD OF THE SAME NAME. A coercion is not in
+/// the dotted namespace at all, so declaring one beside a method called
+/// `coerce` must not collide -- which is exactly what parsing it as a method
+/// would have caused.
+#[test]
+fn a_coercion_does_not_collide_with_a_method() {
+    let src = output_path("coercemix").with_extension("fss");
+    std::fs::write(
+        &src,
+        "component coercemix\n\
+         export Executable\n\
+         trait B end\n\
+         object O extends B\n\
+         coerce(x: B)\n\
+         end\n\
+         run(): () = ()\n\
+         end\n",
+    )
+    .expect("could not write fixture");
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(&src)
+        .arg("-o")
+        .arg(output_path("coercemix-out"))
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !message.contains("declared twice") && !message.contains("no winner"),
+        "{message}"
+    );
+    let _ = std::fs::remove_file(&src);
+}
+
 /// A MUTABLE TOP-LEVEL VALUE MUST WRITE ITS TYPE, and the GRAMMAR is the
 /// authority: `variables.tex:22-27` gives the untyped form as
 /// `VarImmutableMods? BindIdOrBindIdTuple = Expr` -- immutable modifiers and

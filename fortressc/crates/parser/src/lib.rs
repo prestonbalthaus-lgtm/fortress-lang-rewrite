@@ -1496,6 +1496,41 @@ impl<'t, 'a> Parser<'t, 'a> {
         // Same intercept as at declaration level, and the library needs both:
         // `opr |self| : ZZ64` is a member of `trait Integral`, `opr COMPOSE`
         // is top level.
+        // `coerce(x: T)`. Parsed and RECORDED, never read -- see
+        // `Member::Coercion`. Only its shape is consumed here; nothing may
+        // depend on it until coercion has semantics.
+        if !accessor && !mutable && self.at(&Kind::Reserved("coerce")) {
+            let start = self.span_here();
+            self.pos += 1;
+            // A BALANCED PAREN RUN AND THEN THE REST OF THE LINE, rather than
+            // `params()` and `type_ref()`. Nothing reads what is in here, so
+            // depending on their contracts would buy an obligation and no
+            // information -- and `coerce(x: RR32) widens = ...` carries a
+            // modifier and a body that neither of them would consume.
+            let mut depth = 0usize;
+            while !self.at_eof() {
+                if self.at(&Kind::LParen) {
+                    depth += 1;
+                } else if self.at(&Kind::RParen) {
+                    depth -= 1;
+                    self.pos += 1;
+                    if depth == 0 {
+                        break;
+                    }
+                    continue;
+                } else if depth == 0 && self.at(&Kind::Newline) {
+                    break;
+                }
+                self.pos += 1;
+            }
+            while !self.at(&Kind::Newline) && !self.at_eof() && !self.at(&Kind::KwEnd) {
+                self.pos += 1;
+            }
+            let end = self.previous_span();
+            return Ok(Member::Coercion {
+                span: Span::new(start.start, end.end),
+            });
+        }
         if !accessor && !mutable && self.at(&Kind::Reserved("opr")) {
             return Ok(Member::Method(self.opr_member(modifiers)?));
         }
