@@ -512,7 +512,7 @@ impl<'t, 'a> Parser<'t, 'a> {
             | Kind::KwIf
             | Kind::KwDo
             | Kind::KwWhile
-            | Kind::Reserved("for" | "atomic") => RightContext::PrimaryFront,
+            | Kind::Reserved("for" | "atomic" | "spawn") => RightContext::PrimaryFront,
             Kind::Newline | Kind::Eof => RightContext::LineBreak,
             Kind::Comma
             | Kind::Semi
@@ -3489,6 +3489,10 @@ impl<'t, 'a> Parser<'t, 'a> {
             // identifier namespace, so it is intercepted here rather than
             // given a keyword token -- again, no lexer change.
             Kind::Reserved("atomic") => self.atomic_expr(),
+            // Same trade as `for` and `atomic`: intercepted here rather than
+            // given a keyword token, so no file in the corpus lexes
+            // differently.
+            Kind::Reserved("spawn") => self.spawn_expr(),
             // The same trade `for` and `atomic` take: intercepted here rather
             // than given a keyword token, so no file in the corpus lexes
             // differently. `of`, `with`, `most`, `largest` and `smallest` stay
@@ -4411,6 +4415,22 @@ impl<'t, 'a> Parser<'t, 'a> {
         let body = self.expr()?;
         let span = Span::new(start.start, body.span().end);
         Ok(Expr::Atomic {
+            body: Box::new(body),
+            span,
+        })
+    }
+
+    /// `spawn do ... end` and `spawn f(x)`. The corpus writes both --
+    /// `Spawn1.fss:17` and `Spawn5.fss:22` -- and both are one expression, so
+    /// there is nothing to separate here the way `atomic` separates its
+    /// `do`-group form.
+    fn spawn_expr(&mut self) -> Parsed<Expr> {
+        let start = self.span_here();
+        self.pos += 1;
+        self.skip_newlines();
+        let body = self.expr()?;
+        let span = Span::new(start.start, body.span().end);
+        Ok(Expr::Spawn {
             body: Box::new(body),
             span,
         })

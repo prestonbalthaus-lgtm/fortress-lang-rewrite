@@ -33,7 +33,7 @@ pub const MAX_INSTANTIATIONS: usize = 4096;
 /// Type constructors the language provides rather than the program. These keep
 /// their arguments through substitution; everything else with arguments is a
 /// user generic and gets mangled away.
-const BUILTIN_CONSTRUCTORS: [&str; 1] = ["Array"];
+use crate::types::BUILTIN_TYPE_CONSTRUCTORS as BUILTIN_CONSTRUCTORS;
 
 type Subst = BTreeMap<String, TypeRef>;
 
@@ -1010,6 +1010,14 @@ impl<'a> Expander<'a> {
                 span: *span,
             },
             Expr::Atomic { body, span } => Expr::Atomic {
+                body: Box::new(self.expr(body, subst)?),
+                span: *span,
+            },
+            // Substitution walks INTO a spawned body. It is ordinary code and a
+            // static parameter mentioned inside one has to be replaced like any
+            // other -- returning `e.clone()` here would leave the parameter
+            // standing in an expansion that is supposed to be ground.
+            Expr::Spawn { body, span } => Expr::Spawn {
                 body: Box::new(self.expr(body, subst)?),
                 span: *span,
             },

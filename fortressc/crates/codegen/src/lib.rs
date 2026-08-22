@@ -8,11 +8,12 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use fortress_types::{
-    ArithOp, AssignTarget, CompareOp, DispatchFn, DispatchNode, Elem, Target, Type, TypedBlockItem,
-    TypedCapture, TypedComponent, TypedExpr, TypedExprKind, TypedFn, TypedObject, TypedReduction,
-    TypedTypeCaseArm, ARRAY_ALLOC, ARRAY_ALLOC_N, ARRAY_LENGTH, ARRAY_SLOT, ARRAY_SLOT_N,
-    ASSERT_FAILED, ATOMIC_ENTER, ATOMIC_LEAVE, CASE_FAILED, DISPATCH_FAILED, ENV_ALLOC,
-    OBJECT_ALLOC, PARALLEL_FOR, REDUCTION_ALLOC, REDUCTION_WORKERS,
+    ArithOp, AssignTarget, CompareOp, DispatchFn, DispatchNode, Elem, Target, ThreadOp, Type,
+    TypedBlockItem, TypedCapture, TypedComponent, TypedExpr, TypedExprKind, TypedFn, TypedObject,
+    TypedReduction, TypedTypeCaseArm, ARRAY_ALLOC, ARRAY_ALLOC_N, ARRAY_LENGTH, ARRAY_SLOT,
+    ARRAY_SLOT_N, ASSERT_FAILED, ATOMIC_ENTER, ATOMIC_LEAVE, CASE_FAILED, DISPATCH_FAILED,
+    ENV_ALLOC, OBJECT_ALLOC, PARALLEL_FOR, REDUCTION_ALLOC, REDUCTION_WORKERS, SPAWN, THREAD_READY,
+    THREAD_STOP, THREAD_VAL, THREAD_WAIT,
 };
 use inkwell::attributes::AttributeLoc;
 use inkwell::basic_block::BasicBlock;
@@ -212,7 +213,14 @@ impl<'ctx> Lowering<'ctx> {
             // AN `i32` AND NOT AN `i1`: a `Char` is a Unicode scalar, so it
             // needs 21 bits and crosses to C as an `int` like `Boolean` does.
             Type::Char => Some(self.context.i32_type().into()),
-            Type::String | Type::Array(..) | Type::Object(_) | Type::Trait(_) => Some(self.ptr()),
+            // A THREAD HANDLE IS THE POINTER `fortress_spawn` RETURNED, so it
+            // sits with the other references and needs no representation of
+            // its own.
+            Type::String
+            | Type::Array(..)
+            | Type::Object(_)
+            | Type::Trait(_)
+            | Type::Thread(_) => Some(self.ptr()),
             Type::Void => None,
             // A TUPLE HAS NO REPRESENTATION IN THIS BACKEND, and `None` here
             // means "no storage" -- which is what `Void` means and is NOT what
@@ -434,6 +442,33 @@ impl<'ctx> Lowering<'ctx> {
                 ],
                 false,
             ),
+            Some(Linkage::External),
+        );
+        // The spawn queue. Declared unconditionally like the loop entry point
+        // above; a program with no `spawn` never calls them.
+        self.module.add_function(
+            SPAWN,
+            ptr.fn_type(&[ptr.into(), ptr.into()], false),
+            Some(Linkage::External),
+        );
+        self.module.add_function(
+            THREAD_VAL,
+            ptr.fn_type(&[ptr.into()], false),
+            Some(Linkage::External),
+        );
+        self.module.add_function(
+            THREAD_WAIT,
+            void.fn_type(&[ptr.into()], false),
+            Some(Linkage::External),
+        );
+        self.module.add_function(
+            THREAD_READY,
+            self.context.i32_type().fn_type(&[ptr.into()], false),
+            Some(Linkage::External),
+        );
+        self.module.add_function(
+            THREAD_STOP,
+            void.fn_type(&[ptr.into()], false),
             Some(Linkage::External),
         );
         self.module.add_function(
@@ -997,6 +1032,12 @@ impl<'ctx> Lowering<'ctx> {
                 })
                 .map(|()| None),
             TypedExprKind::Atomic { body } => self.atomic(body),
+            TypedExprKind::Spawn {
+                body,
+                captures,
+                symbol,
+            } => self.spawn(body, captures, symbol).map(Some),
+            TypedExprKind::ThreadOp { op, handle } => self.thread_op(*op, handle),
             TypedExprKind::TypeCase {
                 subject,
                 arms,
@@ -1486,6 +1527,194 @@ impl<'ctx> Lowering<'ctx> {
                     } if self.reductions.contains(name)
                 )
             })
+    }
+
+    /// `spawn e`. Builds the same environment a parallel loop builds, outlines
+    /// the body into `ptr symbol(ptr env)`, and hands both to the runtime.
+    ///
+    /// THE SIGNATURE DIFFERS FROM A LOOP BODY'S in both directions and each
+    /// difference is forced. There is no index and no worker number, because a
+    /// spawned body runs ONCE. And it RETURNS a value, because `val()` has to
+    /// have something to give back -- a loop body returns void and folds
+    /// through the reduction block instead.
+    ///
+    /// A NON-SCALAR RESULT IS RETURNED AS THE NULL POINTER rather than
+    /// materialised. `val()` on such a handle is refused in the checker, so
+    /// nothing can read it; emitting a real value would be dead code that still
+    /// had to be correct.
+    fn spawn(
+        &mut self,
+        body: &TypedExpr,
+        captures: &[TypedCapture],
+        symbol: &str,
+    ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+        let field_types: Vec<BasicTypeEnum<'ctx>> = captures
+            .iter()
+            .map(|c| {
+                if c.by_ref {
+                    return Ok(self.ptr());
+                }
+                self.basic_type(c.ty).ok_or_else(|| {
+                    CodegenError::internal("a captured value has no type".to_owned())
+                })
+            })
+            .collect::<Result<_, _>>()?;
+        let env_type = self.context.struct_type(&field_types, false);
+
+        // Scanned, exactly as a loop environment is: a capture may be a String
+        // or an Array and the collector has to see through the environment to
+        // it while the spawned thread is still using it.
+        let env = if field_types.is_empty() {
+            self.ptr_type().const_null()
+        } else {
+            let size = env_type.size_of().ok_or_else(|| {
+                CodegenError::internal("the spawn environment has no size".to_owned())
+            })?;
+            let raw = self
+                .call_runtime(ENV_ALLOC, &[size.into()], true)?
+                .ok_or_else(|| CodegenError::internal("no environment returned".to_owned()))?;
+            let pointer = raw.into_pointer_value();
+            for (index, capture) in captures.iter().enumerate() {
+                let value = if capture.by_ref {
+                    self.address_of(&capture.name)?.into()
+                } else {
+                    self.load_name(&capture.name)?
+                };
+                let slot = self
+                    .builder
+                    .build_struct_gep(env_type, pointer, index as u32, "spawn.slot")
+                    .map_err(CodegenError::from_builder)?;
+                self.builder
+                    .build_store(slot, value)
+                    .map_err(CodegenError::from_builder)?;
+            }
+            pointer
+        };
+
+        let outlined = self.declare_spawn_body(symbol);
+        self.define_spawn_body(outlined, body, captures, env_type)?;
+
+        self.call_runtime(
+            SPAWN,
+            &[
+                outlined.as_global_value().as_pointer_value().into(),
+                env.into(),
+            ],
+            true,
+        )?
+        .ok_or_else(|| CodegenError::internal("spawn returned no handle".to_owned()))
+    }
+
+    fn declare_spawn_body(&mut self, symbol: &str) -> FunctionValue<'ctx> {
+        if let Some(existing) = self.functions.get(symbol) {
+            return *existing;
+        }
+        let ty = self.ptr_type().fn_type(&[self.ptr().into()], false);
+        let function = self.module.add_function(symbol, ty, None);
+        self.functions.insert(symbol.to_owned(), function);
+        function
+    }
+
+    /// The builder is parked and restored, as `define_loop_body` does: the
+    /// caller is in the middle of emitting the function the `spawn` appears in.
+    fn define_spawn_body(
+        &mut self,
+        function: FunctionValue<'ctx>,
+        body: &TypedExpr,
+        captures: &[TypedCapture],
+        env_type: inkwell::types::StructType<'ctx>,
+    ) -> Result<(), CodegenError> {
+        let resume = self.builder.get_insert_block();
+        let saved = std::mem::take(&mut self.scopes);
+        let saved_reductions = std::mem::take(&mut self.reductions);
+
+        let entry = self.context.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry);
+
+        let env = function
+            .get_nth_param(0)
+            .ok_or_else(|| {
+                CodegenError::internal("the spawned body has no environment".to_owned())
+            })?
+            .into_pointer_value();
+
+        let mut scope: HashMap<String, Slot<'ctx>> = HashMap::new();
+        for (position, capture) in captures.iter().enumerate() {
+            let ty = self
+                .basic_type(capture.ty)
+                .ok_or_else(|| CodegenError::internal("a captured value has no type".to_owned()))?;
+            let field = self
+                .builder
+                .build_struct_gep(env_type, env, position as u32, "spawn.read")
+                .map_err(CodegenError::from_builder)?;
+            let slot = if capture.by_ref {
+                // The field holds the SPAWNING FRAME's `alloca`. Unlike a loop
+                // there is no join barrier guaranteeing that frame outlives the
+                // use -- `stop()` is abandon. Every Spawn corpus file joins or
+                // completes before returning; a program that does not is a
+                // named hazard, recorded on `Checker::spawn`.
+                let pointer = self
+                    .builder
+                    .build_load(self.ptr(), field, &capture.name)
+                    .map_err(CodegenError::from_builder)?
+                    .into_pointer_value();
+                Slot::Cell { pointer, ty }
+            } else {
+                let value = self
+                    .builder
+                    .build_load(ty, field, &capture.name)
+                    .map_err(CodegenError::from_builder)?;
+                Slot::Value(value)
+            };
+            scope.insert(capture.name.clone(), slot);
+        }
+        self.scopes.push(scope);
+
+        let value = self.expr(body)?;
+        let returned: BasicValueEnum<'ctx> = match value {
+            // A scalar is widened to pointer width and handed back through the
+            // handle. `val()` narrows it again; the checker has already refused
+            // every case where the two would disagree.
+            Some(v) if v.is_int_value() => self
+                .builder
+                .build_int_z_extend(v.into_int_value(), self.context.i64_type(), "spawn.ret")
+                .map_err(CodegenError::from_builder)?
+                .const_to_pointer(self.ptr_type())
+                .into(),
+            Some(v) if v.is_pointer_value() => v,
+            _ => self.ptr_type().const_null().into(),
+        };
+        self.builder
+            .build_return(Some(&returned))
+            .map_err(CodegenError::from_builder)?;
+
+        self.scopes = saved;
+        self.reductions = saved_reductions;
+        if let Some(block) = resume {
+            self.builder.position_at_end(block);
+        }
+        Ok(())
+    }
+
+    /// One of the four handle methods. Each is a direct call on the pointer the
+    /// spawn returned; a trait has no run-time representation here and neither
+    /// does a thread.
+    fn thread_op(
+        &mut self,
+        op: ThreadOp,
+        handle: &TypedExpr,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, CodegenError> {
+        let value = self
+            .expr(handle)?
+            .ok_or_else(|| CodegenError::internal("a thread handle has no value".to_owned()))?;
+        let symbol = match op {
+            ThreadOp::Wait => THREAD_WAIT,
+            ThreadOp::Val => THREAD_VAL,
+            ThreadOp::Ready => THREAD_READY,
+            ThreadOp::Stop => THREAD_STOP,
+        };
+        let returns = matches!(op, ThreadOp::Val | ThreadOp::Ready);
+        self.call_runtime(symbol, &[value], returns)
     }
 
     fn declare_loop_body(&mut self, symbol: &str) -> FunctionValue<'ctx> {

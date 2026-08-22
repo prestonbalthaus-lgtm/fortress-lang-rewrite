@@ -485,6 +485,18 @@ pub enum TypeError {
         name: String,
         cells: usize,
     },
+    /// `atomic (spawn ...)`. A RULE and not a gap -- spawn.tex:28-31 forbids
+    /// it, and `ProjectFortress/compiler_tests/Compiled1.am.fss:15` carries the
+    /// prohibition as a source comment.
+    SpawnInsideAtomic {
+        span: Span,
+    },
+    /// `val()` on a handle whose body produced no scalar. It needs a boxed
+    /// representation this backend does not have.
+    ThreadValueNotRepresentable {
+        span: Span,
+        result: Type,
+    },
     /// `assert(a, b)` on values `=` is not defined for. An assert is exactly
     /// as strong as equality is, and no stronger.
     NotComparable {
@@ -767,6 +779,8 @@ impl TypeError {
             | Self::ApiDeclarationHasBody { span, .. }
             | Self::MissingBody { span, .. }
             | Self::TraitCycle { span, .. }
+            | Self::SpawnInsideAtomic { span }
+            | Self::ThreadValueNotRepresentable { span, .. }
             | Self::NotATrait { span, .. }
             | Self::UnknownField { span, .. }
             | Self::DottedMethodUnsupported { span, .. }
@@ -1346,6 +1360,17 @@ impl core::fmt::Display for TypeError {
             Self::ParallelFormUnsupported { form, .. } => write!(
                 f,
                 "{form} is parsed but not implemented in parallel loops"
+            ),
+            Self::SpawnInsideAtomic { .. } => write!(
+                f,
+                "`spawn` may not appear inside an `atomic` region -- the \
+                 spawned thread would block on the lock its parent holds"
+            ),
+            Self::ThreadValueNotRepresentable { result, .. } => write!(
+                f,
+                "`val()` cannot return `{}`; a thread's value has to be a \
+                 scalar in this subset",
+                result.name()
             ),
             Self::NotComparable { found, .. } => write!(
                 f,

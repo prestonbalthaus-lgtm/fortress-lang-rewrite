@@ -53,6 +53,26 @@ impl Registry {
         if sub == sup {
             return true;
         }
+        // A THREAD HANDLE IS COVARIANT TO `Any` AND NOWHERE ELSE, which is the
+        // narrowest rule that types the corpus. Every Spawn file declares
+        // `Thread[\Any\]` and spawns a body of some other type -- `()` in
+        // Spawn1/2/3 -- so without this the declaration and the initializer
+        // never agree.
+        //
+        // COVARIANCE IS SOUND HERE ONLY BECAUSE THE HANDLE IS READ-ONLY:
+        // `val()` is the sole reader and it is REFUSED on a `Thread[\Any\]`,
+        // because `Any` is a trait, a trait-typed value is a pointer to a
+        // tagged object, and a body returning a `ZZ32` produces no tag. So
+        // nothing can observe the widened element at all. Widening this to
+        // general covariance needs that refusal revisited first.
+        //
+        // IT SITS ABOVE THE TRAIT GUARD BECAUSE THE SUPERTYPE IS NOT A TRAIT.
+        // Written below it the arm is unreachable -- `sup` is a `Thread`, the
+        // guard returns false, and the rule silently does nothing. It did
+        // exactly that for one build.
+        if let (Type::Thread(_), Type::Thread(want)) = (sub, sup) {
+            return matches!(*want, Type::Trait("Any"));
+        }
         let Type::Trait(wanted) = sup else {
             return false;
         };
@@ -227,6 +247,24 @@ impl Registry {
                     name: inner.name().to_owned(),
                 }
             });
+        }
+        // `Thread[\T\]` is written like a declared generic and resolved like a
+        // builtin, exactly as `Array[\T\]` above is. The argument is the
+        // body's RESULT type, and `Any` is what the whole corpus writes there.
+        debug_assert!(
+            crate::types::BUILTIN_TYPE_CONSTRUCTORS.contains(&"Thread"),
+            "a builtin constructor the registry builds must also be one expansion lets through"
+        );
+        if name == "Thread" {
+            let [argument] = args.as_slice() else {
+                return Err(TypeError::UnsupportedElementType {
+                    span,
+                    name: "Thread".to_owned(),
+                });
+            };
+            return Ok(Type::Thread(crate::types::intern_type(
+                self.resolve(argument)?,
+            )));
         }
         // Anything else carrying static arguments here means a generic survived
         // expansion, which cannot happen: `check` runs `expand` first.

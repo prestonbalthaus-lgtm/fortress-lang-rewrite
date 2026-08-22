@@ -866,6 +866,9 @@ impl Pass {
             }
             Expr::Instantiate { callee, .. } => self.rewrite_expr(callee, scope),
             Expr::Atomic { body, .. } => self.rewrite_expr(body, scope),
+            // A spawned body is ordinary code: a named function passed as an
+            // argument inside one is rewritten exactly as it would be outside.
+            Expr::Spawn { body, .. } => self.rewrite_expr(body, scope),
             Expr::Case {
                 subject,
                 arms,
@@ -1183,6 +1186,11 @@ fn free_names(e: &Expr, bound: &mut Vec<BTreeSet<String>>, out: &mut BTreeSet<St
         }
         Expr::Instantiate { callee, .. } => free_names(callee, bound, out),
         Expr::Atomic { body, .. } => free_names(body, bound, out),
+        // EVERY FREE NAME OF A SPAWNED BODY IS A CAPTURE, which is the whole
+        // reason this arm is not a no-op: the body becomes an outlined
+        // function and anything it reads from the enclosing scope has to
+        // travel in the environment.
+        Expr::Spawn { body, .. } => free_names(body, bound, out),
         Expr::Case {
             subject,
             arms,

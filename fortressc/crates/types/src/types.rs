@@ -42,6 +42,22 @@ pub fn intern_types(types: &[Type]) -> &'static [Type] {
     leaked
 }
 
+/// One [`Type`], promoted to `'static` so that `Thread[\T\]` can carry its
+/// result type and [`Type`] can stay `Copy` -- the same trick `intern_types`
+/// plays for a tuple, for the same reason.
+#[must_use]
+pub fn intern_type(ty: Type) -> &'static Type {
+    static TABLE: LazyLock<Mutex<HashSet<&'static Type>>> =
+        LazyLock::new(|| Mutex::new(HashSet::new()));
+    let mut table = TABLE.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some(found) = table.get(&ty) {
+        return found;
+    }
+    let leaked: &'static Type = Box::leak(Box::new(ty));
+    table.insert(leaked);
+    leaked
+}
+
 /// What an array holds. A separate enum from [`Type`] so that [`Type`] stays
 /// `Copy` without boxing, and so that "array of array" is unrepresentable
 /// rather than merely rejected.
@@ -83,6 +99,7 @@ impl Elem {
             | Type::Array(..)
             | Type::Object(_)
             | Type::Trait(_)
+            | Type::Thread(_)
             | Type::Tuple(_) => None,
         }
     }
@@ -124,6 +141,18 @@ impl Elem {
 /// and resolved like a builtin. `Any` and `Object` are here because
 /// `Checker::new` seeds them as root traits; they come out together on the day
 /// import resolution can supply them from `LibraryBuiltin/AnyType.fss`.
+/// The builtin type names that take STATIC ARGUMENTS, and the ONE list that
+/// says so. `Array[\T\]` and `Thread[\T\]` are written like a declared
+/// generic and resolved like a builtin, so two passes have to agree about them:
+/// `mono`'s expansion, which must let one through instead of demanding a
+/// template, and `Registry::resolve`, which must build the type.
+///
+/// IT IS ONE LIST BECAUSE THE LAST TIME THERE WERE FOUR THEY DISAGREED -- see
+/// `BUILTIN_TYPE_NAMES` below. `mono` carried its own `["Array"]`, and adding
+/// `Thread` to the registry alone made `Thread[\Any\]` resolve nowhere: it
+/// died in expansion as `unknown type Thread`, before the registry ran.
+pub const BUILTIN_TYPE_CONSTRUCTORS: [&str; 2] = ["Array", "Thread"];
+
 pub(crate) const BUILTIN_TYPE_NAMES: [&str; 9] = [
     "ZZ32", "ZZ64", "RR64", "Boolean", "String", "Array", "Any", "Object", "Char",
 ];
@@ -171,6 +200,15 @@ pub enum Type {
     /// a pointer to some concrete object, and its membership is a compile time
     /// fact about that object's tag.
     Trait(&'static str),
+    /// `spawn e`'s handle, carrying the RESULT type of the body. A pointer at
+    /// run time -- the `FortressThread` block `fortress_spawn` returns -- so it
+    /// needs no more representation than an object does.
+    ///
+    /// THE RESULT TYPE IS IN THE TYPE because `val()` has to return something,
+    /// and the corpus writes `Thread[\Any\]` while the body's real type is
+    /// what `val()` must give back: `Spawn5.fss:22-23` declares
+    /// `ft: Thread[\Any\]` and then asserts `ft.val()` equals `10`.
+    Thread(&'static Type),
     /// Two or more element types, interned. SPIKE-COMPOSITE-TYPE's landing.
     ///
     /// UNCONSTRUCTABLE ON PURPOSE, AND THAT IS THE WHOLE POINT OF LANDING IT
@@ -226,6 +264,7 @@ impl Type {
                 intern(&format!("Array{rank}[\\{}\\]", elem.as_type().name()))
             }
             Self::Object(name) | Self::Trait(name) => name,
+            Self::Thread(result) => intern(&format!("Thread[\\{}\\]", result.name())),
             Self::Tuple(elems) => {
                 let inner: Vec<&str> = elems.iter().map(|t| t.name()).collect();
                 intern(&format!("({})", inner.join(", ")))
@@ -257,6 +296,7 @@ impl Type {
             // the same argument the tuple variant's `name` makes.
             Self::Array(elem, rank) => intern(&format!("array{rank}_{}", elem.symbol())),
             Self::Object(name) | Self::Trait(name) => name,
+            Self::Thread(result) => intern(&format!("thread_{}", result.symbol())),
             Self::Tuple(elems) => {
                 let inner: Vec<&str> = elems.iter().map(|t| t.symbol()).collect();
                 intern(&format!("tuple_{}", inner.join("_")))
@@ -276,8 +316,11 @@ impl Type {
     }
 
     #[must_use]
+    /// A THREAD HANDLE IS A REFERENCE. It is the pointer `fortress_spawn`
+    /// returned, so everything that asks this question about storage and
+    /// passing gets the same answer it gives an object.
     pub const fn is_reference(self) -> bool {
-        matches!(self, Self::Object(_) | Self::Trait(_))
+        matches!(self, Self::Object(_) | Self::Trait(_) | Self::Thread(_))
     }
 
     /// Whether the runtime has a per-scalar shim for this type: `println_x`,
@@ -447,6 +490,11 @@ pub const CASE_FAILED: &str = "fortress_case_failed";
 /// environment is SCANNED: a capture may be a String or an Array, and the
 /// collector has to see through the environment to it while a worker holds it.
 pub const PARALLEL_FOR: &str = "fortress_parallel_for";
+pub const SPAWN: &str = "fortress_spawn";
+pub const THREAD_VAL: &str = "fortress_thread_val";
+pub const THREAD_WAIT: &str = "fortress_thread_wait";
+pub const THREAD_READY: &str = "fortress_thread_ready";
+pub const THREAD_STOP: &str = "fortress_thread_stop";
 pub const ENV_ALLOC: &str = "fortress_env_alloc";
 
 /// `atomic`. One process-wide recursive mutex, and the pair also hands the
@@ -761,6 +809,19 @@ pub enum TypedExprKind {
     Atomic {
         body: Box<TypedExpr>,
     },
+    /// `spawn e`. The body is OUTLINED, exactly as a parallel loop body is, and
+    /// `captures` is the environment it travels with. Evaluates to the handle
+    /// `fortress_spawn` returns.
+    Spawn {
+        body: Box<TypedExpr>,
+        captures: Vec<TypedCapture>,
+        symbol: String,
+    },
+    /// One of the four methods a `Thread[\T\]` handle answers.
+    ThreadOp {
+        op: ThreadOp,
+        handle: Box<TypedExpr>,
+    },
     /// The one instance of a singleton object.
     Singleton {
         name: &'static str,
@@ -833,7 +894,26 @@ pub enum TypedBlockItem {
     Expr(TypedExpr),
 }
 
-/// A value an outlined loop body reads or writes from the enclosing scope.
+/// What a `Thread[\T\]` handle can be asked. Four, and no more: 1.0's
+/// `Thread` trait is larger, and every other member is refused by name rather
+/// than approximated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThreadOp {
+    /// Join, discarding the value.
+    Wait,
+    /// Join and return the body's value.
+    Val,
+    /// Has it finished? Never blocks.
+    Ready,
+    /// ABANDON. A named deviation from 1.0, which is closer to cancellation --
+    /// real cancellation needs a safe point in generated code, and a
+    /// `pthread_cancel` at an arbitrary instruction can end a thread holding
+    /// the process-wide atomic mutex.
+    Stop,
+}
+
+/// A value an outlined loop or spawned body reads or writes from the
+/// enclosing scope.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypedCapture {
     pub name: String,

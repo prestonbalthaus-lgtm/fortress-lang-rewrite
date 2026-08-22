@@ -237,12 +237,12 @@ fn a_newline_before_the_equals_means_it_is_not_a_binding() {
 
 #[test]
 fn a_reserved_word_is_rejected_by_name() {
-    // Was `atomic` until M5 implemented it. `for` and `atomic` are both still
-    // in the lexer's reserved list -- that is what keeps them out of the
-    // identifier namespace -- and the parser intercepts them by name before
-    // this arm is reached.
-    match expr_error("spawn") {
-        ParseError::ReservedWord { word, .. } => assert_eq!(word, "spawn"),
+    // Was `atomic` until M5 implemented it and `spawn` until M6 did. All three
+    // are still in the lexer's reserved list -- that is what keeps them out of
+    // the identifier namespace -- and the parser intercepts each by name before
+    // this arm is reached, so this test needs a word nothing intercepts yet.
+    match expr_error("throw") {
+        ParseError::ReservedWord { word, .. } => assert_eq!(word, "throw"),
         other => panic!("expected a reserved word error, got {other:?}"),
     }
 }

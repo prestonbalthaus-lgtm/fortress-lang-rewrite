@@ -842,6 +842,16 @@ pub enum Expr {
         body: Box<Expr>,
         span: Span,
     },
+    /// `spawn do ... end`, and `spawn f(x)`. Evaluates to a `Thread[\T\]`
+    /// handle for a body of type `T`, running on the runtime's spawn queue.
+    ///
+    /// THE BODY IS AN EXPRESSION AND NOT A BLOCK, because the corpus writes
+    /// both: `Spawn1.fss:17` spawns `do x:=1 end` and `Spawn5.fss:22` spawns
+    /// `(makeWork(10))`.
+    Spawn {
+        body: Box<Expr>,
+        span: Span,
+    },
     /// `case subject of guard => e ... else => e end`. The subject is evaluated
     /// ONCE -- the checker binds it before the chain -- because a guard chain
     /// that re-evaluates it runs its side effects once per arm.
@@ -1030,6 +1040,7 @@ impl Expr {
             | Self::Index { span, .. }
             | Self::While { span, .. }
             | Self::Field { span, .. }
+            | Self::Spawn { span, .. }
             | Self::For { span, .. }
             | Self::Atomic { span, .. }
             | Self::Case { span, .. }

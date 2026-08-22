@@ -24,12 +24,13 @@ pub use mono::{expand, mangle_static, Uniformity, MAX_INSTANTIATIONS};
 
 pub use error::TypeError;
 pub use types::{
-    intern, intern_types, ArithOp, AssignTarget, CompareOp, DispatchFn, DispatchNode, Elem, MpiOp,
-    Target, Type, TypedBlockItem, TypedCapture, TypedComponent, TypedExpr, TypedExprKind,
-    TypedField, TypedFn, TypedObject, TypedParam, TypedReduction, TypedTypeCaseArm, ARRAY_ALLOC,
-    ARRAY_ALLOC_N, ARRAY_LENGTH, ARRAY_SLOT, ARRAY_SLOT_N, ASSERT_FAILED, ATOMIC_ENTER,
-    ATOMIC_LEAVE, CASE_FAILED, DISPATCH_FAILED, ENV_ALLOC, FIRST_TAG, OBJECT_ALLOC, PARALLEL_FOR,
-    REDUCTION_ALLOC, REDUCTION_WORKERS,
+    intern, intern_type, intern_types, ArithOp, AssignTarget, CompareOp, DispatchFn, DispatchNode,
+    Elem, MpiOp, Target, ThreadOp, Type, TypedBlockItem, TypedCapture, TypedComponent, TypedExpr,
+    TypedExprKind, TypedField, TypedFn, TypedObject, TypedParam, TypedReduction, TypedTypeCaseArm,
+    ARRAY_ALLOC, ARRAY_ALLOC_N, ARRAY_LENGTH, ARRAY_SLOT, ARRAY_SLOT_N, ASSERT_FAILED,
+    ATOMIC_ENTER, ATOMIC_LEAVE, CASE_FAILED, DISPATCH_FAILED, ENV_ALLOC, FIRST_TAG, OBJECT_ALLOC,
+    PARALLEL_FOR, REDUCTION_ALLOC, REDUCTION_WORKERS, SPAWN, THREAD_READY, THREAD_STOP, THREAD_VAL,
+    THREAD_WAIT,
 };
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -1939,6 +1940,18 @@ impl Checker {
         dot_span: Span,
         expected: Option<Type>,
     ) -> Checked<TypedExpr> {
+        // A THREAD HANDLE ANSWERS BEFORE THE DECLARED TABLE IS CONSULTED. It
+        // is not an object, so `self.methods` holds nothing for it, and a
+        // program that also declares a method called `wait` must not capture
+        // `pt.wait()`.
+        if let Type::Thread(result) = receiver.ty {
+            let found =
+                self.thread_method(receiver, *result, name, args, (span, dot_span), expected)?;
+            if let Some(typed) = found {
+                return Ok(typed);
+            }
+            unreachable!("thread_method returns Some or an error");
+        }
         let Some(all) = self.methods.get(name) else {
             return Err(TypeError::DottedMethodUnsupported {
                 span: dot_span,
@@ -2091,6 +2104,177 @@ impl Checker {
         })
     }
 
+    /// `spawn e`. The body is OUTLINED exactly as a parallel loop body is --
+    /// same `LoopCtx`, same capture collection, same environment -- because it
+    /// becomes a function some other thread calls and everything it reads from
+    /// the enclosing scope has to travel there.
+    ///
+    /// IT BORROWS THE LOOP CONTEXT WITH `parallel: false`, and that is a
+    /// decision rather than convenience. The parallel-escape rule refuses a
+    /// write to shared storage from a loop body because ITERATIONS race with
+    /// each other. A spawned body is ONE execution, so it races with the
+    /// PARENT and not with itself -- and racing with the parent is the entire
+    /// point: `Spawn1.fss` spawns `do x:=1 end` and asserts the parent sees it.
+    /// Applying the loop rule here would refuse every Spawn file in the corpus.
+    /// `atomic` is how a program orders those writes, and `Spawn2.fss` writes
+    /// exactly that.
+    ///
+    /// `spawn` INSIDE `atomic` IS REFUSED BY NAME -- spawn.tex:28-31. The
+    /// runtime's atomic mutex is process-wide and recursive, so recursion
+    /// rescues re-entry by the same thread and a spawned child is a different
+    /// thread: it would block on a mutex the parent holds until the parent
+    /// leaves the region, and a parent that waits inside the region deadlocks.
+    ///
+    /// A BY-REFERENCE CAPTURE OUTLIVES ITS SAFETY ARGUMENT HERE, and this is a
+    /// NAMED HAZARD. `TypedCapture::by_ref` is safe for a loop because
+    /// `fortress_parallel_for` blocks before returning, so the caller's stack
+    /// slot outlives every use. A spawned body has no such barrier: `stop()`
+    /// is abandon, so a program that spawns, abandons and returns leaves a
+    /// running thread writing through pointers into a dead frame. All six
+    /// Spawn corpus files join or complete before returning. Measured, not
+    /// assumed -- the C harness hit exactly this by leaking one task, and it
+    /// cost a hang to find.
+    fn spawn(&mut self, body: &Expr, span: Span, expected: Option<Type>) -> Checked<TypedExpr> {
+        if self.atomic_depth > 0 {
+            return Err(TypeError::SpawnInsideAtomic { span });
+        }
+        self.scopes.push(HashMap::new());
+        self.loop_ctx.push(LoopCtx {
+            binder: String::new(),
+            parallel: false,
+            floor: self.scopes.len() - 1,
+            captures: BTreeMap::new(),
+            assigned: BTreeMap::new(),
+            tainted: BTreeSet::new(),
+        });
+        let checked = self.expr(body, None);
+        let ctx = self.loop_ctx.pop();
+        self.scopes.pop();
+        let body_typed = checked?;
+        let Some(ctx) = ctx else {
+            return Err(TypeError::ParallelFormUnsupported {
+                span,
+                form: "a spawned body",
+            });
+        };
+
+        // A MUTABLE IS CAPTURED BY REFERENCE EVEN IF THE BODY ONLY READS IT,
+        // and this is where spawn parts company with the loop.
+        //
+        // A parallel loop captures a read-only name BY VALUE, and that is safe
+        // there because the loop refuses writes to shared storage, so nothing
+        // can change the value while the body runs. A SPAWNED BODY RUNS
+        // ALONGSIDE THE PARENT, which can change anything at any time -- and
+        // `Spawn3.fss:19` is exactly that program: the child spins on
+        // `while (x = 0)` and the PARENT stores `x := 1` at :20. Captured by
+        // value the child spins on a snapshot of 0 for ever, which is a HANG
+        // and not a wrong answer. Measured: it hung.
+        //
+        // Immutable names stay by value. They cannot change, so a copy is the
+        // same value and one indirection cheaper.
+        let mut captures: Vec<TypedCapture> = ctx
+            .captures
+            .into_iter()
+            .map(|(name, ty)| TypedCapture {
+                by_ref: self.lookup(&name).is_some_and(|l| l.mutable),
+                name,
+                ty,
+            })
+            .collect();
+        // ANYTHING THE BODY ASSIGNS IS BY REFERENCE, promoted over a read-only
+        // capture of the same name. A copy has no store target -- that is the
+        // exit-70 internal error the loop path already names -- and the parent
+        // seeing the store is what every Spawn file asserts.
+        for (name, record) in ctx.assigned {
+            if let Some(found) = captures.iter_mut().find(|c| c.name == name) {
+                found.by_ref = true;
+            } else {
+                captures.push(TypedCapture {
+                    name,
+                    ty: record.ty,
+                    by_ref: true,
+                });
+            }
+        }
+        captures.sort_by(|a, b| a.name.cmp(&b.name));
+
+        self.loops += 1;
+        let symbol = format!("$spawn{}", self.loops);
+        let ty = Type::Thread(intern_type(body_typed.ty));
+        self.require(ty, expected, span)?;
+        Ok(TypedExpr {
+            kind: TypedExprKind::Spawn {
+                body: Box::new(body_typed),
+                captures,
+                symbol,
+            },
+            ty,
+            span,
+        })
+    }
+
+    /// The four methods a `Thread[\T\]` handle answers. They are intercepted
+    /// before the declared-method table because a handle is not an object and
+    /// has no declarations of its own -- the same position `length` on an array
+    /// is in.
+    ///
+    /// `val()` ON `Thread[\Any\]` IS REFUSED BY NAME. `Any` is a trait, a
+    /// trait-typed value is a pointer to some tagged object, and a body
+    /// returning a `ZZ32` produces no tag -- so returning `Any` here would be a
+    /// wrong answer rather than a coarse one. It needs boxing, which this
+    /// backend does not have. `Spawn5.fss` is the file that wants it and it is
+    /// independently blocked; see the milestone doc.
+    fn thread_method(
+        &mut self,
+        receiver: TypedExpr,
+        result: Type,
+        name: &str,
+        args: &[Expr],
+        at: (Span, Span),
+        expected: Option<Type>,
+    ) -> Checked<Option<TypedExpr>> {
+        let (span, dot_span) = at;
+        let op = match name {
+            "wait" => ThreadOp::Wait,
+            "val" => ThreadOp::Val,
+            "ready" => ThreadOp::Ready,
+            "stop" => ThreadOp::Stop,
+            _ => {
+                return Err(TypeError::DottedMethodUnsupported {
+                    span: dot_span,
+                    name: name.to_owned(),
+                })
+            }
+        };
+        if !args.is_empty() {
+            return Err(TypeError::ArityMismatch {
+                span,
+                name: name.to_owned(),
+                expected: 0,
+                found: args.len(),
+            });
+        }
+        let ty = match op {
+            ThreadOp::Wait | ThreadOp::Stop => Type::Void,
+            ThreadOp::Ready => Type::Boolean,
+            ThreadOp::Val => {
+                if result.is_reference() || result == Type::Void {
+                    return Err(TypeError::ThreadValueNotRepresentable { span, result });
+                }
+                result
+            }
+        };
+        self.require(ty, expected, span)?;
+        Ok(Some(TypedExpr {
+            kind: TypedExprKind::ThreadOp {
+                op,
+                handle: Box::new(receiver),
+            },
+            ty,
+            span,
+        }))
+    }
+
     fn declare(&mut self, name: String, ty: Type, mutable: bool) {
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(name, Local { ty, mutable });
@@ -2200,6 +2384,7 @@ impl Checker {
                 expected,
             ),
             Expr::Atomic { body, span } => self.atomic(body, *span, expected),
+            Expr::Spawn { body, span } => self.spawn(body, *span, expected),
             Expr::Case {
                 subject,
                 arms,
@@ -2855,6 +3040,7 @@ impl Checker {
             }
             Expr::Instantiate { callee, .. } => self.reads_shared(callee, floor),
             Expr::Atomic { body, .. } => self.reads_shared(body, floor),
+            Expr::Spawn { body, .. } => self.reads_shared(body, floor),
             Expr::Case {
                 subject,
                 arms,
