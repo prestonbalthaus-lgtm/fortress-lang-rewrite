@@ -1236,6 +1236,12 @@ impl Checker {
     /// component expansion produced -- so they are settled here, before a single
     /// body is checked.
     fn discharge_bounds(&mut self, component: &Component) -> Checked<()> {
+        // Collected rather than acted on in the loop: a member is pruned only
+        // when a SIBLING survives. If every member of the set fails its bound
+        // there is nothing the call could have meant, and pruning them all
+        // turns a clean `Green does not satisfy T extends Red` into a dispatch
+        // failure that reads `takes 1 argument(s), found 1`.
+        let mut pruned_members: HashMap<String, Vec<(Span, Option<TypeError>)>> = HashMap::new();
         for obligation in &component.bounds {
             let resolved = self
                 .registry
@@ -1261,11 +1267,60 @@ impl Checker {
                 self.prune_stamp(owner, method);
                 continue;
             }
+            // AN OVERLOAD SET'S MEMBERS ARE ALL INSTANTIATED AT THE SAME
+            // ARGUMENTS, because expansion has no types and cannot know which
+            // member a call meant. A member whose bound does not hold at these
+            // arguments is not a member the call can have meant, so it leaves
+            // the language rather than refusing the program -- the same answer
+            // `prune_stamp` gives an over-approximated method stamp. If EVERY
+            // member goes, the call fails M3c's exactly-one-winner check, which
+            // is the closed-world answer.
+            if let Some((name, member)) = &obligation.overload_member {
+                pruned_members
+                    .entry(name.clone())
+                    .or_default()
+                    .push((*member, failure));
+                continue;
+            }
             if let Some(e) = failure {
                 return Err(e);
             }
         }
+        for (name, failures) in pruned_members {
+            let total = self.functions.get(&name).map_or(0, Vec::len);
+            let mut distinct: Vec<(usize, usize)> =
+                failures.iter().map(|(s, _)| (s.start, s.end)).collect();
+            distinct.sort_unstable();
+            distinct.dedup();
+            if total > 0 && distinct.len() >= total {
+                if let Some(e) = failures.into_iter().find_map(|(_, e)| e) {
+                    return Err(e);
+                }
+                continue;
+            }
+            for (member, _) in failures {
+                self.prune_overload_member(&name, member);
+            }
+        }
         Ok(())
+    }
+
+    /// Keyed by the MANGLED NAME AND the member's source span, and both halves
+    /// are load bearing. The span alone identifies the SOURCE declaration, which
+    /// every instantiation of it shares: pruning `f[\T extends Blue\]` because
+    /// it does not hold at `[\R\]` then also pruned it at `[\B\]`, where it
+    /// is the only valid target. A slot index would not do either -- it shifts
+    /// the moment one member fails to instantiate.
+    fn prune_overload_member(&mut self, name: &str, member: Span) {
+        let Some(set) = self.functions.get_mut(name) else {
+            return;
+        };
+        for signature in set.iter_mut() {
+            if signature.span == member {
+                signature.pruned = true;
+                signature.concrete = false;
+            }
+        }
     }
 
     fn prune_stamp(&mut self, owner: &str, method: &str) {

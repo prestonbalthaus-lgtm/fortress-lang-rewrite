@@ -297,6 +297,7 @@ impl<'a> Expander<'a> {
                 &subst,
                 request.span,
                 Some((template.owner_name.clone(), request.mangled.clone())),
+                None,
             )?;
             let built = MethodDecl {
                 // Copied, never re-defaulted: a monomorphized stamp that
@@ -375,7 +376,14 @@ impl<'a> Expander<'a> {
                         decl: (*template).clone(),
                     },
                 );
-                self.record_bounds(params, &subst, job.span, None)?;
+                // EVERY member of the set instantiates at these arguments, so
+                // every member's bound is recorded -- and only one of them can
+                // be the one the call meant. Carry the member's own span so a
+                // bound that does not hold prunes that member instead of
+                // refusing the program.
+                let member_span =
+                    (templates.len() > 1).then(|| (job.mangled.clone(), decl_span(template)));
+                self.record_bounds(params, &subst, job.span, None, member_span)?;
                 self.owner = Some(OwnerKey::Instance(job.mangled.clone(), member));
                 self.owner_name.clone_from(&job.mangled);
                 self.current_owner = Some((
@@ -480,6 +488,7 @@ impl<'a> Expander<'a> {
         subst: &Subst,
         span: Span,
         speculative: Option<(String, String)>,
+        overload_member: Option<(String, Span)>,
     ) -> Result<(), TypeError> {
         for param in params {
             let Some(subject) = subst.get(&param.name) else {
@@ -492,6 +501,7 @@ impl<'a> Expander<'a> {
                     bound,
                     parameter: param.name.clone(),
                     speculative: speculative.clone(),
+                    overload_member: overload_member.clone(),
                     span,
                 });
             }
@@ -1455,6 +1465,14 @@ fn static_params(decl: &Decl) -> &[StaticParam] {
         Decl::Function(f) => &f.static_params,
         Decl::Trait(t) => &t.static_params,
         Decl::Object(o) => &o.static_params,
+    }
+}
+
+fn decl_span(decl: &Decl) -> Span {
+    match decl {
+        Decl::Function(f) => f.span,
+        Decl::Trait(t) => t.span,
+        Decl::Object(o) => o.span,
     }
 }
 

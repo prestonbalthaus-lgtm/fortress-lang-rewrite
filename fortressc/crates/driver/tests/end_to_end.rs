@@ -2396,6 +2396,68 @@ fn calling_a_filed_growing_member_names_the_mechanism() {
     );
 }
 
+/// A BOUND WAS CHARGED TO THE WRONG MEMBER OF AN OVERLOAD SET, and it refused
+/// legal, uniformity-conformant code. Expansion instantiates EVERY member of a
+/// set at the same static arguments -- it has no types and cannot know which
+/// member a call meant -- and every member's bound was a HARD obligation. So
+/// `f[\R\](R)` against `f[\T extends Red\](x:T)` and
+/// `f[\T extends Blue\](x:T,y:ZZ32)` was charged BLUE's bound and refused.
+///
+/// A member whose bound does not hold at these arguments is not a member the
+/// call can have meant, so it is pruned -- the same answer `prune_stamp` gives
+/// an over-approximated method stamp. THE PRUNE IS KEYED BY (MANGLED NAME,
+/// SOURCE SPAN) AND BOTH HALVES ARE LOAD BEARING: the span alone identifies the
+/// source declaration, which every instantiation shares, so pruning Blue
+/// because it fails at `[\R\]` also pruned it at `[\B\]` where it is the
+/// only valid target. This fixture calls BOTH, which is what caught that.
+#[test]
+fn a_bound_is_charged_to_its_own_member_of_an_overload_set() {
+    let exe = std::env::temp_dir().join("fortress_overloadbound");
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture("overloadbound.fss"))
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .expect("could not run fortressc");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "must compile:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let ran = Command::new(&exe)
+        .output()
+        .expect("could not run the binary");
+    let stdout = String::from_utf8_lossy(&ran.stdout);
+    let _ = std::fs::remove_file(&exe);
+    assert_eq!(stdout, "1\n2\n", "each call must reach its own member");
+}
+
+/// AND WHEN NO MEMBER'S BOUND HOLDS, THE CLEAN DIAGNOSTIC SURVIVES. Pruning
+/// them all turns `Green does not satisfy T extends Red` into a dispatch
+/// failure reading `takes 1 argument(s), found 1`, which is nonsense. A member
+/// is pruned only when a SIBLING survives.
+#[test]
+fn every_member_failing_its_bound_is_still_a_bound_diagnostic() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture("overloadboundnone.fss"))
+        .arg("--emit-obj")
+        .arg("-o")
+        .arg("/dev/null")
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "must refuse:\n{message}");
+    assert!(
+        message.contains("does not satisfy"),
+        "the bound must still be named:\n{message}"
+    );
+    assert!(
+        !message.contains("argument(s), found"),
+        "an arity message is not the diagnostic:\n{message}"
+    );
+}
+
 /// A TRAIT OR OBJECT OVERLOAD SET WAS UNIFORMITY-CHECKED BY NOTHING.
 /// `check_uniformity` walked `Decl::Function` alone, so `trait Holder[\T\]`
 /// beside `trait Holder` compiled to EXIT 0 -- and expansion then met a set

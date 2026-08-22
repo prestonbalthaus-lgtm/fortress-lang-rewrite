@@ -612,6 +612,18 @@ pub struct BoundObligation {
     /// wrong, not that the program is. The checker prunes that stamp instead of
     /// refusing the component.
     pub speculative: Option<(String, String)>,
+    /// The SOURCE SPAN of the overload-set member this bound was written on,
+    /// when the set has more than one member. Expansion instantiates EVERY
+    /// member at the same static arguments -- it has no types and cannot know
+    /// which one a call meant -- so `f[\R\](R)` against
+    /// `f[\T extends Red\](x:T)` and `f[\T extends Blue\](x:T,y:ZZ32)` was
+    /// charged BLUE's bound and refused. A member whose bound does not hold at
+    /// these arguments is not a member the call can have meant; it is pruned,
+    /// exactly as an over-approximated method stamp is.
+    ///
+    /// `None` for a set of ONE, where there is no ambiguity about whose bound
+    /// it is and a failure is a genuine diagnostic.
+    pub overload_member: Option<(String, Span)>,
     pub span: Span,
 }
 

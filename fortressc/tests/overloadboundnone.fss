@@ -1,0 +1,11 @@
+component overloadboundnone
+export Executable
+trait Red end
+trait Blue end
+object Green end
+f[\T extends Red\](x: T): ZZ32 = 1
+f[\T extends Blue\](x: T, y: ZZ32): ZZ32 = 2
+run(): () = do
+  println(f[\Green\](Green))
+end
+end
