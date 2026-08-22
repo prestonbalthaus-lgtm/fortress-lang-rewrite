@@ -171,7 +171,17 @@ impl<'a> Token<'a> {
 
 /// The reserved words outside the implemented subset, sorted for binary
 /// search.
-pub(crate) const RESERVED: [&str; 66] = [
+///
+/// SEVEN OF THESE ARE THE UNIT OPERATORS -- `cubed`, `cubic`, `in`, `inverse`,
+/// `per`, `square`, `squared` (`dimensions.tex:32`, `:49-54`). Reserving them
+/// FIXED A LIVE WRONG ANSWER rather than merely reserving a name: with `in` an
+/// ordinary identifier, `println(x in nm)` over three `RR64` bindings was a
+/// three-way juxtaposition PRODUCT and printed `7.8`, at exit 0, with no
+/// diagnostic anywhere. Retroactive invalidation was measured before the
+/// reclassification, which is this project's own rule: ZERO of the 394 files
+/// that compile use any of the seven as a name, with comments and strings
+/// stripped.
+pub(crate) const RESERVED: [&str; 73] = [
     "BIG",
     "FORALL",
     "SI_unit",
@@ -190,6 +200,8 @@ pub(crate) const RESERVED: [&str; 66] = [
     "coerces",
     "contravariant",
     "covariant",
+    "cubed",
+    "cubic",
     "default",
     "dim",
     "dominates",
@@ -203,8 +215,10 @@ pub(crate) const RESERVED: [&str; 66] = [
     "grammar",
     "hidden",
     "idiom",
+    "in",
     "int",
     "invariant",
+    "inverse",
     "io",
     "label",
     "most",
@@ -214,6 +228,7 @@ pub(crate) const RESERVED: [&str; 66] = [
     "opr",
     "or",
     "override",
+    "per",
     "private",
     "property",
     "provided",
@@ -223,6 +238,8 @@ pub(crate) const RESERVED: [&str; 66] = [
     "requires",
     "settable",
     "spawn",
+    "square",
+    "squared",
     "static",
     "syntax",
     "test",

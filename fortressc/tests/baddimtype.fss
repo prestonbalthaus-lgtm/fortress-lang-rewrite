@@ -1,0 +1,8 @@
+component baddimtype
+export Executable
+dim Length SI_unit meter meters m_
+run() = do
+  x: Length = 3
+  println(x)
+end
+end

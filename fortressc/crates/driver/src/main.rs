@@ -334,6 +334,17 @@ fn compile(options: &Options) -> Result<(), Failure> {
             &e.notes(),
         ))
     })?;
+    // Dimensions and units are FILE LOCAL, so this reads the component and not
+    // the merged halves: an api's dimensions do not cross into an importer yet.
+    fortress_types::dimensions::check(component).map_err(|e| {
+        Failure::Diagnostic(render(
+            path,
+            &source,
+            Some(e.span()),
+            &e.to_string(),
+            &e.notes(),
+        ))
+    })?;
     fortress_types::comprises::check(own_decls, merged_decls, is_api_file, component.span)
         .map_err(|e| {
             Failure::Diagnostic(render(

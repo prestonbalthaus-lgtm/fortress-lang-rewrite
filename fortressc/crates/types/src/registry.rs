@@ -34,6 +34,11 @@ pub(crate) struct Registry {
     /// Declaration order. Tags follow it, and so do the arms of every switch,
     /// which is what keeps the emitted module deterministic.
     pub(crate) concrete: Vec<&'static str>,
+    /// The dimension and unit names this component declares. Read at exactly
+    /// one place, `resolve_name`, so that a dimension written where a type is
+    /// required says which of the two it is instead of `unknown type` -- which
+    /// would send the reader looking for a declaration that IS there.
+    pub(crate) dimensions: crate::dimensions::Dimensions,
 }
 
 impl Registry {
@@ -313,6 +318,13 @@ impl Registry {
                 }
                 if let Some((interned, _)) = self.objects.get_key_value(other) {
                     return Ok(Type::Object(interned));
+                }
+                if let Some(kind) = self.dimensions.describes(other) {
+                    return Err(TypeError::DimensionIsNotAType {
+                        span,
+                        name: name.to_owned(),
+                        kind,
+                    });
                 }
                 Err(TypeError::UnknownType {
                     span,

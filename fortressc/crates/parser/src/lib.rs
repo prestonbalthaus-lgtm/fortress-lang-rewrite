@@ -15,10 +15,10 @@ mod error;
 pub use error::ParseError;
 
 use fortress_ast::{
-    Assign, BinOp, Binding, BlockItem, CaseArm, Component, Decl, Expr, ExtentForm, ExtentRange,
-    FieldDecl, Fixity, FnDecl, ImportDecl, ImportItems, ImportedName, Member, MethodDecl,
-    Modifiers, ObjectDecl, Param, ShapeSpelling, Span, StaticExpr, StaticKind, StaticOp,
-    StaticParam, TraitDecl, TypeCaseArm, TypeRef, UnOp,
+    Assign, BinOp, Binding, BlockItem, CaseArm, Component, Decl, DimDecl, DimExpr, Expr,
+    ExtentForm, ExtentRange, FieldDecl, Fixity, FnDecl, ImportDecl, ImportItems, ImportedName,
+    Member, MethodDecl, Modifiers, ObjectDecl, Param, ShapeSpelling, Span, StaticExpr, StaticKind,
+    StaticOp, StaticParam, TraitDecl, TypeCaseArm, TypeRef, UnOp, UnitDecl,
 };
 use fortress_lexer::{Kind, Token};
 
@@ -587,8 +587,23 @@ impl<'t, 'a> Parser<'t, 'a> {
         }
 
         let mut decls = Vec::new();
+        let mut dims = Vec::new();
+        let mut units = Vec::new();
         while !self.at(&Kind::KwEnd) && !self.at_eof() {
-            decls.push(self.decl(is_api)?);
+            // A dimension declares no value and has no members, so it is taken
+            // out of the declaration stream here rather than made a `Decl`
+            // variant that thirty passes would have to answer "nothing" for.
+            // `defining-dimensions.tex:33-36` puts it at top level only, which
+            // is exactly what being parsed here and nowhere else means.
+            if self.at_reserved("dim") {
+                let (dim, unit) = self.dim_decl()?;
+                dims.push(dim);
+                units.extend(unit);
+            } else if self.at_reserved("unit") || self.at_reserved("SI_unit") {
+                units.push(self.unit_decl()?);
+            } else {
+                decls.push(self.decl(is_api)?);
+            }
             if self.at(&Kind::KwEnd) || self.at_eof() {
                 break;
             }
@@ -626,8 +641,228 @@ impl<'t, 'a> Parser<'t, 'a> {
             decls,
             bounds: Vec::new(),
             is_api,
+            dims,
+            units,
             span: Span::new(start.start, end.end),
         })
+    }
+
+    /// `OtherDecl.rats:29-33`, both `dim` productions. The first bundles a unit
+    /// declaration into the same line -- `dim Length SI_unit meter meters m_` --
+    /// and the reference implementation returns TWO nodes for it, which is why
+    /// this returns a pair.
+    fn dim_decl(&mut self) -> Parsed<(DimDecl, Option<UnitDecl>)> {
+        let start = self.span_here().start;
+        self.pos += 1;
+        let (name, name_span) = self.identifier("a dimension name")?;
+        let derivation = if self.at(&Kind::Eq) {
+            self.pos += 1;
+            // `Fortress.SIUnits.fss:31-32` breaks a definition across a line:
+            // `SI_unit newton newtons N_ =` then the product on the next. The
+            // reference grammar's `w` around the `=` allows it, and the run
+            // still ENDS at a newline because `at_dim_atom` does not admit one.
+            self.skip_newlines();
+            Some(self.dim_expr()?)
+        } else {
+            None
+        };
+        // `dim Mass default kilogram; SI_unit gram grams g_: Mass` -- the
+        // semicolon is an ordinary separator and the second half is a unit
+        // declaration in its own right, so only the unseparated form bundles.
+        if self.at_reserved("default") {
+            self.pos += 1;
+            let (unit, _) = self.identifier("a unit name")?;
+            return Ok((
+                DimDecl {
+                    name,
+                    derivation,
+                    default_unit: Some(unit),
+                    span: Span::new(start, self.previous_span().end),
+                },
+                None,
+            ));
+        }
+        let bundled = if self.at_reserved("unit") || self.at_reserved("SI_unit") {
+            Some(self.unit_decl_named_for(&name, name_span)?)
+        } else {
+            None
+        };
+        Ok((
+            DimDecl {
+                name,
+                derivation,
+                default_unit: None,
+                span: Span::new(start, self.previous_span().end),
+            },
+            bundled,
+        ))
+    }
+
+    fn unit_decl(&mut self) -> Parsed<UnitDecl> {
+        let start = self.span_here().start;
+        let si = self.at_reserved("SI_unit");
+        self.pos += 1;
+        let mut names = vec![self.identifier("a unit name")?.0];
+        while matches!(self.peek_kind(), Some(Kind::Ident(_))) {
+            names.push(self.identifier("a unit name")?.0);
+        }
+        let dimension = if self.at(&Kind::Colon) {
+            self.pos += 1;
+            Some(self.identifier("a dimension name")?.0)
+        } else {
+            None
+        };
+        let definition = if self.at(&Kind::Eq) {
+            self.pos += 1;
+            self.skip_newlines();
+            Some(self.dim_expr()?)
+        } else {
+            None
+        };
+        Ok(UnitDecl {
+            names,
+            si,
+            dimension,
+            definition,
+            span: Span::new(start, self.previous_span().end),
+        })
+    }
+
+    /// The unit half of the bundled form, whose dimension is the `dim` it was
+    /// written inside rather than a `: Dim` of its own.
+    fn unit_decl_named_for(&mut self, dimension: &str, span: Span) -> Parsed<UnitDecl> {
+        let mut unit = self.unit_decl()?;
+        if unit.dimension.is_none() {
+            unit.dimension = Some(dimension.to_owned());
+        }
+        let _ = span;
+        Ok(unit)
+    }
+
+    /// `dimensions.tex:34-55`. ONE grammar for a `dim` right-hand side and a
+    /// `unit` right-hand side; which namespace a name has to be in is the
+    /// checker's question, not this one's.
+    ///
+    /// Loosest to tightest: quotient, product by juxtaposition, power, atom.
+    fn dim_expr(&mut self) -> Parsed<DimExpr> {
+        let mut left = self.dim_product()?;
+        loop {
+            // `dimensions.tex:40-43` makes `/` and `per` the same operator.
+            let divides = self.at(&Kind::Slash) || self.at_reserved("per");
+            if !divides {
+                return Ok(left);
+            }
+            self.pos += 1;
+            let right = self.dim_product()?;
+            let span = Span::new(left.span().start, right.span().end);
+            left = DimExpr::Quotient {
+                left: Box::new(left),
+                right: Box::new(right),
+                span,
+            };
+        }
+    }
+
+    fn dim_product(&mut self) -> Parsed<DimExpr> {
+        let first = self.dim_power()?;
+        let mut factors = vec![first];
+        while self.at_dim_atom() {
+            factors.push(self.dim_power()?);
+        }
+        if factors.len() == 1 {
+            return Ok(factors.remove(0));
+        }
+        let span = Span::new(
+            factors.first().map_or(0, |f| f.span().start),
+            self.previous_span().end,
+        );
+        Ok(DimExpr::Product { factors, span })
+    }
+
+    fn dim_power(&mut self) -> Parsed<DimExpr> {
+        let base = self.dim_atom()?;
+        if !self.at(&Kind::Caret) {
+            return Ok(base);
+        }
+        self.pos += 1;
+        let negative = if self.at(&Kind::Minus) {
+            self.pos += 1;
+            true
+        } else {
+            false
+        };
+        let Some(Kind::IntLit { digits, .. }) = self.peek_kind() else {
+            return Err(self.error("an integer dimension exponent"));
+        };
+        let magnitude: i64 = digits
+            .parse()
+            .map_err(|_| self.error("an integer dimension exponent"))?;
+        self.pos += 1;
+        let span = Span::new(base.span().start, self.previous_span().end);
+        Ok(DimExpr::Power {
+            base: Box::new(base),
+            exponent: if negative { -magnitude } else { magnitude },
+            span,
+        })
+    }
+
+    /// The three sugar words `dimensions.tex:49-54` gives a prefix each are
+    /// rewritten here, so nothing downstream has to know they exist.
+    fn dim_atom(&mut self) -> Parsed<DimExpr> {
+        let start = self.span_here().start;
+        for (word, exponent) in [("square", 2), ("cubic", 3), ("inverse", -1)] {
+            if self.at_reserved(word) {
+                self.pos += 1;
+                let base = self.dim_atom()?;
+                let span = Span::new(start, self.previous_span().end);
+                return Ok(DimExpr::Power {
+                    base: Box::new(base),
+                    exponent,
+                    span,
+                });
+            }
+        }
+        let mut atom = if self.at(&Kind::LParen) {
+            self.pos += 1;
+            self.skip_newlines();
+            let inner = self.dim_expr()?;
+            self.expect(&Kind::RParen, "`)`")?;
+            inner
+        } else if let Some(Kind::IntLit { text, .. } | Kind::FloatLit { text, .. }) =
+            self.peek_kind()
+        {
+            let written = (*text).to_owned();
+            let span = self.span_here();
+            self.pos += 1;
+            DimExpr::Number { written, span }
+        } else {
+            let (name, span) = self.identifier("a dimension or unit name")?;
+            DimExpr::Name { name, span }
+        };
+        for (word, exponent) in [("squared", 2), ("cubed", 3)] {
+            if self.at_reserved(word) {
+                self.pos += 1;
+                let span = Span::new(start, self.previous_span().end);
+                atom = DimExpr::Power {
+                    base: Box::new(atom),
+                    exponent,
+                    span,
+                };
+            }
+        }
+        Ok(atom)
+    }
+
+    /// Whether another factor of a juxtaposition product starts here. A
+    /// dimension expression ends at a newline, so the run is bounded by the
+    /// same separator every other declaration uses.
+    fn at_dim_atom(&self) -> bool {
+        matches!(
+            self.peek_kind(),
+            Some(Kind::Ident(_) | Kind::IntLit { .. } | Kind::FloatLit { .. } | Kind::LParen)
+        ) || self.at_reserved("square")
+            || self.at_reserved("cubic")
+            || self.at_reserved("inverse")
     }
 
     /// `import Foo.Bar.{...}`, `import api Foo`, `import Foo.{X as Y} except {Z}`.
@@ -2190,12 +2425,16 @@ impl<'t, 'a> Parser<'t, 'a> {
                 "nat" => StaticKind::Nat,
                 "int" => StaticKind::Int,
                 "bool" => StaticKind::Bool,
-                // `unit` and `dim` wait for 4d; `opr` waits for the
-                // operator-property traits, which begin by WRITING
-                // declarations that exist only as commented LaTeX. All three
-                // stay refused now that the group above has opened, which is
-                // D7 §3.3 and §4 respectively.
-                "unit" | "dim" | "opr" => {
+                // SUB-PHASE 4d IS OPEN and these two are its kinds. They
+                // PARSE and are RECORDED; instantiating one is refused by name
+                // in expansion, because substituting a unit means deciding a
+                // dimensioned value's representation and this backend has no
+                // boxing. `opr` still waits on the operator-property traits,
+                // which begin by WRITING declarations that exist only as
+                // commented LaTeX -- D7 §4, unchanged.
+                "unit" => StaticKind::Unit,
+                "dim" => StaticKind::Dim,
+                "opr" => {
                     return Err(ParseError::StaticParameterKindUnsupported {
                         span: self.span_here(),
                         kind: (*word).to_owned(),
@@ -2203,11 +2442,22 @@ impl<'t, 'a> Parser<'t, 'a> {
                 }
                 _ => StaticKind::Type,
             };
-            if kind.is_value() {
+            if kind.is_value() || kind.is_dimensional() {
                 self.pos += 1;
             }
         }
         let (name, span) = self.identifier("a static parameter name")?;
+        // `[\unit U absorbs unit\]`. The `unit` after `absorbs` is the
+        // reserved word again, not a name.
+        let mut absorbs_unit = false;
+        if kind.is_dimensional() && self.at_reserved("absorbs") {
+            self.pos += 1;
+            if !self.at_reserved("unit") {
+                return Err(self.error("`unit` after `absorbs`"));
+            }
+            self.pos += 1;
+            absorbs_unit = true;
+        }
         let bounds = self.extends_clause()?;
         // D7 leaves the constraint solver out of v1 and its own census is the
         // reason: NOT ONE `where { k < n }` exists in 1956 files. A bound on a
@@ -2219,6 +2469,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         Ok(StaticParam {
             name,
             kind,
+            absorbs_unit,
             bounds,
             span,
         })

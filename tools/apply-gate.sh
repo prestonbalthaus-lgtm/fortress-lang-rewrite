@@ -142,8 +142,17 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # the real population instead of to the one file that was known when the rule
 # was written. When that list shrinks, this floor rises with it, and the two
 # move in the same commit.
-OBJECT_FLOOR=294
-API_FLOOR=62
+#
+# DIMENSIONS AND UNITS, sub-phase 4d rung one: 333 objects, 63 apis. TWO files,
+# `Library/incomplete/basic/Fortress.InformationUnits.fsi` and its `.fss`, and
+# reserving the seven unit operators cost ZERO -- measured over all 394 files
+# that compiled before it, comments and strings stripped. The other three
+# dimension-first-blocked files are refused for REAL reasons the rung now
+# names: `Fortress.SIUnits` writes `dim Mass default kilogram` and kilogram is
+# `gram` with an SI prefix, which is not generated; `dimensionUnitDecl.fss`
+# writes `dim Mass default Kilogram` with no such unit declared anywhere.
+OBJECT_FLOOR=295
+API_FLOOR=63
 
 passed=0
 failed=0

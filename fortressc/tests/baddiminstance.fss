@@ -1,0 +1,9 @@
+component baddiminstance
+export Executable
+dim Length SI_unit meter meters m_
+object Q[\unit U\]() end
+run() = do
+  q = Q[\meter\]()
+  println("no")
+end
+end

@@ -1,0 +1,22 @@
+component dimensions
+export Executable
+
+dim Length SI_unit meter meters m_
+dim Time SI_unit second seconds s_
+dim Mass
+dim Area = Length^2
+dim Volume = Length^3
+dim Velocity = Length / Time
+dim Acceleration = Velocity per Time
+dim Angle = Unity
+dim Frequency = 1 / Time
+
+unit inch inches: Length
+unit foot feet: Length = 12 inches
+unit meter_squared: Area = square meter
+
+trait Quantity[\unit U absorbs unit, nat e\] end
+
+run() = println("dimensions declared")
+
+end

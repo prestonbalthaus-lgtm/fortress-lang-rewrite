@@ -208,6 +208,52 @@ pub enum TypeError {
         span: Span,
         name: String,
     },
+    /// `dim Frequency = 1 / Tyme`. The same shape as an unresolved `comprises`
+    /// name: a derivation over a name that is not declared is a claim about a
+    /// dimension that does not exist.
+    ///
+    /// IT REFUSES THE SHIPPED 1.0 LIBRARY, and that is the rule working rather
+    /// than a reason to weaken it: `Library/incomplete/basic/Fortress.SIUnits.fsi`
+    /// writes `dim ElectricPotential = Power / Current` with no `Current`
+    /// declared -- the dimension is `ElectricCurrent` -- and
+    /// `dim AngularVelocity = Angle / Second`, where `Second` is a UNIT of
+    /// `Time` and not a dimension at all.
+    UnknownDimensionName {
+        span: Span,
+        name: String,
+        wanted: &'static str,
+        /// The name is a declared unit with an SI prefix on it. Worth saying,
+        /// because the reader would otherwise go looking for a declaration
+        /// that was never meant to be written.
+        prefixed: bool,
+    },
+    /// `Float1[\meter, 8, 24\]`. See `bind_static`.
+    DimensionalParameterInstantiated {
+        span: Span,
+        param: String,
+        kind: &'static str,
+    },
+    DimensionDeclaredTwice {
+        span: Span,
+        name: String,
+        kind: &'static str,
+    },
+    DimensionNameCollides {
+        span: Span,
+        name: String,
+        kind: &'static str,
+    },
+    /// `x: RR64 meter`, `x: Length`. A dimension and a unit are their own
+    /// namespace and neither is a type: `dimensions.tex:237-253` gives a
+    /// dimensioned value a representation this backend has no boxing for, and
+    /// `dimensions.tex:206-215` makes a unit mismatch a static error that
+    /// nothing here can decide. Refused at `Registry::resolve`, which is the
+    /// single gate.
+    DimensionIsNotAType {
+        span: Span,
+        name: String,
+        kind: &'static str,
+    },
     /// `ZZ32[8,8]`. `Type::Array` holds ONE `Elem` and `Elem` is a separate
     /// five-variant enum, so a second dimension is UNREPRESENTABLE rather than
     /// merely rejected -- which is why one refusal in `Registry::resolve` is
@@ -668,6 +714,11 @@ impl TypeError {
             | Self::NotAnArray { span, .. }
             | Self::ElementTypeUnknown { span }
             | Self::UnsupportedElementType { span, .. }
+            | Self::UnknownDimensionName { span, .. }
+            | Self::DimensionalParameterInstantiated { span, .. }
+            | Self::DimensionDeclaredTwice { span, .. }
+            | Self::DimensionNameCollides { span, .. }
+            | Self::DimensionIsNotAType { span, .. }
             | Self::ArrayDimensions { span, .. }
             | Self::ExtentRangeNotImplemented { span, .. }
             | Self::ArraySizeMissing { span }
@@ -914,6 +965,33 @@ impl core::fmt::Display for TypeError {
             Self::ElementTypeUnknown { .. } => write!(
                 f,
                 "nothing here says what this array holds; annotate the binding, as in `a:Array[\\ZZ64\\] = ...`"
+            ),
+            Self::UnknownDimensionName {
+                name,
+                wanted,
+                prefixed,
+                ..
+            } => {
+                write!(f, "`{name}` is not a declared {wanted}")?;
+                if *prefixed {
+                    write!(f, "; SI prefixes are not generated")?;
+                }
+                Ok(())
+            }
+            Self::DimensionalParameterInstantiated { param, kind, .. } => write!(
+                f,
+                "`{param}` is a `{kind}` static parameter and instantiating one is not implemented; a value may not carry a dimension in this subset"
+            ),
+            Self::DimensionDeclaredTwice { name, kind, .. } => {
+                write!(f, "the {kind} `{name}` is declared twice")
+            }
+            Self::DimensionNameCollides { name, kind, .. } => write!(
+                f,
+                "`{name}` is declared as a {kind} and as a type; they are separate namespaces and a name may be in only one"
+            ),
+            Self::DimensionIsNotAType { name, kind, .. } => write!(
+                f,
+                "`{name}` is {kind}, not a type; a value may not carry a dimension in this subset"
             ),
             Self::ArrayDimensions { dimensions, .. } => write!(
                 f,

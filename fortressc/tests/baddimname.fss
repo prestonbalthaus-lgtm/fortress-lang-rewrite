@@ -1,0 +1,6 @@
+component baddimname
+export Executable
+dim Time
+dim Velocity = Length / Time
+run() = ()
+end

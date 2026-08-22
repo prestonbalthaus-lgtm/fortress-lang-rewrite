@@ -1,0 +1,6 @@
+component baddimcollide
+export Executable
+dim Length
+trait Length end
+run() = ()
+end

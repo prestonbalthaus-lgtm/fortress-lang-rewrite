@@ -21,7 +21,113 @@ pub struct Component {
     /// corpus metric can move; an api has no bodies and is not executable, so
     /// the type checker refuses it rather than pretending to compile one.
     pub is_api: bool,
+    /// `dim Length`, `dim Area = Length^2`. A SEPARATE NAMESPACE from `decls`
+    /// and not a `Decl` variant, because a dimension declares no value, emits
+    /// no code and has no members -- putting it in `Decl` would force an arm
+    /// on every pass that walks declarations to answer "nothing" thirty times.
+    ///
+    /// FILE LOCAL. An api's dimensions do not merge into a component that
+    /// imports it; that is phase 3 and nothing needs it yet, because the two
+    /// corpus files that declare dimensions declare their units alongside.
+    pub dims: Vec<DimDecl>,
+    pub units: Vec<UnitDecl>,
     pub span: Span,
+}
+
+/// `dim Id (= DimExpr)? (default Id)?`, `Type.rats`'s `DimUnitDecl`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DimDecl {
+    pub name: String,
+    /// `dim Area = Length^2`. Absent for a BASE dimension, which is the whole
+    /// distinction: `defining-dimensions.tex` builds a free abelian group over
+    /// the base dimensions and the derived ones are words in it.
+    pub derivation: Option<DimExpr>,
+    /// `dim Mass default Kilogram`.
+    pub default_unit: Option<String>,
+    pub span: Span,
+}
+
+/// `unit Id Id* (: Dim)? (= UnitExpr)?`, and the `SI_unit` spelling of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnitDecl {
+    /// One or more: `unit inch inches: Length` declares two names for one
+    /// unit, and `dimensions.tex:90-92` says the plural is defined as
+    /// equivalent to the singular rather than as a unit of its own.
+    pub names: Vec<String>,
+    /// `SI_unit` rather than `unit`. RECORDED AND NOT ACTED ON: generating the
+    /// twenty SI prefixes over 175 literal names would put 3675 names in one
+    /// component's scope, and a prefixed name is refused by name instead.
+    pub si: bool,
+    pub dimension: Option<String>,
+    pub definition: Option<DimExpr>,
+    pub span: Span,
+}
+
+/// The dimension and unit sublanguage, `dimensions.tex:34-55`. ONE grammar for
+/// both sides, because they are the same shape: a `dim` right-hand side is a
+/// product of DIMENSIONS and a `unit` right-hand side a product of UNITS, and
+/// which of the two a name must be is the CHECKER's question, decided by the
+/// position it was written in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DimExpr {
+    Name {
+        name: String,
+        span: Span,
+    },
+    /// A numeric factor: the `1` of `1 / Time`, the `60` of `1/60 degree`.
+    /// RECORDED UNEVALUATED -- reproducing `3 miles in kilometers` as
+    /// `25146/15625` needs exact rationals, which is rung 3.
+    Number {
+        written: String,
+        span: Span,
+    },
+    /// Juxtaposition, `dimensions.tex:39`. `Mass Acceleration`.
+    Product {
+        factors: Vec<DimExpr>,
+        span: Span,
+    },
+    /// `/` and `per`, which `dimensions.tex:40-43` makes the same operator.
+    Quotient {
+        left: Box<DimExpr>,
+        right: Box<DimExpr>,
+        span: Span,
+    },
+    /// `Length^2`. The exponent is an INTEGER LITERAL: `dimensions.tex:147-148`
+    /// allows a rational power and the corpus writes not one, so a rational is
+    /// refused by name rather than guessed at.
+    Power {
+        base: Box<DimExpr>,
+        exponent: i64,
+        span: Span,
+    },
+}
+
+impl DimExpr {
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        match self {
+            Self::Name { span, .. }
+            | Self::Number { span, .. }
+            | Self::Product { span, .. }
+            | Self::Quotient { span, .. }
+            | Self::Power { span, .. } => *span,
+        }
+    }
+
+    /// Every name the expression mentions, in source order. The one question
+    /// well-formedness asks of it.
+    pub fn names(&self, out: &mut Vec<(String, Span)>) {
+        match self {
+            Self::Name { name, span } => out.push((name.clone(), *span)),
+            Self::Number { .. } => {}
+            Self::Product { factors, .. } => factors.iter().for_each(|f| f.names(out)),
+            Self::Quotient { left, right, .. } => {
+                left.names(out);
+                right.names(out);
+            }
+            Self::Power { base, .. } => base.names(out),
+        }
+    }
 }
 
 /// `import Foo.{a, b as c} except {d}`, `import api Foo`, `import Foo.member`.
@@ -378,6 +484,10 @@ pub struct StaticParam {
     /// written cannot be represented, and inventing one invites a reader to
     /// think it is handled.
     pub kind: StaticKind,
+    /// `[\unit U absorbs unit\]`, `defining-dimensions.tex:364-383`. Recorded
+    /// and not acted on, which is safe only because a unit parameter cannot be
+    /// instantiated at all.
+    pub absorbs_unit: bool,
     pub bounds: Vec<TypeRef>,
     pub span: Span,
 }
@@ -388,6 +498,13 @@ pub enum StaticKind {
     Nat,
     Int,
     Bool,
+    /// Sub-phase 4d. A unit or dimension parameter PARSES and is RECORDED;
+    /// instantiating one is refused by name, because substituting it means
+    /// deciding what a dimensioned value's representation is and this backend
+    /// has no boxing. Measured demand: `ProjectFortress/tests/staticArg.fss`
+    /// and `dimensionUnitDecl.fss`, and neither instantiates.
+    Unit,
+    Dim,
 }
 
 impl StaticKind {
@@ -405,7 +522,16 @@ impl StaticKind {
             Self::Nat => "nat",
             Self::Int => "int",
             Self::Bool => "bool",
+            Self::Unit => "unit",
+            Self::Dim => "dim",
         }
+    }
+
+    /// Sub-phase 4d's two kinds. They are neither type parameters nor value
+    /// parameters: nothing can be substituted for one, so nothing may ask.
+    #[must_use]
+    pub const fn is_dimensional(self) -> bool {
+        matches!(self, Self::Unit | Self::Dim)
     }
 }
 

@@ -14,6 +14,7 @@
 mod closure;
 pub mod comprises;
 pub mod deviations;
+pub mod dimensions;
 mod error;
 mod mono;
 mod registry;
@@ -530,7 +531,10 @@ impl Checker {
     /// Nothing is resolved against a type until all the names are known, so a
     /// forward reference to something declared further down the file works.
     fn new(component: &Component) -> Checked<Self> {
-        let mut registry = Registry::default();
+        let mut registry = Registry {
+            dimensions: dimensions::Dimensions::of(component),
+            ..Registry::default()
+        };
         let mut declared: HashMap<&'static str, Span> = HashMap::new();
 
         for decl in &component.decls {

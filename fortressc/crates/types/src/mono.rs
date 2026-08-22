@@ -444,6 +444,8 @@ impl<'a> Expander<'a> {
             decls,
             bounds: self.obligations,
             is_api: component.is_api,
+            dims: component.dims.clone(),
+            units: component.units.clone(),
             span: component.span,
         }
     }
@@ -1154,6 +1156,21 @@ pub fn mangle_static(name: &str, args: &[TypeRef]) -> String {
 /// live here, after substitution, and demand can stay syntactic.
 fn bind_static(params: &[StaticParam], args: &[TypeRef], out: &mut Subst) -> Result<(), TypeError> {
     for (param, arg) in params.iter().zip(args) {
+        // SUB-PHASE 4d PARSES A `unit`/`dim` PARAMETER AND STOPS THERE.
+        // Substituting one means deciding what a dimensioned value looks like
+        // at run time, and there is no boxing in this backend to decide it
+        // with. Refusing HERE and not at the declaration is deliberate:
+        // `ProjectFortress/tests/dimensionUnitDecl.fss` DECLARES
+        // `trait Float1[\unit U absorbs unit, nat e, nat s\]` and never
+        // instantiates it, so refusing the declaration would cost a file for a
+        // capability nothing asks for.
+        if param.kind.is_dimensional() {
+            return Err(TypeError::DimensionalParameterInstantiated {
+                span: arg.span(),
+                param: param.name.clone(),
+                kind: param.kind.spelling(),
+            });
+        }
         let bound = match (param.kind.is_value(), arg) {
             (true, TypeRef::Static { .. }) => arg.clone(),
             (true, TypeRef::Named { name, args, span }) if args.is_empty() => {

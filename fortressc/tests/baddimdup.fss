@@ -1,0 +1,6 @@
+component baddimdup
+export Executable
+dim Length
+dim Length
+run() = ()
+end

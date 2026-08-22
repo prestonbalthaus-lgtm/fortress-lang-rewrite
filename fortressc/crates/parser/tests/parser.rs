@@ -1906,22 +1906,67 @@ fn the_three_kinds_d7_opens_now_parse() {
     }
 }
 
-/// AND THE THREE THAT DID NOT OPEN STILL REFUSE. D7 §3.3 defers `unit` and
-/// `dim` to sub-phase 4d, gated on SPIKE-COMPOSITE-TYPE rather than on D7; §4
-/// keeps `opr` refused when the others open, because a name in OPERATOR
-/// position is SPIKE-OPEXPR territory and not arithmetic.
+/// `opr` STILL REFUSES, ALONE. D7 §3.3 deferred `unit` and `dim` to sub-phase
+/// 4d and 4d has landed, so those two now PARSE. §4 keeps `opr` refused when
+/// the others open, because a name in OPERATOR position is SPIKE-OPEXPR
+/// territory and not arithmetic.
 #[test]
-fn the_three_kinds_d7_defers_still_refuse() {
-    for kind in ["unit", "dim", "opr"] {
-        let src = format!("api t\ntrait T[\\{kind} n\\] end\nend\n");
-        let tokens = fortress_lexer::lex(&src).unwrap_or_else(|e| panic!("lex failed: {e}"));
-        match parse(&tokens) {
-            Err(ParseError::StaticParameterKindUnsupported { kind: k, .. }) => {
-                assert_eq!(k, kind);
-            }
-            other => panic!("`{kind}` must still refuse, got {other:?}"),
+fn the_operator_kind_still_refuses() {
+    let src = "api t\ntrait T[\\opr n\\] end\nend\n";
+    let tokens = fortress_lexer::lex(src).unwrap_or_else(|e| panic!("lex failed: {e}"));
+    match parse(&tokens) {
+        Err(ParseError::StaticParameterKindUnsupported { kind, .. }) => {
+            assert_eq!(kind, "opr");
         }
+        other => panic!("`opr` must still refuse, got {other:?}"),
     }
+}
+
+/// SUB-PHASE 4d's TWO KINDS PARSE AND ARE RECORDED, `absorbs unit` included.
+/// Neither is a value parameter and neither is a type parameter: nothing can
+/// be substituted for one, which is why `bind_static` refuses an instantiation
+/// by name rather than this parser refusing the declaration.
+#[test]
+fn the_dimensional_kinds_parse_and_are_recorded() {
+    for (kind, absorbs) in [("unit", true), ("dim", false)] {
+        let src = if absorbs {
+            format!("api t\ntrait T[\\{kind} U absorbs unit\\] end\nend\n")
+        } else {
+            format!("api t\ntrait T[\\{kind} U\\] end\nend\n")
+        };
+        let parsed = component(&src);
+        let Some(fortress_ast::Decl::Trait(t)) = parsed.decls.first() else {
+            panic!("expected a trait, got {:?}", parsed.decls.first());
+        };
+        let param = t.static_params.first().expect("one static parameter");
+        assert_eq!(param.kind.spelling(), kind);
+        assert!(param.kind.is_dimensional(), "`{kind}` is dimensional");
+        assert!(!param.kind.is_value(), "`{kind}` is not a VALUE parameter");
+        assert_eq!(param.absorbs_unit, absorbs);
+    }
+}
+
+/// The declaration forms, all three of `OtherDecl.rats:29-33`, plus the
+/// bundled `dim ... SI_unit ...` that the reference implementation returns TWO
+/// nodes for.
+#[test]
+fn dimension_and_unit_declarations_parse() {
+    let src = "component t\n\
+               dim Length SI_unit meter meters m_\n\
+               dim Mass default gram\n\
+               unit gram grams g_: Mass\n\
+               dim Area = Length^2\n\
+               unit acre: Area = 4840 square yard\n\
+               f() = ()\n\
+               end\n";
+    let c = component(src);
+    assert_eq!(c.dims.len(), 3, "three dimensions");
+    assert_eq!(c.units.len(), 3, "the bundled unit plus two written ones");
+    assert_eq!(c.decls.len(), 1, "a dimension is not a declaration");
+    let bundled = c.units.first().expect("the bundled unit");
+    assert!(bundled.si, "SI_unit sets the flag");
+    assert_eq!(bundled.names, vec!["meter", "meters", "m_"]);
+    assert_eq!(bundled.dimension.as_deref(), Some("Length"));
 }
 
 /// A VALUE PARAMETER MAY NOT CARRY A BOUND. D7 leaves the constraint solver

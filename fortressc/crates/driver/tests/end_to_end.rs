@@ -2359,6 +2359,83 @@ fn the_uniformity_exemption_does_not_reach_outside_the_legacy_library() {
     );
 }
 
+/// DIMENSIONS AND UNITS, sub-phase 4d, rung one. Declarations parse, register
+/// and are CHECKED; nothing above that is built and every part of it is
+/// refused by name.
+#[test]
+fn dimension_and_unit_declarations_run() {
+    let binary = compile_fixture("dimensions.fss", "dimensions");
+    let out = run(&binary);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "dimensions declared\n"
+    );
+    assert_eq!(out.status.code(), Some(0));
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// A DERIVATION OVER AN UNDECLARED NAME IS A CLAIM ABOUT A DIMENSION THAT DOES
+/// NOT EXIST -- the same shape as an unresolved `comprises` name, which this
+/// compiler already refuses. It refuses the shipped 1.0 library too, and that
+/// is the rule working: `Fortress.SIUnits.fsi` writes
+/// `dim ElectricPotential = Power / Current` with no `Current` declared (the
+/// dimension is `ElectricCurrent`) and `dim AngularVelocity = Angle / Second`,
+/// where `Second` is a UNIT of `Time`.
+#[test]
+fn an_undeclared_dimension_name_is_refused() {
+    let message = refusal("baddimname.fss");
+    assert!(
+        message.contains("`Length` is not a declared dimension"),
+        "{message}"
+    );
+}
+
+/// THE SINGLE GATE. A dimension is not a type: `dimensions.tex:237-253` gives
+/// a dimensioned value a representation this backend has no boxing for, and
+/// `dimensions.tex:206-215` makes a unit mismatch a static error nothing here
+/// can decide. Without this arm the name would report `unknown type`, sending
+/// the reader to look for a declaration that IS there.
+#[test]
+fn a_dimension_used_as_a_type_says_which_it_is() {
+    let message = refusal("baddimtype.fss");
+    assert!(message.contains("is a dimension, not a type"), "{message}");
+}
+
+/// A LIVE WRONG ANSWER, FIXED. `in` was an ordinary identifier, so
+/// `println(x in nm)` over three `RR64` bindings was a three-way juxtaposition
+/// PRODUCT: it compiled, linked and printed `7.8`, at exit 0, with no
+/// diagnostic. Seven unit operators are reserved now, and the retroactive cost
+/// was measured before the reclassification -- ZERO of the 394 files that
+/// compiled used any of them as a name.
+#[test]
+fn a_unit_operator_is_no_longer_an_identifier() {
+    let message = refusal("badunitop.fss");
+    assert!(message.contains("reserved word `in`"), "{message}");
+}
+
+#[test]
+fn a_dimension_name_is_declared_once_and_in_one_namespace() {
+    let message = refusal("baddimdup.fss");
+    assert!(message.contains("is declared twice"), "{message}");
+    let message = refusal("baddimcollide.fss");
+    assert!(message.contains("separate namespaces"), "{message}");
+}
+
+/// A `unit`/`dim` STATIC PARAMETER PARSES AND CANNOT BE INSTANTIATED, and the
+/// refusal is at the INSTANTIATION rather than at the declaration on purpose:
+/// `ProjectFortress/tests/dimensionUnitDecl.fss` declares
+/// `trait Float1[\unit U absorbs unit, nat e, nat s\]` and never instantiates
+/// it, so refusing the declaration would cost a file for a capability nothing
+/// in the corpus asks for.
+#[test]
+fn a_unit_static_parameter_cannot_be_instantiated() {
+    let message = refusal("baddiminstance.fss");
+    assert!(
+        message.contains("instantiating one is not implemented"),
+        "{message}"
+    );
+}
+
 /// ARRAY TYPES. `traits.tex:97-108`, the one-dimensional bracket form.
 ///
 /// `ZZ32[5]` IS `Array[\ZZ32\]` WITH A SIZE THE CHECKER CAN COMPARE, and the
