@@ -3359,13 +3359,21 @@ fn a_bodiless_overload_set_may_differ_in_its_static_parameters() {
 /// pair one line up is accepted. Without this the deviation would be
 /// indistinguishable from a blanket relaxation -- which was measured and costs
 /// a must-fail acceptance, `ProjectFortress/compiler_tests/Compiled6.ak.fss`.
+///
+/// BOTH ORDERS, and the second file exists because the mutation table found
+/// that one of them could not see the difference: a relaxation that asks only
+/// about the declaration IN HAND rather than about the pair is refused by one
+/// order and accepted by the other, and `mixedoverload.fsi` alone happened to
+/// be the order that still refused.
 #[test]
 fn a_declaration_with_a_body_is_not_exempt_from_uniformity() {
-    let message = refusal("mixedoverload.fsi");
-    assert!(
-        message.contains("differ in their static parameters"),
-        "{message}"
-    );
+    for name in ["mixedoverload.fsi", "mixedoverloadrev.fsi"] {
+        let message = refusal(name);
+        assert!(
+            message.contains("differ in their static parameters"),
+            "{name}: {message}"
+        );
+    }
 }
 
 /// AND A TRAIT IS NEVER A SIGNATURE. It writes no body because it cannot, not

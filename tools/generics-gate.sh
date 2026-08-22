@@ -311,14 +311,17 @@ uniformity_exemption() {
         bad 'and inside one, which is the same answer for the same reason' "status $status: $err"
     fi
 
-    local bodied=$repo/fortressc/tests/mixedoverload.fsi
-    err=$(timeout 300 "$fortressc" "$bodied" --emit-obj -o /dev/null 2>&1 >/dev/null)
-    status=$?
-    if refused_cleanly "$status" && [[ $err == *'differ in their static parameters'* ]]; then
-        ok 'one BODY in the pair takes the exemption away, inside an api'
-    else
-        bad 'one BODY in the pair takes the exemption away, inside an api' "status $status: $err"
-    fi
+    local bodied
+    for bodied in mixedoverload.fsi mixedoverloadrev.fsi; do
+        err=$(timeout 300 "$fortressc" "$repo/fortressc/tests/$bodied" \
+                --emit-obj -o /dev/null 2>&1 >/dev/null)
+        status=$?
+        if refused_cleanly "$status" && [[ $err == *'differ in their static parameters'* ]]; then
+            ok "one BODY in the pair takes the exemption away: $bodied"
+        else
+            bad "one BODY in the pair takes the exemption away: $bodied" "status $status: $err"
+        fi
+    done
 
     local traits=$repo/fortressc/tests/bodilesstrait.fsi
     err=$(timeout 300 "$fortressc" "$traits" --emit-obj -o /dev/null 2>&1 >/dev/null)
