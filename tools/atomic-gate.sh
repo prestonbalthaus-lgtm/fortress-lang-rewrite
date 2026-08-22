@@ -302,7 +302,7 @@ MUTATIONS=(
   'runtime/shims.c|    _exit(1);|    exit(1);|run the atexit handlers on an abnormal halt'
   'runtime/shims.c|        task->body(i, task->env, w);|        task->body(i, task->env, 0);|give every worker the same accumulator row'
   'runtime/shims.c|    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);|    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_NORMAL);|make the atomic mutex non-recursive'
-  'crates/codegen/src/lib.rs|                Slot::Cell { pointer, ty }|                Slot::Value(self.builder.build_load(ty, pointer, "by.value").map_err(CodegenError::from_builder)?)|capture an assigned scalar by value again'
+  'crates/codegen/src/lib.rs|        Ok(Slot::Cell { pointer, ty })|        Ok(Slot::Value(self.builder.build_load(ty, pointer, "by.value").map_err(CodegenError::from_builder)?))|capture an assigned scalar by value again'
   'crates/types/src/lib.rs|                && !ctx.captures.contains_key(&name)|                && true|drop reduction.tex condition 3, so a name the body reads is still private'
   'crates/types/src/lib.rs|            if !sequential && !record.all_atomic {|            if false {|let a compound assignment that is not a reduction through'
 )

@@ -1629,6 +1629,29 @@ impl<'ctx> Lowering<'ctx> {
         .ok_or_else(|| CodegenError::internal("spawn returned no handle".to_owned()))
     }
 
+    /// A by-reference capture's slot: the environment field holds the CALLER's
+    /// `alloca`, so the read and the write inside the outlined body both land
+    /// on live storage.
+    ///
+    /// ONE FUNCTION AND NOT TWO IDENTICAL BLOCKS, and a mutation table is what
+    /// forced it. The loop outliner and the spawn outliner had this byte for
+    /// byte twice, so atomic-gate's row `Slot::Cell { pointer, ty }` matched
+    /// TWICE and its whole table stopped being applicable -- silently, from
+    /// the day the spawn outliner landed, because nothing re-ran it.
+    fn by_reference_slot(
+        &mut self,
+        field: inkwell::values::PointerValue<'ctx>,
+        ty: BasicTypeEnum<'ctx>,
+        name: &str,
+    ) -> Result<Slot<'ctx>, CodegenError> {
+        let pointer = self
+            .builder
+            .build_load(self.ptr(), field, name)
+            .map_err(CodegenError::from_builder)?
+            .into_pointer_value();
+        Ok(Slot::Cell { pointer, ty })
+    }
+
     fn declare_spawn_body(&mut self, symbol: &str) -> FunctionValue<'ctx> {
         if let Some(existing) = self.functions.get(symbol) {
             return *existing;
@@ -1677,12 +1700,7 @@ impl<'ctx> Lowering<'ctx> {
                 // use -- `stop()` is abandon. Every Spawn corpus file joins or
                 // completes before returning; a program that does not is a
                 // named hazard, recorded on `Checker::spawn`.
-                let pointer = self
-                    .builder
-                    .build_load(self.ptr(), field, &capture.name)
-                    .map_err(CodegenError::from_builder)?
-                    .into_pointer_value();
-                Slot::Cell { pointer, ty }
+                self.by_reference_slot(field, ty, &capture.name)?
             } else {
                 let value = self
                     .builder
@@ -1875,12 +1893,7 @@ impl<'ctx> Lowering<'ctx> {
                 // write inside the body both land on live storage. Its
                 // lifetime is safe by construction: the runtime blocks on its
                 // done-wait before `fortress_parallel_for` returns.
-                let pointer = self
-                    .builder
-                    .build_load(self.ptr(), field, &capture.name)
-                    .map_err(CodegenError::from_builder)?
-                    .into_pointer_value();
-                Slot::Cell { pointer, ty }
+                self.by_reference_slot(field, ty, &capture.name)?
             } else {
                 let value = self
                     .builder
