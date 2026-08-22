@@ -62,7 +62,7 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # unlock, and landing the type variant moved none of it.
 # 35 at the M6 merge, 40 at the consolidation: the corpus set itself moved
 # (api check mode, and the refusals the consolidation added), not the feature.
-TUPLE_FIRST_BLOCKERS=38
+TUPLE_FIRST_BLOCKERS=53
 
 passed=0
 failed=0
@@ -93,6 +93,14 @@ probe() {
 
 selftest() {
     printf '== gate self test ==\n'
+    # THE VALUE COMPARISON MUST BE ABLE TO SAY NO, or every positive fixture in
+    # part B passes against any output at all.
+    if [[ "$(printf '1\n2')" == "$(printf '1\n2')" ]]; then
+        ok 'the value comparison accepts a match'
+    else bad 'the value comparison accepts a match'; fi
+    if [[ "$(printf '1\n2')" == "$(printf '2\n1')" ]]; then
+        bad 'the value comparison rejects a swap' 'it accepted 2 1 as 1 2'
+    else ok 'the value comparison rejects a swap'; fi
     if refused_cleanly 1; then ok 'exit 1 is a clean refusal'
     else bad 'exit 1 is a clean refusal'; fi
     for status in 0 70 101 139; do
@@ -203,6 +211,23 @@ end'
   println(a)
 end'
 
+    # RE-PINNED. The rewrite dropped this row and the path changed underneath
+    # it: a tuple static argument now RESOLVES and is refused afterwards by
+    # `tuple_free`, once the stamp has a body. It stays refused DELIBERATELY
+    # rather than incidentally.
+    probe 'a tuple TYPE as a static argument to a defined generic' 'cannot be a parameter' \
+'f[\T\](x: T): ZZ32 = 1
+run(): () = println(f[\(ZZ32, ZZ32)\](1))'
+
+    # `(a, a) = (1, 2)` COMPILED AND PRINTED 2 on the day the binder landed:
+    # the second part overwrote the first, and every fixture used distinct
+    # names so nothing caught it.
+    probe 'a binder that repeats a name' 'is bound twice by one tuple binding' \
+'run(): () = do
+  (a, a) = (1, 2)
+  println(a)
+end'
+
     # A PARENTHESISED SINGLE EXPRESSION IS NOT A TUPLE, and confusing the two
     # would make the refusal above fire on ordinary code. This is the assertion
     # that keeps the others honest.
@@ -297,12 +322,91 @@ end'
     [[ $failed -eq 0 ]]
 }
 
+# THE RATIONALE FOR HAVING NO --mutate DIED WHEN TUPLES LANDED. It was "an
+# UNCONSTRUCTABLE variant gives a mutation nothing to fire on" -- true while
+# `resolve` refused. There is now a parser probe, a checker split and two
+# codegen arms, and a gate asserting landed behaviour that has never been shown
+# to refuse is not evidence.
+#
+# Rows are bar-free: a mutation table splits on `|`.
+MUTATIONS=(
+  'crates/parser/src/lib.rs|        Ok(Some(fortress_ast::TupleBinding { names, value, span }))|        Ok(None)|delete the binder parse, so the silent INFIX EQUALITY reading comes back'
+  'crates/types/src/lib.rs|            self.declare(name.clone(), ty, false);|            let _ = ty;|bind nothing, so the names are not in scope'
+  'crates/types/src/lib.rs|                    name: name.clone(),
+                });
+            }
+        }
+        if items.len() != b.names.len() {|                    name: String::new(),
+                });
+            }
+        }
+        if false {|drop the arity check and blank the repeated-name diagnostic'
+)
+
+mutate_needs_the_built_compiler() {
+    local built=$repo/fortressc/target/debug/fortressc
+    if [[ $fortressc != "$built" ]]; then
+        printf 'refusing --mutate: FORTRESSC is %s\n' "$fortressc" >&2
+        printf 'but every mutation rebuilds %s.\n' "$built" >&2
+        printf 'A pinned binary makes each mutation a silent no-op. Unset FORTRESSC.\n' >&2
+        exit 2
+    fi
+}
+
+mutate() {
+    mutate_needs_the_built_compiler
+    if ! git -C "$repo" diff --quiet HEAD -- fortressc/crates fortressc/runtime; then
+        printf 'refusing to mutate: the tree differs from HEAD\n' >&2
+        exit 2
+    fi
+    local entry file from to label hits status
+    local broken=0 survived=0
+    for entry in "${MUTATIONS[@]}"; do
+        IFS='|' read -r file from to label <<<"$entry"
+        printf '\n== mutation: %s ==\n' "$label"
+        hits=$(grep -F -c -- "$from" "$repo/fortressc/$file" 2>/dev/null || echo 0)
+        if [[ $hits -ne 1 ]]; then
+            printf 'FAIL  the mutation pattern is not unique (%s hits in %s)\n' "$hits" "$file"
+            broken=$((broken + 1)); continue
+        fi
+        MUT_PATH=$repo/fortressc/$file MUT_FROM=$from MUT_TO=$to python3 -c '
+import os, pathlib
+p = pathlib.Path(os.environ["MUT_PATH"])
+p.write_text(p.read_text().replace(os.environ["MUT_FROM"], os.environ["MUT_TO"], 1))
+'
+        ( cd "$repo/fortressc" && cargo build --workspace >/dev/null 2>&1 )
+        status=$?
+        if [[ $status -ne 0 ]]; then
+            printf 'REFUSED  the mutated compiler does not build, which is a refusal too\n'
+        else
+            passed=0; failed=0
+            run_gate >/dev/null 2>&1
+            if [[ $failed -gt 0 ]]; then
+                printf 'REFUSED  %d check(s) failed, which is the point\n' "$failed"
+            else
+                printf 'SURVIVED %s -- the gate did not notice\n' "$label"
+                survived=$((survived + 1))
+            fi
+        fi
+        git -C "$repo" checkout HEAD -- "fortressc/$file"
+    done
+    ( cd "$repo/fortressc" && cargo build --workspace >/dev/null 2>&1 )
+    printf '\nmutations: %d run, %d survived, %d could not be applied\n' \
+        "${#MUTATIONS[@]}" "$survived" "$broken"
+    [[ $survived -eq 0 && $broken -eq 0 ]]
+}
+
 case ${1:-} in
     --selftest) selftest ;;
+    --mutate)   selftest; mutate; exit $? ;;
     '')         if [[ ! -x $fortressc ]]; then
                     printf 'no compiler at %s -- cargo build first\n' "$fortressc" >&2
                     exit 2
                 fi
+                # THE SELF TEST RUNS FIRST on a bare invocation. It did not
+                # before, so a green tail said nothing about whether the
+                # instrument could refuse at all.
+                selftest
                 run_gate ;;
     *)          printf 'unknown argument %s\n' "$1" >&2; exit 2 ;;
 esac
