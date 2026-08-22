@@ -138,9 +138,20 @@ build.
 **3. Names and modules.** Component and API resolution, imports, scoping.
 *Exit:* `Library/` resolves clean with no unresolved references.
 
-**4. Types.** Hindley-Milner inference with traits, polymorphism and overload
-resolution. The legacy implementation never finished this, so the specification
-is the authority here, not the old behaviour.
+**4. Types.** Traits, polymorphism and overload resolution. The legacy
+implementation never finished this, so the specification is the authority here,
+not the old behaviour.
+
+*This line said "Hindley-Milner inference" until 2026-08-21 and that was never
+true of this compiler.* There is no HM engine and no ADT resolution: `unify`,
+`occurs_check`, `TypeVar` and `Substitution` have zero hits across every crate,
+and `Type` (`crates/types/src/types.rs:86-102`) is a `Copy` enum with **no
+variable case**, so there is nowhere for an inference variable to live. What
+exists is bidirectional checking (`expected: Option<Type>`, which pins literals
+and asserts subtyping and never converts anything) over a monomorphizer that
+requires every static argument to be written. **Phase 4 is a build, not an
+extension** -- which is why decision 4 asks for it to be split before it starts.
+See `docs/superpowers/specs/2026-08-21-d6-phase4-split.md`.
 *Exit:* type checks `Library/` and the corpus, disagreements with the legacy
 interpreter documented rather than silently matched.
 

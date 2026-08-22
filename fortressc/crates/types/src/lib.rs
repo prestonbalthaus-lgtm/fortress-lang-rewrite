@@ -541,6 +541,32 @@ impl Checker {
         };
         let mut declared: HashMap<&'static str, Span> = HashMap::new();
 
+        // 1.0'S TWO ROOT TRAITS, seeded because nothing can import them yet.
+        // `Any` is `Specification/basic/basic.tex`'s top of the hierarchy and
+        // `Object` is every value that is not a tuple or an arrow; this
+        // compiler had NEITHER, so `x: Object` was `unknown type` and
+        // `mono.rs` merely tolerated the two names in a declaration header.
+        //
+        // SEEDED INTO `registry.traits` AND NOT INTO `declared`, which is the
+        // whole care of it: `ProjectFortress/LibraryBuiltin/AnyType.fss`
+        // declares `trait Any end` itself and compiles today, and seeding into
+        // the duplicate-definition map would cost that file `defined twice`.
+        //
+        // They come out on the day import resolution can supply them from
+        // `LibraryBuiltin/AnyType.fss` and `CompilerBuiltin.fsi`.
+        registry.traits.insert(
+            intern("Any"),
+            TraitInfo {
+                supertraits: BTreeSet::new(),
+            },
+        );
+        registry.traits.insert(
+            intern("Object"),
+            TraitInfo {
+                supertraits: [intern("Any")].into_iter().collect(),
+            },
+        );
+
         for decl in &component.decls {
             let (name, span) = match decl {
                 Decl::Trait(t) => (intern(&t.name), t.span),
@@ -656,6 +682,24 @@ impl Checker {
                 info.supertraits = closed;
             }
         }
+        // EVERY USER TRAIT SITS UNDER `Object`, WHICH SITS UNDER `Any`. Done
+        // after the closure rather than inside it so that a trait naming
+        // `Object` in its own `extends` clause is not walked twice.
+        let root_any = intern("Any");
+        let root_object = intern("Object");
+        let user_traits: Vec<&'static str> = self
+            .registry
+            .traits
+            .keys()
+            .copied()
+            .filter(|n| *n != root_any && *n != root_object)
+            .collect();
+        for name in user_traits {
+            if let Some(info) = self.registry.traits.get_mut(name) {
+                info.supertraits.insert(root_object);
+                info.supertraits.insert(root_any);
+            }
+        }
 
         // A TRAIT'S FIELDS CARRY NO STORAGE HERE and are dropped -- a trait
         // typed value is a pointer to some concrete object, and the object
@@ -682,6 +726,13 @@ impl Checker {
                     supertraits.extend(info.supertraits.iter().copied());
                 }
             }
+            // AN OBJECT WITH NO `extends` CLAUSE IS REACHED BY NOTHING
+            // ABOVE. The trait closure walks `extends` edges, and an object
+            // that writes none has no edge to walk -- so `object A1 end` would
+            // sit under neither root while `object A1 extends At end` sat
+            // under both.
+            supertraits.insert(intern("Object"));
+            supertraits.insert(intern("Any"));
             let fields = self.object_fields(o)?;
             if let Some(info) = self.registry.objects.get_mut(name) {
                 info.supertraits = supertraits;

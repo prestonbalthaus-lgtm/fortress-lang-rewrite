@@ -100,3 +100,25 @@ ProjectFortress/compiler_tests/Compiled1.al.fss
 #                   real work and is nobody's item yet.
 # ---------------------------------------------------------------------------
 ProjectFortress/parser_tests/XXXPreparser.c.fss
+
+# ---------------------------------------------------------------------------
+# ADDED AT THE OBJECT/ANY MERGE, 2026-08-22, WITH ITS REASON.
+#
+#   Compiled5.j  The legacy refuses it for "Invalid overloading of f":
+#                `f(a:A)` and `f(b:B)` where `trait C extends {A,B}`.
+#                IT WAS NOT REFUSED HERE BY THAT RULE. Until `Object` was a
+#                type it died on `f(o:Object)` -- `unknown type Object` -- so
+#                the refusal was an accident of the missing seed, exactly as
+#                XXXPreparser.c was an accident of the import resolver.
+#                OUR ACCEPTANCE IS THE RECORDED CLOSED-WORLD DEVIATION and not
+#                a new one: dispatch here enumerates every tuple of CONCRETE
+#                types reaching the set, and `A comprises {At,C}` while
+#                `B comprises {Bt,C}`, so the only value reaching both arms is
+#                a `C` and `f(c:C)` is its unique most-specific winner. 1.0
+#                asks the question open-world, where some later type could
+#                extend A and B without extending C.
+#                CHECKED BY RUNNING IT rather than by exit 0: it prints
+#                `A`, `B`, `C`, which is what the three calls mean.
+#                Re-opens if exclusion ever becomes open-world; it will not.
+# ---------------------------------------------------------------------------
+ProjectFortress/compiler_tests/Compiled5.j.fss

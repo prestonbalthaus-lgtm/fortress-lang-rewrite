@@ -186,7 +186,31 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # The `.fss` half does NOT gain, and its wall is real rather than a typo:
 # `unit degreeOfAngle degrees: Angle = (180/pi) radian` -- `pi` is a numeric
 # CONSTANT and the conversion evaluator knows only units.
-OBJECT_FLOOR=296
+#
+# THE OBJECT/ANY MERGE, semantics/phase2: 346 objects, 64 apis. `Object` and
+# `Any` are 1.0's root traits and this compiler had NEITHER -- `mono.rs` merely
+# TOLERATED the two names in a declaration header and `Registry::resolve` then
+# refused them, so `x: Object` was `unknown type`. They are seeded in
+# `Checker::new` now, `Object` under `Any`, every user trait under `Object`, and
+# every object under both.
+# THE NUMBERS ARE MEASURED ON THE MERGED TREE AND NOT CARRIED OVER. The branch
+# recorded 285 -> 293 against a base nine commits behind this one; on this tree
+# the move is 334 -> 346, TWELVE files, zero lost, and the IR body of all 398
+# modules that compiled before is BYTE FOR BYTE unchanged -- which is the
+# acceptance test, not the count.
+#   Compiled9.{Overriding,DiamondOverriding,MultipleOverriding,
+#              RedundantOverriding,AsString}   five, and four of them are
+#     verified against the legacy's OWN recorded output rather than exit 0:
+#     their .test files say run_out_equals=O.m and they print `O.m`.
+#   Compiled190  Compiled5.e  Compiled5.j  SimpleTrait  extendObject
+#   Trait.Decl   Overview.List
+# THE SLACK RISES TO 39 WITH IT. `Compiled5.j.fss` is one of the twelve AND a
+# must-FAIL: the legacy refuses it for invalid overloading, we accept it under
+# the recorded CLOSED-WORLD exclusion rule, and it is in
+# tools/oracle-accepted-must-fail.txt with that reason written out. So the list
+# is 38 and the slack is 38 + XXXequalityTesting.fss = 39, and the floor is
+# 346 - 39 = 307.
+OBJECT_FLOOR=307
 API_FLOOR=64
 
 passed=0

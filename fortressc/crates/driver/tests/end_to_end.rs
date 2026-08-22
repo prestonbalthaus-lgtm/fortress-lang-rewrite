@@ -3210,3 +3210,37 @@ fn the_executable_api_in_this_tree_takes_no_arguments() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+/// `Object` and `Any` are 1.0's root traits, seeded in `Checker::new` because
+/// nothing can import them yet. Measured +8 corpus files on the full sweep and
+/// +7 on `triage --real`; the recorded +7 predated a lot of tree movement.
+#[test]
+fn object_and_any_are_seeded_root_traits() {
+    let binary = compile_fixture("objectany.fss", "objectany");
+    let out = run(&binary);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "1\n2\n");
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// The seed goes into the trait table and NOT into the duplicate-definition map.
+/// `ProjectFortress/LibraryBuiltin/AnyType.fss` declares `trait Any end` itself
+/// and compiles today; seeding into `declared` would cost that file.
+#[test]
+fn a_program_may_still_declare_any_itself() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../..")
+                .join("ProjectFortress/LibraryBuiltin/AnyType.fss"),
+        )
+        .arg("--emit-ir")
+        .output()
+        .expect("could not run fortressc");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
