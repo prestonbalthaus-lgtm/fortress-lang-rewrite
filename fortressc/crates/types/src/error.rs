@@ -495,6 +495,11 @@ pub enum TypeError {
         name: String,
         cells: usize,
     },
+    /// `(a, a) = (1, 2)`. Two parts of one binder claiming the same name.
+    DuplicateBinderName {
+        span: Span,
+        name: String,
+    },
     /// `(a, b) = (1, 2, 3)`. The binder and the initializer disagree on how
     /// many elements there are.
     TupleArityMismatch {
@@ -803,6 +808,7 @@ impl TypeError {
             | Self::ApiDeclarationHasBody { span, .. }
             | Self::MissingBody { span, .. }
             | Self::TraitCycle { span, .. }
+            | Self::DuplicateBinderName { span, .. }
             | Self::TupleArityMismatch { span, .. }
             | Self::TupleNotStorable { span, .. }
             | Self::SpawnInsideAtomic { span }
@@ -1398,6 +1404,9 @@ impl core::fmt::Display for TypeError {
                 f,
                 "{form} is parsed but not implemented in parallel loops"
             ),
+            Self::DuplicateBinderName { name, .. } => {
+                write!(f, "`{name}` is bound twice by one tuple binding")
+            }
             Self::TupleArityMismatch { names, values, .. } => write!(
                 f,
                 "this binding names {names} value(s) and its initializer has \

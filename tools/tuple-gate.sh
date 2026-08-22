@@ -328,19 +328,16 @@ end'
 # codegen arms, and a gate asserting landed behaviour that has never been shown
 # to refuse is not evidence.
 #
-# Rows are bar-free: a mutation table splits on `|`.
+# Rows are bar-free AND SINGLE LINE. The table splits on `|`, so a closure's
+# bars cannot appear -- and `read` stops at the first newline, so a multi-line
+# pattern is silently truncated and matches the wrong thing. Both were paid for
+# here: the first draft of the third row was multi-line, and it reported
+# `the mutation pattern is not unique (13 hits)` with an EMPTY label.
 MUTATIONS=(
   'crates/parser/src/lib.rs|        Ok(Some(fortress_ast::TupleBinding { names, value, span }))|        Ok(None)|delete the binder parse, so the silent INFIX EQUALITY reading comes back'
   'crates/types/src/lib.rs|            self.declare(name.clone(), ty, false);|            let _ = ty;|bind nothing, so the names are not in scope'
-  'crates/types/src/lib.rs|                    name: name.clone(),
-                });
-            }
-        }
-        if items.len() != b.names.len() {|                    name: String::new(),
-                });
-            }
-        }
-        if false {|drop the arity check and blank the repeated-name diagnostic'
+  'crates/types/src/lib.rs|                if earlier == name {|                if false {|let a binder repeat a name, so the second part silently overwrites the first'
+  'crates/types/src/lib.rs|        if items.len() != b.names.len() {|        if false {|drop the arity check on a binder'
 )
 
 mutate_needs_the_built_compiler() {

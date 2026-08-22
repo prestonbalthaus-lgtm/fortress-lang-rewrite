@@ -3176,6 +3176,24 @@ impl Checker {
                 position: "the initializer of a tuple binding, unless it is written as a tuple",
             });
         };
+        // `(a, a) = (1, 2)` COMPILED AND PRINTED 2. The second part overwrote
+        // the first in the scope and nothing said so -- a silent wrong answer
+        // in a feature landed the same day, and every fixture used distinct
+        // names so nothing caught it. Zero corpus files write one, measured.
+        //
+        // A NESTED LOOP AND NOT `any(|earlier| ...)`, and that is not taste: a
+        // mutation table splits its rows on `|`, so a row cannot contain a
+        // closure's bars. `if earlier == name {` is bar-free and unique.
+        for (index, name) in b.names.iter().enumerate() {
+            for earlier in b.names.iter().take(index) {
+                if earlier == name {
+                    return Err(TypeError::DuplicateBinderName {
+                        span: b.span,
+                        name: name.clone(),
+                    });
+                }
+            }
+        }
         if items.len() != b.names.len() {
             return Err(TypeError::TupleArityMismatch {
                 span: b.span,
