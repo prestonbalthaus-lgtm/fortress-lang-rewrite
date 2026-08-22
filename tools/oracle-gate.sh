@@ -68,7 +68,33 @@ export FORTRESS_WORKERS=${FORTRESS_WORKERS:-1}
 if [[ ${1:-} == --mutate ]]; then
     fortressc=${FORTRESSC:-$repo/fortressc/target/debug/fortressc}
     cd "$repo" || exit 2
-    if ! git diff --quiet -- tools/ ProjectFortress/compiler_tests/; then
+
+    # WHY THIS GATE'S VERSION OF THE GUARD READS DIFFERENTLY FROM EVERY OTHER
+    # ONE. The other eleven mutate `fortressc/crates` and rebuild, so theirs
+    # says "a pinned binary makes each mutation a silent no-op". NOT TRUE HERE:
+    # none of the six rows below touches a crate and nothing is rebuilt, so a
+    # pinned binary would apply every mutation faithfully. The reason the pin
+    # is still refused is the EXPECTED NUMBERS. Rows 5 and 6 assert 495 cases
+    # and a position relative to `passFloor`, and the comment on row 6 says it
+    # outright -- the pass count is a property of TODAY'S COMPILER, and every
+    # refusal added anywhere moves it. Point FORTRESSC at yesterday's binary
+    # and the rows fail against a baseline that was never theirs.
+    mutate_needs_the_built_compiler() {
+        local built=$repo/fortressc/target/debug/fortressc
+        if [[ $fortressc != "$built" ]]; then
+            printf 'refusing --mutate: FORTRESSC is %s\n' "$fortressc" >&2
+            printf 'but this table baselines its counts against %s.\n' "$built" >&2
+            printf 'A pinned binary fails rows against numbers that are not its own. Unset FORTRESSC.\n' >&2
+            exit 2
+        fi
+    }
+    mutate_needs_the_built_compiler
+
+    # AGAINST HEAD, NOT AGAINST THE INDEX, and `restore` below matches. This
+    # said `git diff --quiet --` while the comment above claimed HEAD: staged
+    # work passed the guard and was then restored away as "clean", and the
+    # worktree and the index would agree with each other while both were wrong.
+    if ! git diff --quiet HEAD -- tools/ ProjectFortress/compiler_tests/; then
         printf 'the tree differs from HEAD under tools/ or the test dirs;\n'
         printf 'commit or stash before mutating, or a restore will lose work\n' >&2
         exit 2
@@ -77,7 +103,7 @@ if [[ ${1:-} == --mutate ]]; then
     gate() { FORTRESSC=$fortressc ./tools/oracle-gate.sh --skip-run --json 2>/dev/null; }
     gate_full() { FORTRESSC=$fortressc ./tools/oracle-gate.sh --json 2>/dev/null; }
     field() { python3 -c 'import json,sys; d=json.load(sys.stdin); print(eval(sys.argv[1],{},{"d":d}))' "$1"; }
-    restore() { git checkout -- "$@"; }
+    restore() { git checkout HEAD -- "$@"; }
 
     mut_pass=0; mut_fail=0; mut_doc=0
 
@@ -204,7 +230,7 @@ if [[ ${1:-} == --mutate ]]; then
 
     printf '\n%d mutations, %d refused, %d documented escape(s), %d unexplained\n' \
         "$((mut_pass + mut_fail + mut_doc))" "$mut_pass" "$mut_doc" "$mut_fail"
-    git diff --quiet -- tools/ ProjectFortress/compiler_tests/ || {
+    git diff --quiet HEAD -- tools/ ProjectFortress/compiler_tests/ || {
         printf 'TREE NOT RESTORED -- inspect git status before trusting this run\n' >&2
         exit 2
     }
