@@ -1037,7 +1037,7 @@ impl<'ctx> Lowering<'ctx> {
                 captures,
                 symbol,
             } => self.spawn(body, captures, symbol).map(Some),
-            TypedExprKind::ThreadOp { op, handle } => self.thread_op(*op, handle),
+            TypedExprKind::ThreadOp { op, handle } => self.thread_op(*op, handle, e.ty),
             TypedExprKind::TypeCase {
                 subject,
                 arms,
@@ -1671,19 +1671,7 @@ impl<'ctx> Lowering<'ctx> {
         self.scopes.push(scope);
 
         let value = self.expr(body)?;
-        let returned: BasicValueEnum<'ctx> = match value {
-            // A scalar is widened to pointer width and handed back through the
-            // handle. `val()` narrows it again; the checker has already refused
-            // every case where the two would disagree.
-            Some(v) if v.is_int_value() => self
-                .builder
-                .build_int_z_extend(v.into_int_value(), self.context.i64_type(), "spawn.ret")
-                .map_err(CodegenError::from_builder)?
-                .const_to_pointer(self.ptr_type())
-                .into(),
-            Some(v) if v.is_pointer_value() => v,
-            _ => self.ptr_type().const_null().into(),
-        };
+        let returned = self.encode_thread_result(value)?;
         self.builder
             .build_return(Some(&returned))
             .map_err(CodegenError::from_builder)?;
@@ -1696,6 +1684,82 @@ impl<'ctx> Lowering<'ctx> {
         Ok(())
     }
 
+    /// A spawned body's value crosses back through ONE POINTER-WIDE SLOT, so
+    /// it is encoded here and decoded by `val()`. The two are a matched pair
+    /// and neither is meaningful alone.
+    ///
+    /// `build_int_to_ptr` AND NOT `const_to_pointer`. The latter is the
+    /// CONSTANT-expression API: it is valid only when the operand really is a
+    /// constant, and a body ending in a call produces an instruction. LLVM
+    /// answered `Use of instruction is not an instruction!` and the driver
+    /// exited 70 -- on user source, which this project's own rules forbid.
+    /// NO CORPUS FILE COULD HAVE FOUND IT: every Spawn file the corpus can
+    /// compile has a `()` body, and Spawn5 and Spawn6 -- the two that return a
+    /// value -- are blocked before this on a `for` range bound.
+    fn encode_thread_result(
+        &mut self,
+        value: Option<BasicValueEnum<'ctx>>,
+    ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+        let i64t = self.context.i64_type();
+        let widened = match value {
+            Some(v) if v.is_int_value() => self
+                .builder
+                .build_int_z_extend(v.into_int_value(), i64t, "spawn.ret")
+                .map_err(CodegenError::from_builder)?,
+            // A double travels as its BITS and not as a conversion. `RR64` is
+            // the one scalar where a numeric cast would silently change the
+            // value rather than lose a wrapper.
+            Some(v) if v.is_float_value() => self
+                .builder
+                .build_bit_cast(v.into_float_value(), i64t, "spawn.bits")
+                .map_err(CodegenError::from_builder)?
+                .into_int_value(),
+            // Already pointer-wide: a String is bytes on the heap and needs no
+            // encoding at all.
+            Some(v) if v.is_pointer_value() => return Ok(v),
+            _ => return Ok(self.ptr_type().const_null().into()),
+        };
+        self.builder
+            .build_int_to_ptr(widened, self.ptr_type(), "spawn.slot")
+            .map_err(CodegenError::from_builder)
+            .map(Into::into)
+    }
+
+    /// The other half of the pair. `fortress_thread_val` hands back the slot as
+    /// a `ptr`; without this the raw pointer reached `println_zz32(i32)` and
+    /// LLVM refused the module.
+    fn decode_thread_result(
+        &mut self,
+        raw: BasicValueEnum<'ctx>,
+        want: Type,
+    ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+        if want == Type::String {
+            return Ok(raw);
+        }
+        let i64t = self.context.i64_type();
+        let bits = self
+            .builder
+            .build_ptr_to_int(raw.into_pointer_value(), i64t, "val.bits")
+            .map_err(CodegenError::from_builder)?;
+        let narrowed: BasicValueEnum<'ctx> = match want {
+            Type::ZZ64 => bits.into(),
+            Type::RR64 => self
+                .builder
+                .build_bit_cast(bits, self.context.f64_type(), "val.rr64")
+                .map_err(CodegenError::from_builder)?,
+            other => {
+                let ty = self.basic_type(other).ok_or_else(|| {
+                    CodegenError::internal("a thread result has no type".to_owned())
+                })?;
+                self.builder
+                    .build_int_truncate(bits, ty.into_int_type(), "val.narrow")
+                    .map_err(CodegenError::from_builder)?
+                    .into()
+            }
+        };
+        Ok(narrowed)
+    }
+
     /// One of the four handle methods. Each is a direct call on the pointer the
     /// spawn returned; a trait has no run-time representation here and neither
     /// does a thread.
@@ -1703,6 +1767,7 @@ impl<'ctx> Lowering<'ctx> {
         &mut self,
         op: ThreadOp,
         handle: &TypedExpr,
+        want: Type,
     ) -> Result<Option<BasicValueEnum<'ctx>>, CodegenError> {
         let value = self
             .expr(handle)?
@@ -1714,7 +1779,20 @@ impl<'ctx> Lowering<'ctx> {
             ThreadOp::Stop => THREAD_STOP,
         };
         let returns = matches!(op, ThreadOp::Val | ThreadOp::Ready);
-        self.call_runtime(symbol, &[value], returns)
+        let raw = self.call_runtime(symbol, &[value], returns)?;
+        match (op, raw) {
+            (ThreadOp::Val, Some(v)) => self.decode_thread_result(v, want).map(Some),
+            // `Boolean` CROSSES TO C AS `int`, which is the convention
+            // `println_boolean(i32)` already follows -- but nothing had ever
+            // brought one BACK before, so this is the first narrowing of its
+            // kind. Without it an `i32` reaches an `i1` context.
+            (ThreadOp::Ready, Some(v)) => self
+                .builder
+                .build_int_truncate(v.into_int_value(), self.context.bool_type(), "ready")
+                .map_err(CodegenError::from_builder)
+                .map(|b| Some(b.into())),
+            _ => Ok(raw),
+        }
     }
 
     fn declare_loop_body(&mut self, symbol: &str) -> FunctionValue<'ctx> {

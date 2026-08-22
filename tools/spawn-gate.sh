@@ -140,6 +140,83 @@ shapes() {
     else bad 'every shape holds' "$(printf '%s' "$out" | grep -E 'FAIL|HUNG' | head -2)"; fi
 }
 
+# ------------------------------------------------- the value comes back
+
+# THIS WHOLE SECTION EXISTS BECAUSE THE CORPUS CANNOT REACH IT. Every Spawn
+# file the corpus can compile has a `()` body; Spawn5 and Spawn6 are the two
+# that return a value and both are blocked before this on a `for` range bound
+# that must be ZZ64. So "zero exit 70 over 1956 files" said NOTHING about the
+# scalar path -- and the scalar path exited 70, twice over: `const_to_pointer`
+# on a non-constant ("Use of instruction is not an instruction!") and a raw
+# `ptr` handed to `println_zz32(i32)`.
+#
+# ZZ64 IS CHECKED ABOVE 2^32 ON PURPOSE. The value crosses through one
+# pointer-wide slot, and a truncation to 32 bits is exactly the defect that
+# would survive a test using small numbers.
+scalars() {
+    printf '\n== a scalar value comes back through val(), and ready() narrows ==\n'
+    local name body want got rc
+
+    # name | want | body-and-run
+    run_case() {  # run_case NAME WANT SOURCE
+        printf '%s' "$3" > "$build/$1.fss"
+        if ! "$fortressc" "$build/$1.fss" -o "$build/$1" >"$build/$1.err" 2>&1; then
+            bad "$1 compiles" "$(grep -v '^fortressc: ' "$build/$1.err" | head -1)"
+            return
+        fi
+        got=$(FORTRESS_WORKERS=1 timeout "$HANG_TIMEOUT" "$build/$1" 2>&1); rc=$?
+        if [[ $rc -eq 124 ]]; then bad "$1" 'HUNG'
+        elif [[ $got == "$2" ]]; then ok "$1 -> $got"
+        else bad "$1" "got '$got', want '$2'"; fi
+    }
+
+    run_case zz32val 8 'component p
+export Executable
+f(x:ZZ32):ZZ32 = x + 1
+run():()= println((spawn f(7)).val())
+end
+'
+    # Above 2^32: a truncation to 32 bits is the defect small numbers hide.
+    run_case zz64val 5000000001 'component p
+export Executable
+g(x:ZZ64):ZZ64 = x + 1
+run():()= println((spawn g(5000000000)).val())
+end
+'
+    # A double crosses as its BITS. A numeric cast would silently change it.
+    run_case rr64val 2.5 'component p
+export Executable
+h(x:RR64):RR64 = x + 0.5
+run():()= println((spawn h(2.0)).val())
+end
+'
+    run_case boolval true 'component p
+export Executable
+b(x:ZZ32):Boolean = x > 0
+run():()= println((spawn b(3)).val())
+end
+'
+    # A String is already pointer-wide and must NOT be encoded.
+    run_case strval hi 'component p
+export Executable
+s(x:String):String = x
+run():()= println((spawn s("hi")).val())
+end
+'
+    # `Boolean` crosses to C as `int` and nothing had ever brought one BACK
+    # before, so this is the first i32 -> i1 narrowing of its kind.
+    run_case readyif 1 'component p
+export Executable
+f(x:ZZ32):ZZ32 = x + 1
+run():()=do
+  t = spawn f(7)
+  t.wait()
+  if t.ready() then println(1) else println(0) end
+end
+end
+'
+}
+
 # ------------------------------------------------------------- the refusals
 
 refusals() {
@@ -207,6 +284,8 @@ MUTATIONS=(
   'runtime/shims.c|    if (!fortress_runner_started) {|    if (0) {|never start the runner, so nothing runs without a join'
   'runtime/shims.c|    pthread_cond_broadcast(&fortress_spawn_done);|    (void)0;|drop the completion broadcast, so every join blocks for ever'
   'crates/types/src/lib.rs|            return Err(TypeError::SpawnInsideAtomic { span });|            {}|let `spawn` inside `atomic` through'
+  'crates/codegen/src/lib.rs|        if want == Type::String {|        if false {|encode a String result that is already pointer-wide'
+  'crates/codegen/src/lib.rs|            Type::ZZ64 => bits.into(),|            Type::ZZ64 => self.context.i64_type().const_zero().into(),|drop the ZZ64 value on the way back'
 )
 
 # FORTRESSC AND --mutate DO NOT MIX, and the failure is silent: every mutation
@@ -254,7 +333,7 @@ PY
         else
             passed=0; failed=0
             preflight >/dev/null 2>&1
-            liveness; shapes; refusals; untouched
+            liveness; scalars; shapes; refusals; untouched
             if [[ $failed -gt 0 ]]; then
                 printf 'REFUSED  %d check(s) failed, which is the point\n' "$failed"
             else
@@ -280,6 +359,7 @@ case "${1:-}" in
         selftest
         preflight || exit 1
         liveness
+        scalars
         shapes
         refusals
         untouched
