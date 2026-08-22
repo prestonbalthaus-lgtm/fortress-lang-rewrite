@@ -503,11 +503,12 @@ pub enum TypeError {
         span: Span,
         name: String,
     },
-    /// `x := 0` at component level with no declared type. The GRAMMAR forbids
-    /// it: `variables.tex:22-27` gives the untyped form as
-    /// `VarImmutableMods? BindIdOrBindIdTuple = Expr` -- immutable modifiers
-    /// and `=` only -- and `:=` appears only in the alternatives that carry a
-    /// `: Type`.
+    /// `x := 0` and `var x = 0` at component level, both with no declared
+    /// type. The GRAMMAR forbids both: `variables.tex:22-27` gives the untyped
+    /// form as `VarImmutableMods? BindIdOrBindIdTuple = Expr` -- IMMUTABLE
+    /// modifiers and `=` only -- and every alternative that admits `var` or
+    /// `:=` carries a `: Type`. `Variable.rats:17` goes further and lists
+    /// `"var" BindIdOrBindIdTuple "=" Expr` as an explicit ERROR PRODUCTION.
     MutableValueNeedsType {
         span: Span,
         name: String,
@@ -1439,8 +1440,8 @@ impl core::fmt::Display for TypeError {
             ),
             Self::MutableValueNeedsType { name, .. } => write!(
                 f,
-                "the type of `{name}` is required: a top-level value declared \
-                 with `:=` must write its type"
+                "the type of `{name}` is required: a mutable top-level value \
+                 must write its type, whether it is spelled `var` or `:=`"
             ),
             Self::CyclicValueInitialization { names, .. } => write!(
                 f,

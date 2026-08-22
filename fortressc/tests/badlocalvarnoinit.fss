@@ -1,0 +1,13 @@
+component badlocalvarnoinit
+
+export Executable
+
+(* `variables.tex:203-210` -- a local `var x: T` with no initialiser is legal
+   1.0 and needs the definite-assignment analysis that makes reading before
+   the first write a static error. Refused BY NAME until that exists. *)
+run(): () = do
+    var x: ZZ32
+    x := 5
+    println(x)
+end
+end

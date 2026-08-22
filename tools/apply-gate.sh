@@ -276,8 +276,20 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # of the losses `test_library` support files that redeclare a builtin functional
 # method (`RecA.fsi`'s `odd(x:ZZ32)` against `odd(self)` on `ZZ32`). 77, and the
 # .fss count does not move at all -- the implicit import is api-side only.
+#
+# `var`, 2026-08-23: 387 objects and 79 apis. The two apis are
+# `Library/String.fsi` and `Library/FortressLibrary.fsi` -- THE BOOTSTRAP ROOT
+# AND THE ONE FILE IT WAS WAITING ON -- and the four objects are
+# `InitOrderWithMutable`, `ObjectFieldShadowing`, `overloadTest1` and
+# `overloadTest2`. Nothing lost, nothing crashed.
+# THE API FLOOR MOVES TO 79 AND THE OBJECT FLOOR DOES NOT MOVE, and that
+# asymmetry is the one the comment above already states: an api emits no object
+# so no accepted must-fail is inside the api count, which is why it can sit at
+# the measurement. The object count carries all 38 accepted must-fails, and
+# every one of those going the right way -- being REFUSED -- would take the
+# count down with it. 321 is the room that ratchet needs.
 OBJECT_FLOOR=321
-API_FLOOR=77
+API_FLOOR=79
 
 passed=0
 failed=0

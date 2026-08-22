@@ -1611,7 +1611,26 @@ impl Checker {
     /// fail by a check that is new, and a missed ambiguity is the state this
     /// replaces rather than a regression from it.
     fn api_overloads_are_unambiguous(&self) -> Checked<()> {
-        for (name, sigs) in &self.functions {
+        // DECLARATION ORDER IS CARRIED HERE, for the same reason
+        // `comprises::check` carries it. This rule reports the FIRST ambiguity
+        // it meets and returns, and `self.functions` is a `HashMap` --
+        // `Library/FortressLibrary.fsi` holds FOUR ambiguous sets at once, and
+        // the same binary on the same input named `<=`, `>`, `>=` or `SQCAP`
+        // depending on the hasher. Two correct refusals of one file, which is
+        // exactly why it went unnoticed; this project asserts MESSAGES, so the
+        // wall a gate pins has to be a stable thing.
+        //
+        // The earliest span first, so the diagnostic walks the file the way a
+        // reader does. Ties break on the name, because a merged api's spans
+        // are offsets into ANOTHER file and two sets can collide on one.
+        let mut sets: Vec<(&String, &Vec<Signature>)> = self.functions.iter().collect();
+        sets.sort_by(|(left_name, left), (right_name, right)| {
+            let first = |sigs: &[Signature]| sigs.iter().map(|s| s.span.start).min();
+            first(left)
+                .cmp(&first(right))
+                .then_with(|| left_name.cmp(right_name))
+        });
+        for (name, sigs) in sets {
             let mut arities: Vec<usize> = sigs.iter().map(|s| s.params.len()).collect();
             arities.sort_unstable();
             arities.dedup();

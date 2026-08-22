@@ -124,6 +124,28 @@ trait TotalComparison
     opr CMP(self, other:Unordered): Comparison
     opr >=(self, other:Unordered): Boolean
     opr >=(self, other:Comparison): Boolean
+(* v1 SOURCE CORRECTION: three disambiguating declarations added.
+   This trait's own comment says its "method definitions avoid ambiguities
+   between these orderings", and for `<` they do -- `LessThan`, `GreaterThan`
+   and `EqualTo` each declare `opr <(self, other:TotalComparison)`. `<=`, `>`
+   and `>=` were missed.
+   THE HIERARCHY INHERITS ONE GENERIC TRAIT AT TWO INSTANTIATIONS:
+     Comparison       extends StandardPartialOrder[\Comparison\]
+     TotalComparison  extends { Comparison, StandardTotalOrder[\TotalComparison\] }
+     StandardTotalOrder[\T\] extends StandardPartialOrder[\T\]
+   so `opr <=(self, other:T)` at :173 arrives at `EqualTo` twice, once with
+   T = Comparison and once with T = TotalComparison. Static arguments are
+   INVARIANT, so neither self type is below the other, while the second
+   parameter runs the other way -- the two cross and neither is most specific.
+   `advanced/overloading.tex:396-410`, the Meet Rule for Functional Methods:
+   "if there exists a trait or object C that provides both f(P) and f(Q) then
+   P /= Q and there is a declaration f(P INTER Q) provided by C". C is
+   `TotalComparison` and P INTER Q is `(TotalComparison, TotalComparison)`.
+   These three ARE that declaration. Nothing is widened and nothing is
+   weakened in the compiler; the same rule stands. *)
+    opr <=(self, other:TotalComparison): Boolean
+    opr >=(self, other:TotalComparison): Boolean
+    opr >(self, other:TotalComparison): Boolean
     opr LEXICO(self, other:TotalComparison): TotalComparison
     opr LEXICO(self, other:()->TotalComparison): TotalComparison
     abstract opr INVERSE(self): TotalComparison
@@ -895,6 +917,20 @@ value object Just[\T\](x:T) extends Maybe[\T\]
     reduce(_: Reduction[\T\]):T
     loop(f:T->()): ()
     opr =(self,o:Just[\T\]): Boolean
+(* v1 SOURCE CORRECTION: the disambiguating declaration added, from this file's
+   own precedent 25 lines below -- `Nothing[\T\]` declares BOTH
+   `SQCAP(self, o: Maybe[\T\])` and `SQCAP(self, o: UniqueItem[\T\])` and `Just`
+   declared only the second.
+   `Maybe[\T\]` extends `UniqueItem[\T\]`, so for a call on two `Just`s the
+   inherited `Maybe.SQCAP(self: Maybe, o: Maybe)` and this object's
+   `SQCAP(self: Just, o: UniqueItem)` cross: `Just` is below `Maybe` in the self
+   position and `Maybe` is below `UniqueItem` in the other. Neither is most
+   specific, and `advanced/overloading.tex:396-410` requires the meet
+   `(Just[\T\], Maybe[\T\])` from the object that provides both.
+   `Library/FortressLibrary.fss:1373-1374` -- the IMPLEMENTATION this api is
+   supposed to describe -- splits the same case into `SQCAP(o:NotUnique[\T\])`
+   and `SQCAP(o:Just[\T\])` and has no ambiguity either. *)
+    opr SQCAP(self, o: Maybe[\T\]): Maybe[\T\]
     opr SQCAP(self, o:UniqueItem[\T\]): Maybe[\T\]
     opr SQCUP(self, o:UniqueItem[\T\]): UniqueItem[\T\]
     unique(self): Maybe[\T\]

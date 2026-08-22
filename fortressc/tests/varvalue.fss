@@ -1,0 +1,18 @@
+component varvalue
+
+export Executable
+
+(* `variables.tex:78-93` -- the third form. `var id: T = e` and `id: T := e`
+   declare the same thing, and both are assignment targets. *)
+var counter: ZZ32 = 10
+tally: ZZ32 := 100
+limit: ZZ32 = 7
+
+run(): () = do
+    counter := counter + 5
+    tally += 1
+    println(counter)
+    println(tally)
+    println(limit)
+end
+end

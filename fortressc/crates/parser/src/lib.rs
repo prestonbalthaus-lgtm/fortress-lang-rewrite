@@ -1107,22 +1107,52 @@ impl<'t, 'a> Parser<'t, 'a> {
             // `stdIn: Reader` an api declares. A function declaration is always
             // `Ident` then `[\` or `(`, so none of these three tokens can begin
             // one and the branch cannot steal a function.
+            // `var maxLeafSize: ZZ32`. `Variable.rats:42-45` makes `var` an
+            // AbsVarMod and NOTHING ELSE: it is not an FnMod anywhere in the
+            // grammar, so it stays out of `modifiers()` -- folding it in there
+            // would admit `var f(x: ZZ32) = x`, which no production writes.
+            // This is the same shape `member` already uses at declaration
+            // level for a field.
+            Some(Kind::KwVar) => Ok(Decl::Value(self.value_decl(modifiers, true)?)),
             Some(Kind::Ident(_))
                 if matches!(
                     self.peek_ahead(1),
                     Some(Kind::Colon | Kind::Eq | Kind::ColonEq)
                 ) =>
             {
-                Ok(Decl::Value(self.value_decl(modifiers)?))
+                Ok(Decl::Value(self.value_decl(modifiers, false)?))
             }
             _ => Ok(Decl::Function(self.fn_decl(modifiers, signature_only)?)),
         }
     }
 
-    /// A component-level value declaration, carried as a nullary `FnDecl`
-    /// because the AST has no declaration node for a value yet. Deliberate
-    /// approximation: this is a parse-only spike, and mutability is dropped.
-    fn value_decl(&mut self, modifiers: Modifiers) -> Parsed<fortress_ast::ValueDecl> {
+    /// A top-level value declaration: `pi: RR64 = 3.14`, `x := 0`, the
+    /// initializer-less `stdIn: Reader` an api writes, and -- with `keyword` --
+    /// the `var` forms of all three.
+    ///
+    /// `keyword` is the `var` MODIFIER and not the same fact as `mutable`:
+    /// `variables.tex:88-93` makes `var id: T := e` and `id: T := e` the same
+    /// declaration, so the modifier is one of two spellings of one property.
+    /// It is carried separately only until the name is read, because it is
+    /// what decides where the span starts and whether a missing type is the
+    /// grammar's own error production.
+    fn value_decl(
+        &mut self,
+        modifiers: Modifiers,
+        keyword: bool,
+    ) -> Parsed<fortress_ast::ValueDecl> {
+        let start = self.span_here();
+        if keyword {
+            self.pos += 1;
+            // `VarWTypes` admits `(x: T, y: U)` and `BindIdOrBindIdTuple`
+            // admits `(x, y)`. Refused HERE rather than at `identifier`,
+            // which would report a missing name for a list that is written.
+            if self.at(&Kind::LParen) {
+                return Err(ParseError::VariableListUnsupported {
+                    span: self.span_here(),
+                });
+            }
+        }
         let (name, name_span) = self.identifier("a value name")?;
         let ty = if self.at(&Kind::Colon) {
             self.pos += 1;
@@ -1140,7 +1170,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         // threw it away, and three corpus files write a mutable value at
         // component level -- `Compiled5.k.fss:15` is `x := 0`. Dropping the
         // flag makes those silently immutable.
-        let mutable = self.at(&Kind::ColonEq);
+        let mutable = keyword || self.at(&Kind::ColonEq);
         let init = if self.definition_equals_at(self.pos) || self.at(&Kind::ColonEq) {
             self.pos += 1;
             self.skip_newlines();
@@ -1152,13 +1182,18 @@ impl<'t, 'a> Parser<'t, 'a> {
         let end = init
             .as_ref()
             .map_or_else(|| ty.as_ref().map_or(name_span, TypeRef::span), Expr::span);
+        let head = if keyword {
+            start.start
+        } else {
+            name_span.start
+        };
         Ok(fortress_ast::ValueDecl {
             modifiers,
             name,
             ty,
             init,
             mutable,
-            span: Span::new(name_span.start, end.end),
+            span: Span::new(head, end.end),
         })
     }
 
@@ -4569,6 +4604,18 @@ impl<'t, 'a> Parser<'t, 'a> {
         let mutable = match self.peek_kind() {
             Some(Kind::Eq) if self.definition_equals_at(self.pos) => modifier,
             Some(Kind::ColonEq) if ty.is_some() => true,
+            // `var x: ZZ32` on its own line. `variables.tex:176-179` gives a
+            // local this form and 58 corpus files write it -- the largest
+            // single first-blocker in the corpus -- so it is refused BY NAME
+            // rather than left to fall through to `expected an expression`.
+            // Nothing else this could be: a `var` and a written type with no
+            // `=` and no `:=` matches no other production.
+            _ if modifier && ty.is_some() => {
+                return Err(ParseError::DelayedInitializationUnsupported {
+                    span: name_span,
+                    name,
+                })
+            }
             _ => {
                 self.pos = save;
                 return Ok(None);

@@ -137,6 +137,19 @@ trait TotalComparison
     opr CMP(self, other:Unordered): Comparison
     opr >=(self, other:Unordered): Boolean
     opr >=(self, other:Comparison): Boolean
+(* v1 SOURCE CORRECTION: the same three disambiguating declarations this file's
+   twin `Library/FortressLibrary.fsi` takes, and for the same reason -- this
+   trait inherits `StandardPartialOrder` at TWO instantiations, so `<=`, `>` and
+   `>=` each arrive twice with the self position and the parameter position
+   crossing. `advanced/overloading.tex:396-410` requires the meet declaration
+   from the trait that provides both. See
+   docs/superpowers/specs/2026-08-23-library-overload-ambiguities.md.
+   THIS COPY CANNOT BE CHECKED YET -- it stops at :86 on `Self` -- so the
+   correction is carried for parity with the twin and is not independently
+   compiler-named here. *)
+    opr <=(self, other:TotalComparison): Boolean
+    opr >=(self, other:TotalComparison): Boolean
+    opr >(self, other:TotalComparison): Boolean
     opr LEXICO(self, other:TotalComparison): TotalComparison
     opr LEXICO(self, other:()->TotalComparison): TotalComparison
     abstract opr INVERSE(self): TotalComparison
@@ -902,6 +915,10 @@ value object Just[\T\](x:T) extends Maybe[\T\]
     reduce(_: Reduction[\T\]):T
     loop(f:T->()): ()
     opr =(self,o:Just[\T\]): Boolean
+(* v1 SOURCE CORRECTION: the meet declaration `Nothing[\T\]` below already
+   carries and `Just[\T\]` did not. Same correction as the twin; same parity
+   note as the one above. *)
+    opr SQCAP(self, o: Maybe[\T\]): Maybe[\T\]
     opr SQCAP(self, o:UniqueItem[\T\]): Maybe[\T\]
     opr SQCUP(self, o:UniqueItem[\T\]): UniqueItem[\T\]
     unique(self): Maybe[\T\]

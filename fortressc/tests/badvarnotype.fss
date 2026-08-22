@@ -1,0 +1,10 @@
+component badvarnotype
+
+export Executable
+
+(* `Variable.rats:17` marks `"var" BindIdOrBindIdTuple "=" Expr` an ERROR
+   PRODUCTION: a top-level `var` must write its type. *)
+var x = 5
+
+run(): () = println(x)
+end

@@ -2387,25 +2387,28 @@ fn the_bootstrap_root_parses_in_full() {
         "two BODILESS declarations of one signature are one declaration; that \
          wall may not come back: {message}"
     );
-    // REPINNED A FIFTH TIME, AND THE FILE IS NOW PAST EVERY TOPOLOGICAL WALL.
-    // The builtins are importable, so `RR32` resolves; the four `comprises`
-    // contradictions with the builtin are CORRECTED IN THE LIBRARY SOURCE, as
-    // are the eight Boolean operators it declared on top of the builtin's own
-    // methods and the two `String` methods it declared twice. All fourteen are
-    // marked `v1 SOURCE CORRECTION` at the site, and each was named by the
-    // COMPILER rather than by reading -- one run per removal.
+    // THERE IS NO WALL LEFT. The file CHECKS.
     //
-    // WHAT IS LEFT IS NOT THE LIBRARY'S FAULT. `Library/String.fsi:43` writes
-    // `var maxLeafSize: ZZ32`, which this parser cannot read yet -- the
-    // `expected an expression, found KwVar` class, 58 first-blockers and the
-    // largest single one in the corpus -- so the resolver skips that api as
-    // unreadable and `StringStats` never arrives. That source is CORRECT
-    // Fortress and is deliberately not "corrected".
+    // The last two came down together and neither was patched around.
+    // `Library/String.fsi:43` writes `var maxLeafSize: ZZ32` -- correct
+    // Fortress that this parser could not read, so the resolver skipped the
+    // whole api as unreadable and `StringStats` never arrived. `var` is
+    // PARSED now; that source is untouched, and
+    // `the_library_string_api_checks_with_its_var_declaration_intact` asserts
+    // it stays untouched.
     //
-    // AND ONE MORE WALL IS MEASURED BEHIND IT, not guessed: neutralise that one
-    // line and `String.fsi` checks clean (60 declarations) and this file walks
-    // from :2423 to :878, `opr SQCAP(self, o: Maybe[\T\])` being ambiguous for
-    // a pair of `Just` instantiations.
+    // Behind it were FOUR ambiguous overload sets, not the one the record
+    // named: `<=`, `>` and `>=` at `(EqualTo, EqualTo)` and `SQCAP` at a pair
+    // of `Just` instantiations. Only one was ever reported because
+    // `api_overloads_are_unambiguous` iterated a `HashMap` and returned at the
+    // first -- the same nondeterminism `comprises::check` had, found the same
+    // way, fixed the same way. All four are ONE shape: a generic trait
+    // inherited at two INVARIANT instantiations, so the self position and a
+    // parameter position pull opposite ways and neither declaration is most
+    // specific. All four are corrected IN THE LIBRARY SOURCE with the meet
+    // declaration `advanced/overloading.tex:396-410` requires, and the file's
+    // own `<` (on all three `TotalComparison` objects) and `Nothing[\T\]`'s
+    // own `SQCAP` pair are the precedent for both.
     assert!(
         !message.contains("unknown type `RR32`"),
         "the builtins are importable now; `RR32` may not come back as the wall: \
@@ -2422,9 +2425,50 @@ fn the_bootstrap_root_parses_in_full() {
          {message}"
     );
     assert!(
-        message.contains("unknown type `StringStats`"),
-        "the remaining blocker should be an api this parser cannot read: \
-         {message}"
+        !message.contains("unknown type `StringStats`"),
+        "`String.fsi` is readable now, so its declarations arrive: {message}"
+    );
+    assert!(
+        !message.contains("is ambiguous for"),
+        "the four ambiguous overload sets are corrected in the source; none may \
+         come back as the wall: {message}"
+    );
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "the bootstrap root CHECKS. It is the ratchet for the whole library and \
+         it does not go back: {message}"
+    );
+}
+
+/// AND THE SAME ANSWER EVERY RUN. `api_overloads_are_unambiguous` reported the
+/// first ambiguity out of a `HashMap`, and this file holds FOUR at once -- so
+/// the same binary on the same input named `<=`, `>`, `>=` or `SQCAP`
+/// depending on the hasher, and the project's own record of "the wall behind
+/// `var`" was one arbitrary draw out of four. No one-line mutation can reach
+/// the iteration order, so it is asserted by repetition, the way
+/// `apply-gate.sh` asserts the `comprises` one.
+#[test]
+fn the_bootstrap_root_answers_the_same_on_five_runs() {
+    let mut seen: Vec<String> = Vec::new();
+    for _ in 0..5 {
+        let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+            .arg(corpus("Library/FortressLibrary.fsi"))
+            .arg("--emit-obj")
+            .arg("-o")
+            .arg("/dev/null")
+            .output()
+            .expect("could not run fortressc");
+        seen.push(format!(
+            "{:?}|{}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr)
+        ));
+    }
+    let first = seen.first();
+    assert!(
+        seen.iter().all(|answer| Some(answer) == first),
+        "the same binary gave two answers on one input: {seen:?}"
     );
 }
 
@@ -2788,6 +2832,130 @@ fn a_mutable_top_level_value_must_write_its_type() {
         .expect("could not run fortressc");
     let message = String::from_utf8_lossy(&out.stderr);
     assert!(message.contains("the type of `x` is required"), "{message}");
+}
+
+// -------------------------------------------------- the `var` modifier
+//
+// `Variable.rats:42-45` -- an api declares a variable with `AbsVarDecl`, which
+// is `AbsVarMods? VarWTypes` and carries NO initializer. `Library/String.fsi:43`
+// is the one that mattered: `var maxLeafSize: ZZ32` is correct Fortress, this
+// parser could not read it, and the resolver therefore skipped the whole api as
+// unreadable so `StringStats` never reached `FortressLibrary.fsi`.
+
+/// An api's `var` declaration is a SIGNATURE: no initializer, and the file
+/// checks.
+#[test]
+fn an_api_may_declare_a_mutable_variable() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture("apivar.fsi"))
+        .arg("--emit-obj")
+        .arg("-o")
+        .arg("/dev/null")
+        .output()
+        .expect("could not run fortressc");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// AND THE FILE THAT PAID FOR IT. `Library/String.fsi` is the api the library
+/// root imports `StringStats` from; it checks clean with the `var` line as
+/// WRITTEN, which is the point -- the source was never patched.
+#[test]
+fn the_library_string_api_checks_with_its_var_declaration_intact() {
+    let source = std::fs::read_to_string(corpus("Library/String.fsi"))
+        .expect("could not read Library/String.fsi");
+    assert!(
+        source.contains("var maxLeafSize: ZZ32"),
+        "the declaration this test exists for is not in the file any more; it is \
+         correct Fortress and may not be `corrected` to work around the parser"
+    );
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(corpus("Library/String.fsi"))
+        .arg("--emit-obj")
+        .arg("-o")
+        .arg("/dev/null")
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{message}");
+}
+
+/// `var counter: ZZ32 = 10` at component level is the SAME declaration
+/// `counter: ZZ32 := 10` makes -- `variables.tex:88-93` -- so it is storage and
+/// it is an assignment target. Compiled AND RUN: a flag that parses and lowers
+/// to a constant would pass any check that stopped at the diagnostic.
+#[test]
+fn a_var_top_level_value_is_storage() {
+    let binary = compile_fixture("varvalue.fss", "varvalue");
+    let out = run(&binary);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "15\n101\n7\n");
+}
+
+/// `Variable.rats:17` lists `"var" BindIdOrBindIdTuple "=" Expr` as an explicit
+/// ERROR PRODUCTION: a mutable top-level value must write its type in either
+/// spelling.
+#[test]
+fn a_var_top_level_value_without_a_type_is_refused() {
+    let message = refusal("badvarnotype.fss");
+    assert!(message.contains("the type of `x` is required"), "{message}");
+}
+
+/// A parenthesised `VarWTypes` list declares a TUPLE of variables and needs the
+/// tuple value this backend has no representation for. Refused by name, so the
+/// four corpus files that write one land in the tuple bucket.
+#[test]
+fn a_parenthesised_variable_list_is_refused_by_name() {
+    let message = refusal("badvartuple.fsi");
+    assert!(
+        message.contains("a parenthesised variable list"),
+        "{message}"
+    );
+}
+
+/// THE 58 FILES THIS MILESTONE DOES NOT TAKE, and why it does not take them.
+/// `variables.tex:203-210` gives a LOCAL the delayed-initialization form and
+/// makes reading such a variable before its first assignment a STATIC ERROR.
+/// That is a definite-assignment analysis, and an `alloca` with no store is a
+/// silent wrong answer rather than a missing feature -- so the form is refused
+/// BY NAME instead of falling through to `expected an expression`.
+#[test]
+fn a_local_var_without_an_initializer_is_refused_by_name() {
+    let message = refusal("badlocalvarnoinit.fss");
+    assert!(
+        message.contains("is declared with no initializer"),
+        "{message}"
+    );
+    assert!(
+        !message.contains("expected an expression"),
+        "this form is refused by name now, not by falling out of the parser's \
+         shape: {message}"
+    );
+}
+
+/// AND `var` IS NOT A FUNCTION MODIFIER. `Variable.rats:48-52` makes it an
+/// AbsVarMod and nothing else, so folding it into `modifiers()` -- where
+/// `private` and `value` live -- would have admitted `var f(x: ZZ32) = x`.
+#[test]
+fn var_does_not_modify_a_function_declaration() {
+    let src = std::env::temp_dir().join(format!("varfn-{}.fss", std::process::id()));
+    std::fs::write(
+        &src,
+        "component varfn\nexport Executable\nvar f(x: ZZ32): ZZ32 = x\nrun(): () = println(f(1))\nend\n",
+    )
+    .expect("could not write fixture");
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(&src)
+        .arg("-o")
+        .arg(output_path("varfn-out"))
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{message}");
+    let _ = std::fs::remove_file(&src);
 }
 
 /// AND A PARAMETER MAY NOT SHADOW A TOP-LEVEL VALUE.

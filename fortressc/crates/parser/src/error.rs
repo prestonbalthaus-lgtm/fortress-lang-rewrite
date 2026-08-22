@@ -180,6 +180,24 @@ pub enum ParseError {
         span: Span,
         op: String,
     },
+    /// `var (x: ZZ32, y: ZZ32)` and `var (x, y): ZZ64... = (5, 6)`.
+    /// `Variable.rats:35-40` admits a parenthesised `VarWTypes` list wherever
+    /// it admits a single one, so this falls out of the grammar rather than
+    /// out of a decision -- and what it needs is the tuple VALUE this backend
+    /// has no representation for. Refused by name so that the four corpus
+    /// files that write one land in the tuple bucket and not the `var` one.
+    VariableListUnsupported {
+        span: Span,
+    },
+    /// `var x: ZZ32` in a BLOCK, with no initializer. `variables.tex:203-210`
+    /// makes referring to such a variable before its first assignment a STATIC
+    /// ERROR, which is a definite-assignment analysis this checker does not
+    /// have. An `alloca` with no store is a silent wrong answer rather than a
+    /// missing feature, so the form is refused until the analysis exists.
+    DelayedInitializationUnsupported {
+        span: Span,
+        name: String,
+    },
 }
 
 impl ParseError {
@@ -207,7 +225,9 @@ impl ParseError {
             | Self::OperatorsUnrelated { span, .. }
             | Self::LopsidedOperator { span, .. }
             | Self::ForeignImportUnsupported { span }
-            | Self::CompoundAssignmentUnsupported { span, .. } => Some(*span),
+            | Self::CompoundAssignmentUnsupported { span, .. }
+            | Self::VariableListUnsupported { span }
+            | Self::DelayedInitializationUnsupported { span, .. } => Some(*span),
             Self::UnexpectedEndOfInput { .. } => None,
         }
     }
@@ -348,6 +368,16 @@ impl core::fmt::Display for ParseError {
                 "{}..{}: the compound assignment operator `{op}=` is not in the \
                  implemented subset",
                 span.start, span.end
+            ),
+            Self::VariableListUnsupported { .. } => f.write_str(
+                "a parenthesised variable list declares a tuple of variables, and a \
+                 tuple value has no representation in this backend",
+            ),
+            Self::DelayedInitializationUnsupported { name, .. } => write!(
+                f,
+                "`{name}` is declared with no initializer; reading one before its \
+                 first assignment is a static error, and that analysis does not exist \
+                 yet -- write the initializer here"
             ),
         }
     }
