@@ -2179,7 +2179,14 @@ fn a_getter_may_not_be_called_with_parentheses() {
 #[test]
 fn a_setter_and_a_method_of_the_same_shape_collide() {
     let message = refusal("badgetteroverload.fss");
-    assert!(message.contains("`x` is defined twice"), "{message}");
+    // The message names BOTH declarations now, and the argument types, because
+    // with overloading the NAME is shared by design and one span was not enough
+    // to find the pair. Asserting the types too keeps this test about the
+    // collision rather than about the word "twice".
+    assert!(
+        message.contains("`x` is declared twice on the same argument types (O, ZZ32)"),
+        "{message}"
+    );
 }
 
 // -------------------------------------------------------- `asString`, and `%g`
@@ -2362,16 +2369,54 @@ fn the_bootstrap_root_parses_in_full() {
          reach; the shadowing fix retired this wall and it may not come back: \
          {message}"
     );
-    // REPINNED DELIBERATELY, 1354 LINES ON. `trait QQ extends { RR64, ... }` at
-    // :376 was refused because `RR64` resolved to the builtin scalar and never
-    // to the `trait RR64` THIS SAME FILE declares at :335. With a declaration
-    // winning, the file walks to :1730 and stops on TUPLE TYPES, which is its
-    // own milestone. Pinning the NEW wall is what keeps this test honest: it
-    // fails when the file regresses AND when it advances unremarked.
     assert!(
-        message.contains("a tuple type is not implemented in this subset"),
-        "the remaining blocker should be the tuple wall at :1730: {message}"
+        !message.contains("a tuple type is not implemented"),
+        "tuple TYPES resolve now; :1730 may not come back as the wall: {message}"
     );
+    // REPINNED A SECOND TIME, DELIBERATELY, AND THE NEW WALL IS NOT A TUPLE
+    // ONE. `Maybe[\(Reduction[\R\],Reduction[\R\])\]` at :1730 resolves,
+    // and the file walks on to a collision in an IMPORTED api:
+    // `Library/FlatString.fsi` declares `opr ||(self, b:FlatString)` and
+    // `opr ||(a:FlatString, self)`, which are the same `(FlatString,
+    // FlatString)` signature with `self` in the other operand position.
+    //
+    // Pinning it here is what stops the next reader assuming tuples are still
+    // the blocker on this file. They are not.
+    assert!(
+        message
+            .contains("`||` is declared twice on the same argument types (FlatString, FlatString)"),
+        "the remaining blocker should be FlatString's self-position operator \
+         pair, reached through the import: {message}"
+    );
+}
+
+/// THE SELF-POSITION PAIR, ISOLATED, because the library reaches it through an
+/// import and an imported span is rendered against the WRONG FILE (see the
+/// wall test above, which reports :19:20 -- a comment). Ten lines that need no
+/// import at all, so the span is right and the pair is unmistakable.
+///
+/// `opr ||(self, b:F)` and `opr ||(a:F, self)` differ only in WHICH operand is
+/// the receiver. Both are `(F, F)`, so both are one signature.
+#[test]
+fn two_operator_declarations_differing_only_in_self_position_collide() {
+    let src = output_path("selfpos").with_extension("fsi");
+    std::fs::write(
+        &src,
+        "api selfpos\n         trait S end\n         object F extends { S }\n         opr ||(self, b:F): S\n         opr ||(a:F, self): S\n         end\n         end\n",
+    )
+    .expect("could not write fixture");
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(&src)
+        .arg("-o")
+        .arg(output_path("selfpos-out"))
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        message.contains("`||` is declared twice on the same argument types (F, F)"),
+        "{message}"
+    );
+    let _ = std::fs::remove_file(&src);
 }
 
 /// A DECLARED NAME WINS, and this is the fix's own subject. `trait RR64` is an

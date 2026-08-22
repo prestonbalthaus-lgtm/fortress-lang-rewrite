@@ -188,11 +188,23 @@ impl Registry {
         let (name, args, span) = match t {
             TypeRef::Named { name, args, span } => (name, args, *span),
             TypeRef::Unit { .. } => return Ok(Type::Void),
-            TypeRef::Tuple { span, .. } => {
-                return Err(TypeError::TypeNotImplemented {
-                    span: *span,
-                    form: "a tuple type",
-                })
+            // A TUPLE TYPE RESOLVES. This is the single construction gate that
+            // `Type::Tuple`'s own comment named as refusing, and it no longer
+            // does -- SPIKE-COMPOSITE-TYPE landed the variant precisely so this
+            // line could become a build.
+            //
+            // RESOLVING IS NOT THE SAME AS HAVING A REPRESENTATION, and the two
+            // are deliberately separated. An `api` never reaches codegen, so a
+            // signature may name a tuple freely -- `FortressLibrary.fsi:2347`
+            // writes `opr ||(self, b:(Any,Any)):String` and :1730 writes one as
+            // a static argument. A DEFINED function is refused by name in the
+            // checker instead, at `tuple_free`, until values land.
+            TypeRef::Tuple { elems, .. } => {
+                let mut built = Vec::with_capacity(elems.len());
+                for e in elems {
+                    built.push(self.resolve(e)?);
+                }
+                return Ok(Type::Tuple(crate::types::intern_types(&built)));
             }
             // A VALUE where a TYPE is required. This is reachable from real
             // source -- `Cell[\ 3 \]` where `Cell`'s parameter is a type --

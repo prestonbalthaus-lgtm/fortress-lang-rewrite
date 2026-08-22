@@ -199,6 +199,16 @@ pub enum TypeError {
     MissingElseBranch {
         span: Span,
     },
+    /// Two declarations in one overload set with the SAME parameter types.
+    /// Both spans, because one is not enough to find the pair -- and the
+    /// arguments, because with overloading the NAME is shared by design and it
+    /// is the types that collide.
+    DuplicateOverload {
+        span: Span,
+        first: Span,
+        name: String,
+        arguments: String,
+    },
     DuplicateDefinition {
         span: Span,
         name: String,
@@ -485,6 +495,12 @@ pub enum TypeError {
         name: String,
         cells: usize,
     },
+    /// A tuple in a position a DEFINED function would have to lower. Naming
+    /// one in an `api` signature is fine; an api is never lowered.
+    TupleNotStorable {
+        span: Span,
+        position: &'static str,
+    },
     /// `atomic (spawn ...)`. A RULE and not a gap -- spawn.tex:28-31 forbids
     /// it, and `ProjectFortress/compiler_tests/Compiled1.am.fss:15` carries the
     /// prohibition as a source comment.
@@ -753,6 +769,7 @@ impl TypeError {
             | Self::ConditionNotBoolean { span, .. }
             | Self::BranchTypeMismatch { span, .. }
             | Self::MissingElseBranch { span }
+            | Self::DuplicateOverload { span, .. }
             | Self::DuplicateDefinition { span, .. }
             | Self::NotAnArray { span, .. }
             | Self::ElementTypeUnknown { span }
@@ -779,6 +796,7 @@ impl TypeError {
             | Self::ApiDeclarationHasBody { span, .. }
             | Self::MissingBody { span, .. }
             | Self::TraitCycle { span, .. }
+            | Self::TupleNotStorable { span, .. }
             | Self::SpawnInsideAtomic { span }
             | Self::ThreadValueNotRepresentable { span, .. }
             | Self::NotATrait { span, .. }
@@ -1019,6 +1037,17 @@ impl core::fmt::Display for TypeError {
                 write!(f, "an `if` used as a value needs an `else` branch")
             }
             Self::DuplicateDefinition { name, .. } => write!(f, "`{name}` is defined twice"),
+            Self::DuplicateOverload {
+                name,
+                arguments,
+                first,
+                ..
+            } => write!(
+                f,
+                "`{name}` is declared twice on the same argument types \
+                 ({arguments}); the other is at byte {}",
+                first.start
+            ),
             Self::NotAnArray { found, .. } => {
                 write!(f, "expected an array, found {}", found.name())
             }
@@ -1360,6 +1389,11 @@ impl core::fmt::Display for TypeError {
             Self::ParallelFormUnsupported { form, .. } => write!(
                 f,
                 "{form} is parsed but not implemented in parallel loops"
+            ),
+            Self::TupleNotStorable { position, .. } => write!(
+                f,
+                "a tuple value is not implemented in this subset, so it cannot \
+                 be {position} of a function with a body"
             ),
             Self::SpawnInsideAtomic { .. } => write!(
                 f,

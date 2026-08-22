@@ -1251,10 +1251,14 @@ fn a_unit_array_element_is_refused() {
 }
 
 #[test]
-fn a_tuple_type_is_refused_with_a_diagnostic() {
+fn a_tuple_result_on_a_function_with_a_body_is_refused() {
+    // THE REFUSAL MOVED AND THE REASON CHANGED. A tuple TYPE resolves now;
+    // what is refused is a tuple in a position a DEFINED function would have
+    // to lower, because there is no representation yet. An `api` names one
+    // freely -- see the test below.
     match type_error("component t\nf(): (ZZ32, String) = 1\nend\n") {
-        TypeError::TypeNotImplemented { form, .. } => assert_eq!(form, "a tuple type"),
-        other => panic!("expected TypeNotImplemented, got {other:?}"),
+        TypeError::TupleNotStorable { position, .. } => assert_eq!(position, "the result"),
+        other => panic!("expected TupleNotStorable, got {other:?}"),
     }
 }
 
@@ -1373,8 +1377,15 @@ fn a_functional_method_collides_with_an_identical_top_level_declaration() {
                   run(): () = ()\n\
                   end\n";
     match type_error(source) {
-        TypeError::DuplicateDefinition { name, .. } => assert_eq!(name, "f"),
-        other => panic!("expected DuplicateDefinition, got {other:?}"),
+        TypeError::DuplicateOverload {
+            name, arguments, ..
+        } => {
+            assert_eq!(name, "f");
+            // The types are asserted too: with overloading the NAME is shared
+            // by design, so the name alone does not say what collided.
+            assert_eq!(arguments, "O");
+        }
+        other => panic!("expected DuplicateOverload, got {other:?}"),
     }
 }
 
@@ -1510,9 +1521,26 @@ fn a_tuple_is_neither_an_array_element_nor_a_reference() {
 /// `resolve` is the single gate and it still refuses -- that is what makes the
 /// twenty non-exhaustive sites safe today rather than merely unexercised.
 #[test]
-fn a_tuple_type_written_in_source_is_still_refused_at_the_one_gate() {
+fn a_tuple_parameter_on_a_function_with_a_body_is_refused() {
     match body_error("f(x: (ZZ32, ZZ32)): () = ()") {
-        TypeError::TypeNotImplemented { form, .. } => assert_eq!(form, "a tuple type"),
-        other => panic!("expected TypeNotImplemented, got {other:?}"),
+        TypeError::TupleNotStorable { position, .. } => assert_eq!(position, "a parameter"),
+        other => panic!("expected TupleNotStorable, got {other:?}"),
     }
+}
+
+/// THE OTHER SIDE, and it is the whole point of the split: an `api` is checked
+/// and NEVER LOWERED, so a signature may name a tuple it has no representation
+/// for. `Library/FortressLibrary.fsi:1730` needs exactly this -- a tuple as a
+/// STATIC ARGUMENT -- and :2347 needs it as a parameter.
+#[test]
+fn an_api_signature_may_name_a_tuple() {
+    let source = "api t\n                  f(x: (ZZ32, ZZ32)): ZZ32\n                  g(): (ZZ32, String)\n                  end\n";
+    let tokens = fortress_lexer::lex(source).expect("lex");
+    let ast = fortress_parser::parse(&tokens).expect("parse");
+    let checked = check(&ast, Uniformity::Enforced);
+    assert!(
+        checked.is_ok(),
+        "an api has no body to lower: {:?}",
+        checked.err()
+    );
 }

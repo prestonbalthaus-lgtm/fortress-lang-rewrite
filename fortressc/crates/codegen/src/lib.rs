@@ -216,23 +216,25 @@ impl<'ctx> Lowering<'ctx> {
             // A THREAD HANDLE IS THE POINTER `fortress_spawn` RETURNED, so it
             // sits with the other references and needs no representation of
             // its own.
-            Type::String
-            | Type::Array(..)
-            | Type::Object(_)
-            | Type::Trait(_)
-            | Type::Thread(_) => Some(self.ptr()),
+            Type::String | Type::Array(..) | Type::Object(_) | Type::Trait(_) | Type::Thread(_) => {
+                Some(self.ptr())
+            }
             Type::Void => None,
             // A TUPLE HAS NO REPRESENTATION IN THIS BACKEND, and `None` here
             // means "no storage" -- which is what `Void` means and is NOT what
-            // a tuple means. Nothing can reach this arm: `registry.rs`'s
-            // `resolve` refuses `TypeRef::Tuple` by name and is the single
-            // construction gate, so a `Type::Tuple` in the typed AST is a
-            // compiler defect and not a program. Returning a pointer would be
-            // the silent answer -- every tuple would lower to one word and the
-            // first two-element tuple would corrupt a frame.
-            Type::Tuple(_) => unreachable!(
-                "a tuple type reached codegen; `Registry::resolve` is the only                  gate that can build one and it refuses"
-            ),
+            // a tuple means. Returning a pointer would be the silent answer:
+            // every tuple would lower to one word and the first two-element
+            // tuple would corrupt a frame.
+            //
+            // THIS WAS AN `unreachable!` AND IT WAS REACHABLE. The comment said
+            // `Registry::resolve` refuses every tuple and is the single gate --
+            // true when it was written. The moment `resolve` began building the
+            // variant, `f(p:(ZZ32,ZZ32)):ZZ32 = 0` panicked here at EXIT 101 on
+            // user source, which this project's rules forbid whichever pass
+            // ought to have caught it first. The checker's `tuple_free` is that
+            // pass; this is the backstop that makes a mistake there a
+            // diagnostic instead of a crash.
+            Type::Tuple(_) => None,
         }
     }
 
@@ -594,6 +596,28 @@ impl<'ctx> Lowering<'ctx> {
     /// resolve.
     fn declare_functions(&mut self, component: &TypedComponent) -> Result<(), CodegenError> {
         for f in &component.functions {
+            // A TUPLE HERE WOULD BE DROPPED SILENTLY. `filter_map` treats
+            // `None` as "no storage", which is right for `Void` and wrong for a
+            // tuple: the parameter would vanish from the signature while
+            // `define_function` below still reads `get_nth_param` by the
+            // ORIGINAL index, so every later parameter shifts. The checker's
+            // `tuple_free` refuses this by name; reaching here is a compiler
+            // defect, and it is a diagnostic rather than a panic or a shifted
+            // frame.
+            if let Some(bad) = f
+                .params
+                .iter()
+                .map(|p| p.ty)
+                .chain(std::iter::once(f.return_type))
+                .find(|t| matches!(t, Type::Tuple(_)))
+            {
+                return Err(CodegenError::internal(format!(
+                    "`{}` names the tuple type {} in its signature and a tuple \
+                     has no representation in this backend",
+                    f.name,
+                    bad.name()
+                )));
+            }
             let params: Vec<BasicMetadataTypeEnum<'ctx>> = f
                 .params
                 .iter()

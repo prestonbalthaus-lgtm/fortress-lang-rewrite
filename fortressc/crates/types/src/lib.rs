@@ -676,6 +676,25 @@ impl Checker {
         Ok(ty)
     }
 
+    /// A tuple may be NAMED but not yet STORED, and this is the line between.
+    ///
+    /// `Registry::resolve` builds `Type::Tuple` now, so an `api` signature can
+    /// say `opr ||(self, b:(Any,Any)):String` and a static argument can say
+    /// `Maybe[\(Reduction[\R\],Reduction[\R\])\]` -- neither reaches
+    /// codegen, because an api is checked and never lowered. A DEFINED function
+    /// does reach it, and there is no representation waiting: refused by name
+    /// here rather than dropped silently in `declare_functions`, where a
+    /// `filter_map` would delete the parameter and shift every later one.
+    fn tuple_free(ty: Type, t: &TypeRef, position: &'static str) -> Checked<()> {
+        if matches!(ty, Type::Tuple(_)) {
+            return Err(TypeError::TupleNotStorable {
+                span: t.span(),
+                position,
+            });
+        }
+        Ok(())
+    }
+
     fn supertrait(&self, reference: &TypeRef) -> Checked<&'static str> {
         match self.registry.resolve(reference)? {
             Type::Trait(name) => Ok(name),
@@ -890,13 +909,15 @@ impl Checker {
                     },
                     None => Type::Void,
                 };
-                if self
+                if let Some(other) = self
                     .methods
                     .get(&m.name)
-                    .is_some_and(|set| set.iter().any(|other| other.params == params))
+                    .and_then(|set| set.iter().find(|other| other.params == params))
                 {
-                    return Err(TypeError::DuplicateDefinition {
+                    return Err(TypeError::DuplicateOverload {
                         span: m.span,
+                        first: other.span,
+                        arguments: render(&params),
                         name: m.name.clone(),
                     });
                 }
@@ -984,13 +1005,15 @@ impl Checker {
                     },
                     None => Type::Void,
                 };
-                if self
+                if let Some(other) = self
                     .functions
                     .get(&m.name)
-                    .is_some_and(|set| set.iter().any(|other| other.params == params))
+                    .and_then(|set| set.iter().find(|other| other.params == params))
                 {
-                    return Err(TypeError::DuplicateDefinition {
+                    return Err(TypeError::DuplicateOverload {
                         span: m.span,
+                        first: other.span,
+                        arguments: render(&params),
                         name: m.name.clone(),
                     });
                 }
@@ -1033,10 +1056,23 @@ impl Checker {
             }
             let mut params = Vec::with_capacity(f.params.len());
             for p in &f.params {
-                params.push(self.storable(&p.ty, "a parameter")?);
+                let ty = self.storable(&p.ty, "a parameter")?;
+                // `body: None` ONLY INSIDE AN api, and that is the whole
+                // discriminator: an api is checked and never lowered, so it may
+                // name a tuple it has no representation for.
+                if f.body.is_some() {
+                    Self::tuple_free(ty, &p.ty, "a parameter")?;
+                }
+                params.push(ty);
             }
             let returns = match &f.return_type {
-                Some(t) => self.registry.resolve(t)?,
+                Some(t) => {
+                    let ty = self.registry.resolve(t)?;
+                    if f.body.is_some() {
+                        Self::tuple_free(ty, t, "the result")?;
+                    }
+                    ty
+                }
                 // Inferred in pass two; Void until then, and overwritten there.
                 None => Type::Void,
             };
@@ -1051,8 +1087,13 @@ impl Checker {
                 name.clone()
             };
             let set = self.functions.entry(name.clone()).or_default();
-            if set.iter().any(|other| other.params == params) {
-                return Err(TypeError::DuplicateDefinition { span, name });
+            if let Some(other) = set.iter().find(|other| other.params == params) {
+                return Err(TypeError::DuplicateOverload {
+                    span,
+                    first: other.span,
+                    arguments: render(&params),
+                    name,
+                });
             }
             self.slots.push((name, set.len()));
             set.push(Signature {
