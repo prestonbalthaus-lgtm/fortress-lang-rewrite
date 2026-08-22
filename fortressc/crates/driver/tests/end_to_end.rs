@@ -3268,7 +3268,7 @@ fn a_root_trait_resolves_inside_an_arrow() {
     let binary = compile_fixture("arrowroot.fss", "arrowroot");
     let out = run(&binary);
     assert_eq!(out.status.code(), Some(0));
-    assert_eq!(String::from_utf8_lossy(&out.stdout), "7\n9\n7\n");
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "7\n9\n7\n7\n");
     let _ = std::fs::remove_file(&binary);
 }
 

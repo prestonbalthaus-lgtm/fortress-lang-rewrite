@@ -207,21 +207,28 @@ matrix() {
 
 # THE TWO ROOT TRAITS. `Object` and `Any` are seeded rather than declared, and
 # nothing else in this gate would notice if the seeding stopped: every fixture
-# here declares its own hierarchy. Three positions, because the seed reaches
-# them by three different routes -- a plain parameter through `Registry::resolve`,
-# an object with NO `extends` clause through the object loop rather than the
-# trait closure, and an ARROW through `closure.rs`, which kept its own list of
-# builtin names until `BUILTIN_TYPE_NAMES` was shared.
+# here declares its own hierarchy. FOUR positions, because the seed reaches them
+# by four different routes -- a plain parameter through `Registry::resolve`, an
+# ARROW through `closure.rs` (which kept its own list of builtin names until
+# `BUILTIN_TYPE_NAMES` was shared), an object with NO `extends` clause through
+# the object loop rather than the trait closure, and a TRAIT with no `extends`
+# clause through the blanket insert over the trait table.
+#
+# THE FOURTH IS HERE BECAUSE A MUTATION SURVIVED WITHOUT IT. `trait Shape
+# extends Object` gets `Object` from its own clause and `object Bare` gets it
+# from the object loop, so the row that stops a user trait being put under
+# `Object` failed nothing. A trait with no clause, passed where an `Object` is
+# wanted, is the only shape that asks.
 root_traits() {
     printf '== the seeded root traits ==\n'
-    have "$build/arrowroot" 'a root trait resolves in three positions' || return
+    have "$build/arrowroot" 'a root trait resolves in four positions' || return
     local out
     out=$("$build/arrowroot" 2>&1)
-    if [[ $out == $'7\n9\n7' ]]; then
-        ok 'Object and Any resolve as a parameter, inside an arrow, and for a bare object'
+    if [[ $out == $'7\n9\n7\n7' ]]; then
+        ok 'Object and Any resolve as a parameter, in an arrow, for a bare object and a bare trait'
     else
-        bad 'Object and Any resolve in three positions' \
-            "want: 7 9 7 | got: $(printf '%s' "$out" | tr '\n' ' ')"
+        bad 'Object and Any resolve in four positions' \
+            "want: 7 9 7 7 | got: $(printf '%s' "$out" | tr '\n' ' ')"
     fi
 }
 

@@ -17,15 +17,25 @@ object Dot extends {Shape} end
    walks `extends` edges and this object writes none. It is still an `Object`. *)
 object Bare end
 
+(* A TRAIT WITH NO `extends` CLAUSE. It is under `Object` only because the seed
+   puts it there, and the only way to ask is to pass one where an `Object` is
+   wanted -- an object of its own would answer through the object loop instead
+   and the trait half would go unmeasured. A mutation table found this hole. *)
+trait Loose end
+object Knot extends {Loose} end
+
 size(x: Object): ZZ32 = 7
 tag(x: Any): ZZ32 = 9
 
 measure(f: Object -> ZZ32, x: Object): ZZ32 = f(x)
 name(f: Any -> ZZ32, x: Any): ZZ32 = f(x)
 
+loosen(x: Loose): ZZ32 = size(x)
+
 run(): () = do
     println(measure(size, Dot))
     println(name(tag, Dot))
     println(measure(size, Bare))
+    println(loosen(Knot))
 end
 end
