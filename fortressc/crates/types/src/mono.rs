@@ -828,6 +828,7 @@ impl<'a> Expander<'a> {
             | Expr::IntLit { .. }
             | Expr::FloatLit { .. }
             | Expr::StrLit { .. }
+            | Expr::CharLit { .. }
             | Expr::BoolLit { .. } => e.clone(),
 
             Expr::Var { name, span } => {

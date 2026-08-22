@@ -239,7 +239,35 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # of the eleven, so part A of oracle-gate cannot see them; `aggregate.tex:150`
 # can -- "then A(1,0) evaluates to 4" -- and arrayTest2 encodes each element's
 # coordinates in its own value.
-OBJECT_FLOOR=319
+#
+# CHARACTER LITERALS AND THE `Char` TYPE: 361 objects, 64 apis. THREE files,
+# zero lost, and the IR body of all 422 modules that compiled before is byte for
+# byte unchanged.
+#   ProjectFortress/other_compiler_tests/Char.fss      the real one, and it
+#     PASSES ITS ORACLE: `Char.test` records `run_out_equals=a` and it prints
+#     `a`, so a character prints as ITSELF and not as its code point.
+#   ProjectFortress/not_working_static_tests/OrWorks.fss
+#   ProjectFortress/parser_tests/XXXOprMethod.fss     see the slack below.
+#
+# THE FIRST-BLOCKER COUNT SAID 61 AND THE CEILING WAS ALWAYS 8. `triage`'s
+# `alone*` said so before the work started, and a spike -- `Char` aliased to
+# ZZ32 and `'x'` lexed as an int -- delivered FOUR. The three above are what a
+# correct implementation delivers, because `XXXforbiddenCharacters.fss` is
+# REFUSED by a correct one: it writes a raw tab, which
+# `lexical-structure.tex:844-850` makes a static error. Of the 61, three
+# compile; the rest move on to `found LGeneric` (15), the matrix aggregate (8)
+# and twenty other walls.
+#
+# THE SLACK RISES TO 40. `XXXOprMethod.fss` is a must-FAIL by the XXX
+# convention and has NO `.test`, so the oracle ratchet cannot see it -- the same
+# position `XXXequalityTesting.fss` is in. It declares `opr IN(c:Char): Boolean`
+# and `opr [i:ZZ32]: ZZ32` as object members and was refused HERE only because
+# `Char` was not a type; SPIKE-OPEXPR records operator declarations and nothing
+# reads them, so what it compiles to is a program whose two declarations do
+# nothing. We do not know 1.0's specific ground for refusing it and are not
+# guessing at one. So the list is 38, the slack is 38 + XXXequalityTesting +
+# XXXOprMethod = 40, and the floor is 361 - 40 = 321.
+OBJECT_FLOOR=321
 API_FLOOR=64
 
 passed=0

@@ -2320,10 +2320,15 @@ fn a_postfix_operator_declaration_parses() {
 /// without a declaration, and `Generator[\Any\]` at :1992 substitutes `Any`
 /// into `filter`'s arrow here. One shared `BUILTIN_TYPE_NAMES` answered that.
 ///
-/// The wall is now `unknown type Char`, and it is a REAL missing feature rather
-/// than a plumbing disagreement: `trait String extends ZeroIndexed[\Char\]` at
-/// :2286 puts the character type into the same arrow, and character literals
-/// are out of the M1 subset -- 61 corpus files first-block on them.
+/// THE WALL MOVED A THIRD TIME, to `RR64 is not a trait, so nothing can extend
+/// it` at :376. `Char` is a real type now, so `trait String extends
+/// ZeroIndexed[\Char\]` at :2286 resolves; :376 is `trait QQ extends { RR64,
+/// StandardPartialOrder[\QQ\] }`, a trait extending a SCALAR. That is the
+/// 102-file traits-objects class and it is a representation question, not a
+/// plumbing one: a scalar carries no tag, so nothing below it can dispatch.
+///
+/// The line number goes DOWN because this checker is not order-sensitive and
+/// reports the first error it finds, not the first one in the file.
 #[test]
 fn the_bootstrap_root_parses_in_full() {
     let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
@@ -2348,8 +2353,12 @@ fn the_bootstrap_root_parses_in_full() {
         "the root traits are seeded and reach every pass; neither may be the wall: {message}"
     );
     assert!(
-        message.contains("unknown type `Char`"),
-        "the remaining blocker should be the character type: {message}"
+        !message.contains("unknown type `Char`"),
+        "the character type is built; it may not be the wall again: {message}"
+    );
+    assert!(
+        message.contains("`RR64` is not a trait, so nothing can extend it"),
+        "the remaining blocker should be a trait extending a scalar: {message}"
     );
 }
 
@@ -3389,7 +3398,7 @@ fn the_builtin_type_names_agree_across_the_passes() {
     )
     .expect("types.rs");
     assert!(
-        src.contains("pub(crate) const BUILTIN_TYPE_NAMES: [&str; 8]"),
+        src.contains("pub(crate) const BUILTIN_TYPE_NAMES: [&str; 9]"),
         "the shared list is what stops a fourth one being written"
     );
     for other in ["closure.rs", "mono.rs"] {
@@ -3402,4 +3411,70 @@ fn the_builtin_type_names_agree_across_the_passes() {
             "{other} must read the shared list, not keep its own"
         );
     }
+}
+
+// --------------------------------------------------------------- characters
+
+/// EVERY SHAPE `lexical-structure.tex:862-877` ACCEPTS, and the middle four
+/// lines are CROSS-CHECKS rather than prints: `'0061' = 'a'` and
+/// `'TAB' = '\t'` relate two decoding paths to one character, which is the only
+/// assertion a decoder that got one path right and the other wrong cannot
+/// satisfy.
+#[test]
+fn every_character_literal_shape_decodes_to_one_character() {
+    let binary = compile_fixture("charliteral.fss", "charliteral");
+    let out = run(&binary);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "a\n'\n\u{01C7}\n\u{1D11E}\ntrue\ntrue\ntrue\ntrue\nordered\nreflexive\nconcatenated: z\n"
+    );
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// THE LEGACY'S OWN RECORDED OUTPUT, and it is what pins the representation: a
+/// `Char` lowers to an `i32` and `Char.test` says `run_out_equals=a`, so it
+/// must print as ITSELF and not as its code point.
+#[test]
+fn the_legacy_recorded_a_character_printing_as_itself() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(corpus("ProjectFortress/other_compiler_tests/Char.fss"))
+        .arg("-o")
+        .arg(std::env::temp_dir().join("fortress-char-oracle"))
+        .output()
+        .expect("could not run fortressc");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let ran = Command::new(std::env::temp_dir().join("fortress-char-oracle"))
+        .output()
+        .expect("could not run the binary");
+    assert_eq!(String::from_utf8_lossy(&ran.stdout), "a\n");
+    let _ = std::fs::remove_file(std::env::temp_dir().join("fortress-char-oracle"));
+}
+
+/// ORDERED AND NOT NUMERIC. Without the arithmetic refusal, `is_ordered` lets a
+/// `Char` into the arithmetic path and `+` emits an integer add on two code
+/// points -- a silent wrong answer rather than a missing feature. Naming a
+/// character (`'PLUS-MINUS SIGN'`) is PREPROCESSING and refused by name too.
+#[test]
+fn a_character_is_ordered_and_not_numeric() {
+    let message = refusal("badchararith.fss");
+    assert!(
+        message.contains("is not defined on Char; a character is ordered, not numeric"),
+        "{message}"
+    );
+    let message = refusal("badcharname.fss");
+    assert!(
+        message.contains("naming a character inside a character literal"),
+        "{message}"
+    );
+    let message = refusal("badforbiddenchar.fss");
+    assert!(
+        message.contains("a character literal holds one character"),
+        "{message}"
+    );
 }

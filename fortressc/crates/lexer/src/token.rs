@@ -67,6 +67,9 @@ pub enum Kind<'a> {
     True,
     False,
     /// `digits` has every group separator removed; `text` is the source slice.
+    /// `'a'`, decoded. A Unicode scalar, so the lexer has already applied the
+    /// escape and the parser never sees a backslash.
+    CharLit(char),
     IntLit {
         text: &'a str,
         digits: String,

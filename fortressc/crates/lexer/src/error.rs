@@ -24,7 +24,18 @@ pub enum LexErrorKind {
     /// Any operator immediately followed by `+`.
     OperatorFollowedByPlus,
     NonAsciiCharacter,
-    CharacterLiteralUnsupported,
+    /// A `'` that does not open a well-formed character literal: unterminated,
+    /// empty, or holding a character the specification forbids there.
+    /// `lexical-structure.tex:844-853` makes a line terminator, a forbidden
+    /// character and a lone backslash static errors, and
+    /// `ProjectFortress/parser_tests/XXXforbiddenCharacters.fss` writes a raw
+    /// tab for exactly that reason.
+    MalformedCharacterLiteral,
+    /// A character literal NAMING a character rather than writing one:
+    /// `'PLUS-MINUS SIGN'`, or an ASCII sequence ASCII conversion would fold.
+    /// `lexical-structure.tex:869-877` -- a PREPROCESSING feature with a table
+    /// of Unicode names behind it, refused by name rather than guessed at.
+    CharacterNameUnsupported,
     RadixNumeralUnsupported,
     /// A string opened with one mark and closed with the other.
     /// `Literal.rats:158-167` has an explicit error production for each
@@ -59,7 +70,13 @@ impl LexErrorKind {
             Self::NonAsciiCharacter => {
                 "non-ASCII characters are not in the M1 subset outside comments and strings"
             }
-            Self::CharacterLiteralUnsupported => "character literals are not in the M1 subset",
+            Self::MalformedCharacterLiteral => {
+                "a character literal holds one character, an escape, four or more hex digits, \
+                 or TAB, NEWLINE or RETURN"
+            }
+            Self::CharacterNameUnsupported => {
+                "naming a character inside a character literal is not in the M1 subset"
+            }
             Self::RadixNumeralUnsupported => "radix numerals are not in the M1 subset",
             Self::MismatchedStringMarks => {
                 "the opening and closing marks of a string literal must match"

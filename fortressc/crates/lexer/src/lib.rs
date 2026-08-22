@@ -43,6 +43,7 @@ pub fn lex(source: &str) -> Result<Vec<Token<'_>>, LexError> {
             raw::Raw::Trivia | raw::Raw::Rejected => continue,
             raw::Raw::Word => token::classify_word(slice),
             raw::Raw::Numeral => numeral_kind(slice),
+            raw::Raw::CharLit => Kind::CharLit(decode_char(slice)),
             raw::Raw::Str => Kind::StrLit(decode_string(slice)),
             raw::Raw::LParen => Kind::LParen,
             raw::Raw::RParen => Kind::RParen,
@@ -121,6 +122,40 @@ fn numeral_kind(text: &str) -> Kind<'_> {
 /// `slice` still carries its delimiters. Escapes are exactly the seven ASCII
 /// forms plus the two curly quotes (`Literal.rats:182-196`); the scanner has
 /// already rejected anything else.
+/// `'a'` to `a`, sharing the escape table with a string literal because
+/// `Literal.rats` gives them the same one. The regex has already guaranteed
+/// exactly one character or one escape, so the fallback is unreachable rather
+/// than a guess.
+fn decode_char(slice: &str) -> char {
+    let body = slice
+        .get(1..slice.len().saturating_sub(1))
+        .unwrap_or_default();
+    let mut chars = body.chars();
+    match (chars.next(), chars.next()) {
+        (Some('\\'), Some(escape)) => match escape {
+            'b' => '\u{0008}',
+            't' => '\t',
+            'n' => '\n',
+            'f' => '\u{000C}',
+            'r' => '\r',
+            other => other,
+        },
+        (Some(c), None) => c,
+        // `character_literal` in the raw lexer has already refused every body
+        // that is not one of these, so the fallbacks below are unreachable
+        // rather than a guess.
+        _ => match body {
+            "TAB" => '\t',
+            "NEWLINE" => '\n',
+            "RETURN" => '\r',
+            digits => u32::from_str_radix(digits, 16)
+                .ok()
+                .and_then(char::from_u32)
+                .unwrap_or('\u{FFFD}'),
+        },
+    }
+}
+
 fn decode_string(slice: &str) -> String {
     // Either delimiter pair; `Literal.rats:151-155` gives the two the same
     // content and the scanner has already refused a mixed pair.

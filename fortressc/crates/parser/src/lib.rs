@@ -465,6 +465,7 @@ impl<'t, 'a> Parser<'t, 'a> {
             | Kind::IntLit { .. }
             | Kind::FloatLit { .. }
             | Kind::StrLit(_)
+            | Kind::CharLit(_)
             | Kind::True
             | Kind::False
             | Kind::RParen
@@ -500,6 +501,7 @@ impl<'t, 'a> Parser<'t, 'a> {
             | Kind::IntLit { .. }
             | Kind::FloatLit { .. }
             | Kind::StrLit(_)
+            | Kind::CharLit(_)
             | Kind::True
             | Kind::False
             | Kind::LParen
@@ -3002,6 +3004,7 @@ impl<'t, 'a> Parser<'t, 'a> {
                 Kind::IntLit { .. }
                 | Kind::FloatLit { .. }
                 | Kind::StrLit(_)
+                | Kind::CharLit(_)
                 | Kind::True
                 | Kind::False
                 | Kind::Ident(_)
@@ -3410,6 +3413,13 @@ impl<'t, 'a> Parser<'t, 'a> {
                 self.pos += 1;
                 Ok(Expr::StrLit {
                     value: value.clone(),
+                    span,
+                })
+            }
+            Kind::CharLit(value) => {
+                self.pos += 1;
+                Ok(Expr::CharLit {
+                    value: *value,
                     span,
                 })
             }

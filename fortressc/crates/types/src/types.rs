@@ -74,9 +74,16 @@ impl Elem {
             Type::RR64 => Some(Self::RR64),
             Type::Boolean => Some(Self::Boolean),
             Type::String => Some(Self::String),
-            Type::Void | Type::Array(..) | Type::Object(_) | Type::Trait(_) | Type::Tuple(_) => {
-                None
-            }
+            // `Char` IS NOT AN ARRAY ELEMENT in this subset, and the refusal
+            // is here rather than at the array constructor: nothing in the
+            // corpus writes `Array[\Char\]`, and `String` indexing -- which
+            // is where one would come from -- is out of the subset too.
+            Type::Void
+            | Type::Char
+            | Type::Array(..)
+            | Type::Object(_)
+            | Type::Trait(_)
+            | Type::Tuple(_) => None,
         }
     }
 
@@ -117,8 +124,8 @@ impl Elem {
 /// and resolved like a builtin. `Any` and `Object` are here because
 /// `Checker::new` seeds them as root traits; they come out together on the day
 /// import resolution can supply them from `LibraryBuiltin/AnyType.fss`.
-pub(crate) const BUILTIN_TYPE_NAMES: [&str; 8] = [
-    "ZZ32", "ZZ64", "RR64", "Boolean", "String", "Array", "Any", "Object",
+pub(crate) const BUILTIN_TYPE_NAMES: [&str; 9] = [
+    "ZZ32", "ZZ64", "RR64", "Boolean", "String", "Array", "Any", "Object", "Char",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -128,6 +135,12 @@ pub enum Type {
     RR64,
     Boolean,
     String,
+    /// One Unicode scalar. ORDERED but not NUMERIC: `Char.fss` compares with
+    /// all six operators and the legacy records `run_out_equals=a`, so a
+    /// character prints as itself. Arithmetic on one is refused by name --
+    /// 1.0 spells the two conversions `char` and `codePoint`, and neither is
+    /// in this subset.
+    Char,
     Void,
     /// Homogeneous, and RANK IS PART OF THE TYPE as of the multi-dimensional
     /// milestone: `ZZ32[5]` is `Array(ZZ32, 1)` and `ZZ32[2,3]` is
@@ -195,6 +208,7 @@ impl Type {
             Self::RR64 => "RR64",
             Self::Boolean => "Boolean",
             Self::String => "String",
+            Self::Char => "Char",
             Self::Void => "()",
             // RANK 1 KEEPS ITS EXACT SPELLING, which is not cosmetic: this name
             // reaches diagnostics and `symbol` below reaches the emitted object,
@@ -228,6 +242,7 @@ impl Type {
             Self::RR64 => "rr64",
             Self::Boolean => "boolean",
             Self::String => "string",
+            Self::Char => "char",
             Self::Void => "void",
             Self::Array(elem, 1) => match elem {
                 Elem::ZZ32 => "array_zz32",
@@ -263,6 +278,33 @@ impl Type {
     #[must_use]
     pub const fn is_reference(self) -> bool {
         matches!(self, Self::Object(_) | Self::Trait(_))
+    }
+
+    /// Whether the runtime has a per-scalar shim for this type: `println_x`,
+    /// `print_x` and `to_string_x`.
+    ///
+    /// THIS USED TO BE `Elem::of(ty).is_some()` AND THE TWO QUESTIONS CAME
+    /// APART WHEN `Char` ARRIVED. `Elem` is what an ARRAY can store, and a
+    /// `Char` is deliberately not one of those -- nothing writes
+    /// `Array[\Char\]` and `String` indexing is out of the subset. It is
+    /// printable all the same, and `ProjectFortress/other_compiler_tests/
+    /// Char.test` records `run_out_equals=a`, so the character prints as
+    /// itself. Saying so here is a diagnostic; leaving it to codegen is
+    /// `no runtime symbol to_string_Char` at exit 70.
+    #[must_use]
+    pub const fn has_scalar_shim(self) -> bool {
+        matches!(
+            self,
+            Self::ZZ32 | Self::ZZ64 | Self::RR64 | Self::Boolean | Self::String | Self::Char
+        )
+    }
+
+    /// Ordered without being numeric. `is_numeric` is what the arithmetic path
+    /// asks and `Char` must stay out of it; `is_ordered` is what a comparison
+    /// asks, and the two stopped being the same question when `Char` arrived.
+    #[must_use]
+    pub const fn is_ordered(self) -> bool {
+        self.is_numeric() || matches!(self, Self::Char)
     }
 
     #[must_use]
@@ -652,6 +694,9 @@ pub enum TypedExprKind {
     IntConst(i128),
     FloatConst(f64),
     StrConst(String),
+    /// A Unicode scalar, and it lowers to an `i32` -- the same width `Boolean`
+    /// crosses the C boundary as, and wide enough for every code point.
+    CharConst(char),
     BoolConst(bool),
     Var(String),
     /// Every operator and call becomes this. The target is concrete.

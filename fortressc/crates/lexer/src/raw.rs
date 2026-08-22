@@ -272,9 +272,59 @@ macro_rules! always_error {
 }
 
 always_error!(err_double_star, DoubleStar);
-always_error!(err_char_literal, CharacterLiteralUnsupported);
+always_error!(err_char_literal, MalformedCharacterLiteral);
 always_error!(err_unmatched_close, MismatchedStringMarks);
 always_error!(err_non_ascii, NonAsciiCharacter);
+
+/// The four shapes `lexical-structure.tex:862-877` accepts, and a diagnostic
+/// naming which of the two remaining ones was written.
+///
+/// A LONE BACKSLASH IS A STATIC ERROR (:851-852) and so is an unescaped string
+/// delimiter (:853-859), which is there to stop ASCII conversion moving the
+/// boundaries of a string literal.
+fn character_literal(lex: &mut Lexer<Raw>) -> FilterResult<(), LexErrorKind> {
+    let slice = lex.slice();
+    let body = slice
+        .get(1..slice.len().saturating_sub(1))
+        .unwrap_or_default();
+    if body.chars().any(char::is_control) {
+        return FilterResult::Error(LexErrorKind::MalformedCharacterLiteral);
+    }
+    let mut chars = body.chars();
+    match (chars.next(), chars.next()) {
+        (Some(BACKSLASH), None) => FilterResult::Error(LexErrorKind::MalformedCharacterLiteral),
+        (Some(BACKSLASH), Some(escape)) => {
+            let listed = matches!(escape, 'b' | 't' | 'n' | 'f' | 'r' | QUOTE | BACKSLASH);
+            if chars.next().is_some() || !listed {
+                return FilterResult::Error(LexErrorKind::MalformedCharacterLiteral);
+            }
+            FilterResult::Emit(())
+        }
+        (Some(QUOTE), None) => FilterResult::Error(LexErrorKind::MalformedCharacterLiteral),
+        (Some(_), None) => FilterResult::Emit(()),
+        (Some(_), Some(_)) => {
+            if matches!(body, "TAB" | "NEWLINE" | "RETURN") {
+                return FilterResult::Emit(());
+            }
+            // FOUR OR MORE, and the floor is the specification's: fewer digits
+            // would collide with the Unicode names, which are also words.
+            if body.len() >= HEX_CODE_POINT_DIGITS && body.chars().all(|c| c.is_ascii_hexdigit()) {
+                return FilterResult::Emit(());
+            }
+            FilterResult::Error(LexErrorKind::CharacterNameUnsupported)
+        }
+        (None, _) => FilterResult::Error(LexErrorKind::MalformedCharacterLiteral),
+    }
+}
+
+/// `lexical-structure.tex:864-866`: "a sequence of FOUR OR MORE hexadecimal
+/// digits". The floor is the specification's and not a tuning knob -- fewer
+/// digits would collide with the Unicode names, which are also words. Named so
+/// that a mutation can move it in one line.
+const HEX_CODE_POINT_DIGITS: usize = 4;
+
+const BACKSLASH: char = '\\';
+const QUOTE: char = '"';
 
 fn numeral(lex: &mut Lexer<Raw>) -> FilterResult<(), LexErrorKind> {
     let text = lex.slice();
@@ -479,6 +529,23 @@ pub(crate) enum Raw {
     SlashSlash,
     #[token("/", op_slash)]
     Slash,
+
+    /// `lexical-structure.tex:800-877`. THE BODY IS SCANNED HERE AND JUDGED IN
+    /// THE CALLBACK, because the four shapes the specification accepts -- one
+    /// character, an escape, FOUR OR MORE hex digits, and `TAB`/`NEWLINE`/
+    /// `RETURN` -- cannot be told from the two it refuses by a regex that
+    /// still names which was written.
+    ///
+    /// ONE CHARACTER BEFORE THE CLOSER IS THE SPECIFICATION'S OWN RULE, :836-842:
+    /// the literal ends at the nearest apostrophe AFTER the first enclosed
+    /// character, so ''' is one literal holding an apostrophe. A line
+    /// terminator may not be enclosed at all (:844-846), which is what bounds
+    /// the scan.
+    #[regex(
+        r"'[^\n\r\u{2028}\u{2029}][^'\n\r\u{2028}\u{2029}]*'",
+        character_literal
+    )]
+    CharLit,
 
     #[token("'", err_char_literal)]
     #[token("\u{2018}", err_char_literal)]

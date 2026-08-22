@@ -209,6 +209,9 @@ impl<'ctx> Lowering<'ctx> {
             Type::ZZ64 => Some(self.context.i64_type().into()),
             Type::RR64 => Some(self.context.f64_type().into()),
             Type::Boolean => Some(self.context.bool_type().into()),
+            // AN `i32` AND NOT AN `i1`: a `Char` is a Unicode scalar, so it
+            // needs 21 bits and crosses to C as an `int` like `Boolean` does.
+            Type::Char => Some(self.context.i32_type().into()),
             Type::String | Type::Array(..) | Type::Object(_) | Type::Trait(_) => Some(self.ptr()),
             Type::Void => None,
             // A TUPLE HAS NO REPRESENTATION IN THIS BACKEND, and `None` here
@@ -270,18 +273,20 @@ impl<'ctx> Lowering<'ctx> {
         let ptr = self.ptr();
         let void = self.context.void_type();
 
-        let printlns: [(&str, Option<BasicMetadataTypeEnum<'ctx>>); 12] = [
+        let printlns: [(&str, Option<BasicMetadataTypeEnum<'ctx>>); 14] = [
             ("println_string", Some(ptr.into())),
             ("println_zz32", Some(i32t.into())),
             ("println_zz64", Some(i64t.into())),
             ("println_rr64", Some(f64t.into())),
             ("println_boolean", Some(i32t.into())),
+            ("println_char", Some(i32t.into())),
             ("println_void", None),
             ("print_string", Some(ptr.into())),
             ("print_zz32", Some(i32t.into())),
             ("print_zz64", Some(i64t.into())),
             ("print_rr64", Some(f64t.into())),
             ("print_boolean", Some(i32t.into())),
+            ("print_char", Some(i32t.into())),
             ("print_void", None),
         ];
         for (name, arg) in printlns {
@@ -292,11 +297,12 @@ impl<'ctx> Lowering<'ctx> {
             self.module.add_function(name, ty, Some(Linkage::External));
         }
 
-        let to_strings: [(&str, BasicMetadataTypeEnum<'ctx>); 4] = [
+        let to_strings: [(&str, BasicMetadataTypeEnum<'ctx>); 5] = [
             ("to_string_zz32", i32t.into()),
             ("to_string_zz64", i64t.into()),
             ("to_string_rr64", f64t.into()),
             ("to_string_boolean", i32t.into()),
+            ("to_string_char", i32t.into()),
         ];
         for (name, arg) in to_strings {
             let ty = ptr.fn_type(&[arg], false);
@@ -925,6 +931,12 @@ impl<'ctx> Lowering<'ctx> {
                 #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
                 Ok(Some(ty.const_int(*value as u64, true).into()))
             }
+            TypedExprKind::CharConst(value) => Ok(Some(
+                self.context
+                    .i32_type()
+                    .const_int(u64::from(u32::from(*value)), false)
+                    .into(),
+            )),
             TypedExprKind::FloatConst(value) => {
                 Ok(Some(self.context.f64_type().const_float(*value).into()))
             }

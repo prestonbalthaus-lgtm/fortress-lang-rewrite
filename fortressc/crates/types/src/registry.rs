@@ -328,6 +328,7 @@ impl Registry {
             "RR64" => Ok(Type::RR64),
             "Boolean" => Ok(Type::Boolean),
             "String" => Ok(Type::String),
+            "Char" => Ok(Type::Char),
             other => {
                 if let Some((interned, _)) = self.traits.get_key_value(other) {
                     return Ok(Type::Trait(interned));

@@ -2139,6 +2139,14 @@ impl Checker {
                     span: *span,
                 })
             }
+            Expr::CharLit { value, span } => {
+                self.require(Type::Char, expected, *span)?;
+                Ok(TypedExpr {
+                    kind: TypedExprKind::CharConst(*value),
+                    ty: Type::Char,
+                    span: *span,
+                })
+            }
             Expr::BoolLit { value, span } => {
                 self.require(Type::Boolean, expected, *span)?;
                 Ok(TypedExpr {
@@ -2344,7 +2352,7 @@ impl Checker {
         //
         // TEN of the sixteen accessor-blocked oracle cases are this, and every
         // one of them arrived here through `"..." || x.asString`.
-        if name == "asString" && Elem::of(base.ty).is_some() {
+        if name == "asString" && base.ty.has_scalar_shim() {
             self.require(Type::String, expected, span)?;
             // A String's `asString` is itself. Routing it through the shim
             // would emit `to_string_string`, which no runtime defines.
@@ -2803,6 +2811,7 @@ impl Checker {
             | Expr::IntLit { .. }
             | Expr::FloatLit { .. }
             | Expr::StrLit { .. }
+            | Expr::CharLit { .. }
             | Expr::BoolLit { .. } => false,
             Expr::Tuple { items, .. } | Expr::Juxt { items, .. } | Expr::ArrayLit { items, .. } => {
                 items.iter().any(|i| self.reads_shared(i, floor))
@@ -3465,6 +3474,19 @@ impl Checker {
                     op: op_name(op),
                 });
             }
+        } else if left.ty == Type::Char {
+            // ORDERED, NOT NUMERIC. `Char.fss` compares with all six
+            // operators; `'a' + 'b'` is not addition and 1.0 does not define
+            // it. Without this arm `is_ordered` would have let `Char` into the
+            // arithmetic path and `+` would have emitted an integer add on two
+            // code points -- a silent wrong answer, which is the class this
+            // project hunts.
+            if !comparison {
+                return Err(TypeError::CharNotNumeric {
+                    span,
+                    op: op_name(op),
+                });
+            }
         } else if !left.ty.is_numeric() {
             return Err(TypeError::Mismatch {
                 span,
@@ -3772,9 +3794,10 @@ impl Checker {
                 // anything else, so saying so HERE is a diagnostic and leaving
                 // it to codegen is `no runtime symbol to_string_Shape` at exit
                 // 70 -- a compiler internal error raised by ordinary source.
-                // `Elem::of` is the scalar test; it is `None` for a trait, an
-                // object, an array and Void.
-                if Elem::of(from).is_none() {
+                // `has_scalar_shim` and NOT `Elem::of`: the two came apart
+                // when `Char` arrived, which has a shim and is not an array
+                // element type.
+                if !from.has_scalar_shim() {
                     return Err(TypeError::NotConcatenable {
                         span: t.span,
                         found: from,
@@ -4616,7 +4639,7 @@ impl Checker {
         let ty = inner.ty;
         // There is one shim per scalar and none for anything else. Saying so
         // here is a diagnostic; leaving it to codegen is an internal error.
-        if ty != Type::Void && Elem::of(ty).is_none() {
+        if ty != Type::Void && !ty.has_scalar_shim() {
             return Err(TypeError::NotPrintable { span, found: ty });
         }
         self.require(Type::Void, expected, span)?;

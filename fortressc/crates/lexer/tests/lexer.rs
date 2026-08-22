@@ -443,8 +443,39 @@ fn non_ascii_is_rejected_outside_comments_and_strings() {
 
 #[test]
 fn out_of_subset_literals_fail_with_specific_errors() {
-    assert_eq!(err("'x'"), LexErrorKind::CharacterLiteralUnsupported);
     assert_eq!(err("7FFF_16"), LexErrorKind::RadixNumeralUnsupported);
+}
+
+/// `lexical-structure.tex:862-877` lists four shapes a character literal may
+/// take and two it may not, and each refusal names WHICH -- `'x'` used to be
+/// "character literals are not in the M1 subset", which is no longer true of
+/// any of them.
+#[test]
+fn a_character_literal_takes_the_four_shapes_and_no_others() {
+    assert_eq!(kinds("'x'"), vec![Kind::CharLit('x'), Kind::Eof]);
+    assert_eq!(kinds("'\\t'"), vec![Kind::CharLit('\t'), Kind::Eof]);
+    // FOUR OR MORE hex digits, and the two spellings must agree.
+    assert_eq!(kinds("'0061'"), vec![Kind::CharLit('a'), Kind::Eof]);
+    assert_eq!(
+        kinds("'1D11E'"),
+        vec![Kind::CharLit('\u{1D11E}'), Kind::Eof]
+    );
+    assert_eq!(kinds("'TAB'"), vec![Kind::CharLit('\t'), Kind::Eof]);
+    // `lexical-structure.tex:836-842`: the literal ends at the nearest
+    // apostrophe AFTER the first enclosed character, so this is ONE literal.
+    assert_eq!(kinds("'''"), vec![Kind::CharLit('\''), Kind::Eof]);
+
+    // Naming a character is preprocessing; three fewer hex digits is a name.
+    assert_eq!(
+        err("'PLUS-MINUS SIGN'"),
+        LexErrorKind::CharacterNameUnsupported
+    );
+    assert_eq!(err("'ab'"), LexErrorKind::CharacterNameUnsupported);
+    // A lone backslash and an unescaped string delimiter are static errors,
+    // `:851-859`; so is a raw control character, `:844-850`.
+    assert_eq!(err("'\\'"), LexErrorKind::MalformedCharacterLiteral);
+    assert_eq!(err("'\"'"), LexErrorKind::MalformedCharacterLiteral);
+    assert_eq!(err("'\t'"), LexErrorKind::MalformedCharacterLiteral);
 }
 
 /// `Literal.rats:151-155` gives a string literal two delimiter pairs.

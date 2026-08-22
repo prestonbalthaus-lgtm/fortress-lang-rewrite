@@ -715,6 +715,12 @@ pub enum Expr {
         value: String,
         span: Span,
     },
+    /// `'a'`. The lexer has already applied the escape, so this is one Unicode
+    /// scalar and never a source spelling.
+    CharLit {
+        value: char,
+        span: Span,
+    },
     BoolLit {
         value: bool,
         span: Span,
@@ -1011,6 +1017,7 @@ impl Expr {
             | Self::IntLit { span, .. }
             | Self::FloatLit { span, .. }
             | Self::StrLit { span, .. }
+            | Self::CharLit { span, .. }
             | Self::BoolLit { span, .. }
             | Self::Var { span, .. }
             | Self::Juxt { span, .. }

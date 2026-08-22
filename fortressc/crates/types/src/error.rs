@@ -262,6 +262,14 @@ pub enum TypeError {
         name: String,
         kind: &'static str,
     },
+    /// `'a' + 'b'`. A `Char` is ORDERED and not NUMERIC: the six comparisons
+    /// are defined on it and no arithmetic is. 1.0 spells the two conversions
+    /// `char` and `codePoint` and neither is in this subset, so there is no
+    /// implicit route to an integer either.
+    CharNotNumeric {
+        span: Span,
+        op: &'static str,
+    },
     /// A rank this compiler cannot represent. `ZZ32[2,3]` resolves now --
     /// `Type::Array` carries a rank -- so what is left here is a shape with NO
     /// dimensions at all, and one with more than a `u8` can hold.
@@ -742,6 +750,7 @@ impl TypeError {
             | Self::DimensionDeclaredTwice { span, .. }
             | Self::DimensionNameCollides { span, .. }
             | Self::DimensionIsNotAType { span, .. }
+            | Self::CharNotNumeric { span, .. }
             | Self::ArrayDimensions { span, .. }
             | Self::SubscriptArity { span, .. }
             | Self::ArrayRankNotImplemented { span, .. }
@@ -1029,6 +1038,10 @@ impl core::fmt::Display for TypeError {
             Self::DimensionIsNotAType { name, kind, .. } => write!(
                 f,
                 "`{name}` is {kind}, not a type; a value may not carry a dimension in this subset"
+            ),
+            Self::CharNotNumeric { op, .. } => write!(
+                f,
+                "`{op}` is not defined on Char; a character is ordered, not numeric"
             ),
             Self::ArrayDimensions { dimensions, .. } => write!(
                 f,

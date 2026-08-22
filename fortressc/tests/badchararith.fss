@@ -1,0 +1,10 @@
+component badchararith
+export Executable
+
+(* A `Char` is ORDERED and NOT NUMERIC. Without the refusal, `is_ordered` lets
+   it into the arithmetic path and `+` emits an integer add on two code points
+   -- a silent wrong answer rather than a missing feature. *)
+run(): () = do
+    println('a' + 'b')
+end
+end

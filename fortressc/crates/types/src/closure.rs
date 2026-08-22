@@ -749,6 +749,7 @@ impl Pass {
             | Expr::IntLit { .. }
             | Expr::FloatLit { .. }
             | Expr::StrLit { .. }
+            | Expr::CharLit { .. }
             | Expr::BoolLit { .. }
             | Expr::Var { .. } => Ok(()),
 
@@ -1107,6 +1108,7 @@ fn free_names(e: &Expr, bound: &mut Vec<BTreeSet<String>>, out: &mut BTreeSet<St
         | Expr::IntLit { .. }
         | Expr::FloatLit { .. }
         | Expr::StrLit { .. }
+        | Expr::CharLit { .. }
         | Expr::BoolLit { .. } => {}
         Expr::Tuple { items, .. } | Expr::Juxt { items, .. } | Expr::ArrayLit { items, .. } => {
             for i in items {

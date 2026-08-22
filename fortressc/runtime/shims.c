@@ -529,6 +529,47 @@ void println_boolean(int v) { puts(v ? "true" : "false"); }
 void println_void(void) { puts(""); }
 
 /*
+ * A character crosses as an `int` -- a Unicode scalar, not a byte -- and is
+ * written back out as UTF-8. ONE ENCODER for all three shims, for the same
+ * reason `rr64_needs_point` is shared: a value printed one way and concatenated
+ * another is the defect one step later.
+ *
+ * The buffer is five bytes: four for the longest encoding and one terminator.
+ */
+static size_t utf8_encode(unsigned int c, char *out) {
+    if (c < 0x80u) {
+        out[0] = (char)c;
+        out[1] = '\0';
+        return 1;
+    }
+    if (c < 0x800u) {
+        out[0] = (char)(0xC0u | (c >> 6));
+        out[1] = (char)(0x80u | (c & 0x3Fu));
+        out[2] = '\0';
+        return 2;
+    }
+    if (c < 0x10000u) {
+        out[0] = (char)(0xE0u | (c >> 12));
+        out[1] = (char)(0x80u | ((c >> 6) & 0x3Fu));
+        out[2] = (char)(0x80u | (c & 0x3Fu));
+        out[3] = '\0';
+        return 3;
+    }
+    out[0] = (char)(0xF0u | (c >> 18));
+    out[1] = (char)(0x80u | ((c >> 12) & 0x3Fu));
+    out[2] = (char)(0x80u | ((c >> 6) & 0x3Fu));
+    out[3] = (char)(0x80u | (c & 0x3Fu));
+    out[4] = '\0';
+    return 4;
+}
+
+void println_char(int v) {
+    char buf[5];
+    utf8_encode((unsigned int)v, buf);
+    puts(buf);
+}
+
+/*
  * `print` is `println` without the newline. Separate shims rather than a flag,
  * because a flag would be one more thing generated code has to get right and
  * these are four lines each.
@@ -584,6 +625,11 @@ void print_rr64(double v) {
     printf(rr64_needs_point(buf) ? "%s.0" : "%s", buf);
 }
 void print_boolean(int v) { fputs(v ? "true" : "false", stdout); }
+void print_char(int v) {
+    char buf[5];
+    utf8_encode((unsigned int)v, buf);
+    fputs(buf, stdout);
+}
 void print_void(void) {}
 
 /*
@@ -650,6 +696,14 @@ char *to_string_boolean(int v) {
     size_t n = strlen(s);
     char *out = fortress_alloc(n + 1);
     memcpy(out, s, n + 1);
+    return out;
+}
+
+char *to_string_char(int v) {
+    char buf[5];
+    size_t n = utf8_encode((unsigned int)v, buf);
+    char *out = fortress_alloc(n + 1);
+    memcpy(out, buf, n + 1);
     return out;
 }
 

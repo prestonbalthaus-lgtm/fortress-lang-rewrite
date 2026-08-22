@@ -1,0 +1,13 @@
+component badcharname
+export Executable
+
+(* `lexical-structure.tex:869-877` lets a character literal NAME its character
+   -- `'PLUS-MINUS SIGN'` -- or write an ASCII sequence that ASCII conversion
+   folds. Both are PREPROCESSING with a table of Unicode names behind them, and
+   both are refused by name rather than guessed at.
+   `ProjectFortress/other_compiler_tests/Char3.fss:151` is the corpus file that
+   wants this. *)
+run(): () = do
+    println('PLUS-MINUS SIGN')
+end
+end

@@ -1,0 +1,9 @@
+component badforbiddenchar
+export Executable
+
+(* A RAW TAB INSIDE A CHARACTER LITERAL. `lexical-structure.tex:844-850` makes
+   any character forbidden outside a comment a static error here, and
+   `ProjectFortress/parser_tests/XXXforbiddenCharacters.fss` is the corpus
+   must-FAIL that writes exactly this. *)
+run(): () = println '	'
+end

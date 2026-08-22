@@ -298,7 +298,7 @@ RUN_TIMEOUT     = 20
 # semantics lane's 291 -> 285, where every lost case was a must-fail being
 # wrongly accepted; this is the same shape one step further out -- a PASS being
 # wrongly earned.
-PASS_FLOOR = 337
+PASS_FLOOR = 338
 
 args, opt = sys.argv[1:], {}
 i = 0
