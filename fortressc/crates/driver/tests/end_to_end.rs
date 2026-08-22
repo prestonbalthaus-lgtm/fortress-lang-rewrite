@@ -2357,8 +2357,127 @@ fn the_bootstrap_root_parses_in_full() {
         "the character type is built; it may not be the wall again: {message}"
     );
     assert!(
+        !message.contains("is not a trait, so nothing can extend it"),
+        "a trait extending a scalar was a DECLARED trait the resolver could not \
+         reach; the shadowing fix retired this wall and it may not come back: \
+         {message}"
+    );
+    // REPINNED DELIBERATELY, 1354 LINES ON. `trait QQ extends { RR64, ... }` at
+    // :376 was refused because `RR64` resolved to the builtin scalar and never
+    // to the `trait RR64` THIS SAME FILE declares at :335. With a declaration
+    // winning, the file walks to :1730 and stops on TUPLE TYPES, which is its
+    // own milestone. Pinning the NEW wall is what keeps this test honest: it
+    // fails when the file regresses AND when it advances unremarked.
+    assert!(
+        message.contains("a tuple type is not implemented in this subset"),
+        "the remaining blocker should be the tuple wall at :1730: {message}"
+    );
+}
+
+/// A DECLARED NAME WINS, and this is the fix's own subject. `trait RR64` is an
+/// ordinary library trait in 1.0 -- `conversions-coercions.tex:850-866` writes
+/// one and `Library/FortressLibrary.fsi:335` declares one -- so a component
+/// that writes the declaration means it.
+#[test]
+fn a_declared_trait_shadows_the_builtin_scalar_of_the_same_name() {
+    let src = output_path("shadow-yes").with_extension("fss");
+    std::fs::write(
+        &src,
+        "component shadowyes\n         trait RR64 end\n         trait QQ extends { RR64 } end\n         end\n",
+    )
+    .expect("could not write fixture");
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(&src)
+        .arg("-o")
+        .arg(output_path("shadow-yes-out"))
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !message.contains("is not a trait"),
+        "a DECLARED `trait RR64` must be reachable in supertype position: {message}"
+    );
+    let _ = std::fs::remove_file(&src);
+}
+
+/// THE OTHER SIDE OF THE ORDER, and without it the fix could have deleted the
+/// rule outright while the test above still passed. No declaration, so `RR64`
+/// is the builtin scalar and a scalar carries no tag for anything below it to
+/// dispatch on.
+#[test]
+fn an_undeclared_scalar_may_still_not_be_extended() {
+    let src = output_path("shadow-no").with_extension("fss");
+    std::fs::write(
+        &src,
+        "component shadowno\n         trait QQ extends { RR64 } end\n         end\n",
+    )
+    .expect("could not write fixture");
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(&src)
+        .arg("-o")
+        .arg(output_path("shadow-no-out"))
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert!(
         message.contains("`RR64` is not a trait, so nothing can extend it"),
-        "the remaining blocker should be a trait extending a scalar: {message}"
+        "an UNDECLARED scalar keeps the refusal: {message}"
+    );
+    let _ = std::fs::remove_file(&src);
+}
+
+/// AND THE OBJECT SIDE, which the corpus already carries as a must-FAIL.
+/// `XXXextendBoolean.fss` writes `object Mumble() extends { Boolean }` with NO
+/// declaration of `Boolean`, and the XXX convention says 1.0 refuses it.
+///
+/// THE FIRST CUT OF THIS FIX ACCEPTED IT -- accept any scalar in supertype
+/// position -- and that is how we learned acceptance was the wrong shape: swept
+/// over all 1956 corpus files its entire measured gain was this ONE file, and
+/// this one file is a program that must not compile.
+#[test]
+fn an_object_may_not_extend_an_undeclared_scalar() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(corpus("ProjectFortress/tests/XXXextendBoolean.fss"))
+        .arg("--emit-obj")
+        .arg("-o")
+        .arg("/dev/null")
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        message.contains("`Boolean` is not a trait, so nothing can extend it"),
+        "XXXextendBoolean is a must-FAIL and stays refused: {message}"
+    );
+}
+
+/// A SHADOWING COMPONENT MAY NOT ALSO REACH THE BUILTIN, and saying so with a
+/// test is what stops the first hole in `resolve_name`'s note from being a
+/// claim. `Compiled6.u.fss` declares `trait Boolean` and its methods take
+/// `Boolean` parameters -- which now means the TRAIT, so the builtin operator
+/// `NOT` no longer applies to them. That is a DIAGNOSTIC.
+///
+/// It used to be exit 70. The accept-any-scalar cut matched a supertype by
+/// NAME, so an object under the user's `trait Boolean` also satisfied the
+/// BUILTIN `Type::Boolean`, and codegen emitted `ret ptr %trueTest` into an
+/// `i1` return -- malformed IR, not a wrong answer anyone would see as one.
+#[test]
+fn a_component_shadowing_boolean_gets_a_diagnostic_and_not_malformed_ir() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(corpus("ProjectFortress/compiler_tests/Compiled6.u.fss"))
+        .arg("--emit-obj")
+        .arg("-o")
+        .arg("/dev/null")
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "a shadowed builtin is a user diagnostic, exit 1 and never 70: {message}"
+    );
+    assert!(
+        !message.contains("does not match operand type"),
+        "malformed IR reaching the verifier is the failure this pins: {message}"
     );
 }
 

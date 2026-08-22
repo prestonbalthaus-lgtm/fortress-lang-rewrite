@@ -321,7 +321,49 @@ impl Registry {
             })
     }
 
+    /// A DECLARED TRAIT OR OBJECT WINS OVER THE BUILTIN SCALAR OF THE SAME
+    /// NAME, and this order is the whole of the scalar-supertrait fix.
+    ///
+    /// The builtin names were matched FIRST and unconditionally, which made
+    /// them a RESERVED NAMESPACE. They are not one. `RR64` and `Boolean` are
+    /// ordinary library traits in 1.0 -- `conversions-coercions.tex:850-866`
+    /// writes `trait RR64 ... coerce(x: RR32) widens`, and
+    /// `Library/FortressLibrary.fsi:335` declares
+    /// `trait RR64 extends Number comprises { Float, FloatLiteral, RR32, QQ }`
+    /// forty-one lines above the `trait QQ extends { RR64, ... }` that this
+    /// compiler refused. The declaration was REGISTERED and then UNREACHABLE:
+    /// the trait went into `self.traits` and nothing could ever resolve to it.
+    ///
+    /// So this is a name resolution defect and NOT the representation question
+    /// it was filed as. A trait extending a scalar needs no tag, no boxing and
+    /// no injection, because with the declaration reachable `RR64` in supertype
+    /// position resolves to `Type::Trait("RR64")` and every pass downstream is
+    /// the ordinary trait machinery. `is_subtype` is untouched.
+    ///
+    /// THE BUILTIN LIST IS A BOOTSTRAP VOCABULARY, which is what
+    /// `types::BUILTIN_TYPE_NAMES` already says of `Any` and `Object`: they are
+    /// seeded because nothing can import them YET, and they come out on the day
+    /// import resolution can supply them. The scalars are the same trajectory,
+    /// one step earlier -- a component that declares the name means its own
+    /// declaration, exactly as `Compiled6.u.fss` says with
+    /// `import CompilerBuiltin.{...} except Boolean` above its own
+    /// `trait Boolean`.
+    ///
+    /// TWO HOLES, both measured at zero corpus cost and neither built for:
+    ///   * In a shadowing component the builtin becomes UNNAMEABLE, so a float
+    ///     in a BODY there has no type to be. No file reaches it --
+    ///     `FortressLibrary.fss` is far behind the `.fsi`.
+    ///   * Static arguments resolve during EXPANSION, before this registry
+    ///     exists, so `[\RR64\]` in a shadowing component stamps the builtin
+    ///     while the same name in a signature resolves to the trait. Nothing in
+    ///     the corpus writes one.
     fn resolve_name(&self, name: &str, span: Span) -> Result<Type, TypeError> {
+        if let Some((interned, _)) = self.traits.get_key_value(name) {
+            return Ok(Type::Trait(interned));
+        }
+        if let Some((interned, _)) = self.objects.get_key_value(name) {
+            return Ok(Type::Object(interned));
+        }
         match name {
             "ZZ32" => Ok(Type::ZZ32),
             "ZZ64" => Ok(Type::ZZ64),
@@ -329,14 +371,8 @@ impl Registry {
             "Boolean" => Ok(Type::Boolean),
             "String" => Ok(Type::String),
             "Char" => Ok(Type::Char),
-            other => {
-                if let Some((interned, _)) = self.traits.get_key_value(other) {
-                    return Ok(Type::Trait(interned));
-                }
-                if let Some((interned, _)) = self.objects.get_key_value(other) {
-                    return Ok(Type::Object(interned));
-                }
-                if let Some(kind) = self.dimensions.describes(other) {
+            _ => {
+                if let Some(kind) = self.dimensions.describes(name) {
                     return Err(TypeError::DimensionIsNotAType {
                         span,
                         name: name.to_owned(),
