@@ -171,22 +171,33 @@ if [[ ${1:-} == --mutate ]]; then
     #    that passes today -- the first draft corrupted Funmet.test, whose case
     #    is BLOCKED on `import java`, and nothing moved. A mutation applied to
     #    a case the gate never reaches is not a mutation.
+    # THE ASSERTION IS THE MECHANISM AND NOT THE NUMBER, and this row learned
+    # it the same way rows 5 and 6 did. It carried `330` and ESCAPED reporting
+    # 335: `pass` is a property of TODAY'S COMPILER and every file that starts
+    # compiling moves it, so an absolute figure here stops testing without
+    # saying so. What the row is for is that ONE case leaves `pass`, so that is
+    # what it says, against a baseline the gate computes.
+    base=$(gate | field 'd["outcomes"]["pass"]')
     apply ProjectFortress/compiler_tests/Compiled17.test \
         's/^run_out_equals=pass/run_out_equals=nonesuch/' || exit 2
     got=$(gate | field 'd["outcomes"]["pass"]')
     restore ProjectFortress/compiler_tests/Compiled17.test
-    report 'a satisfied expectation corrupted' "$got" 330 \
-        'pass fell 331 -> 330, below the floor of 331; gate red'
+    report 'a satisfied expectation corrupted' "$got" "$((base - 1))" \
+        "pass fell $base -> $((base - 1)); one case left the passing set"
 
     # 4. Make `matches` a search rather than a full match, which is what Java
     #    String.matches is NOT.
+    # BASELINED RATHER THAN WRITTEN, for the reason row 3 above now carries:
+    # this said `331/38` and escaped reporting `336/39` the day more of the
+    # corpus started compiling.
+    base=$(gate | field 'str(d["outcomes"]["pass"]) + "/" + str(d["outcomes"]["fail"])')
     apply tools/oracle-gate.sh \
         's/^        return re.fullmatch(pattern, text, re.S) is not None$/        return re.search(pattern, text, re.S) is not None/' || exit 2
     got=$(gate | field 'str(d["outcomes"]["pass"]) + "/" + str(d["outcomes"]["fail"])')
     restore tools/oracle-gate.sh
-    if [[ $got == 331/38 ]]; then
+    if [[ $got == "$base" ]]; then
         documented 'matches weakened from fullmatch to search' \
-            "nothing moved (331/38 either way). 36 cases carry a _matches or
+            "nothing moved ($base either way). 36 cases carry a _matches or
          _WImatches expectation and this compiler reaches only 5 of them; all
          5 are satisfied by both readings, so no assertion the suite can make
          separates them today.
@@ -194,7 +205,7 @@ if [[ ${1:-} == --mutate ]]; then
          prefix-matching case is reached, and it is 8 lines from a false
          green if the comparator is ever rewritten"
     else
-        report 'matches weakened from fullmatch to search' "$got" 331/38 \
+        report 'matches weakened from fullmatch to search' "$got" "$base" \
             'a case changed verdict'
     fi
 
@@ -287,7 +298,7 @@ RUN_TIMEOUT     = 20
 # semantics lane's 291 -> 285, where every lost case was a must-fail being
 # wrongly accepted; this is the same shape one step further out -- a PASS being
 # wrongly earned.
-PASS_FLOOR = 331
+PASS_FLOOR = 336
 
 args, opt = sys.argv[1:], {}
 i = 0
