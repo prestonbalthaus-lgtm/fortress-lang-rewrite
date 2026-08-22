@@ -175,6 +175,7 @@ refusals() {
         fi
     done <<'CASES'
 badvoidvalue|cannot be stored in a slot of a wider type
+badvoidfield|cannot be stored in a field
 voidnotobject|() does not satisfy `T extends Object`
 badtupletype|cannot be the result of a function with a body
 badarrowtype|an arrow type is not implemented
@@ -253,7 +254,14 @@ unit_as_a_static_argument() {
 # file, and the tree has to be clean first. Restored either way.
 
 MUTATIONS=(
-  'crates/types/src/lib.rs|params.push(self.storable(&p.ty, "a parameter")?);|params.push(self.registry.resolve(&p.ty)?);|drop the void guard on parameters'
+  # RE-TARGETED 2026-08-22. It pointed at the void guard on a PARAMETER, and
+  # that line no longer exists in that shape -- and the guard behind it is a
+  # BACKSTOP now rather than a live path, because a functional's `()` parameter
+  # is dropped before the checker sees one. The row that exercises the backstop
+  # is "stop dropping a `()` parameter at the substitution", above. An object's
+  # value parameters are its FIELDS and are still refused, which is where the
+  # void guard is reachable from source.
+  'crates/types/src/lib.rs|ty: self.storable(&p.ty, "a field")?,|ty: self.registry.resolve(&p.ty)?,|drop the void guard on an object field'
   # `()` AS A STATIC ARGUMENT, THREE AXES. Dropping the parameter, `()` being a
   # subtype of `Any`, and `()` still having no representation are three separate
   # decisions and no one row reaches two of them.

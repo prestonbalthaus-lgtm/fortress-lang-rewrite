@@ -1,0 +1,13 @@
+component badvoidfield
+export Executable
+
+(* AN OBJECT'S VALUE PARAMETERS ARE ITS FIELDS. They decide a layout and a
+   constructor arity, so the `()` drop deliberately does NOT reach them and this
+   stays refused -- which is also the only live path left to the void guard in
+   the checker, now that a functional's `()` parameter is dropped before the
+   checker ever sees it. *)
+object Box(v: ()) end
+
+run(): () = println(1)
+
+end
