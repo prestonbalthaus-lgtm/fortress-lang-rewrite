@@ -1,0 +1,7 @@
+component badarraynewarity
+export Executable
+run(): () = do
+    a: ZZ32[2,3] = array(6)
+    a[0,0] := 1
+end
+end

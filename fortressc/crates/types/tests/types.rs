@@ -451,7 +451,7 @@ fn one_mpi_call_anywhere_marks_the_whole_component() {
 #[test]
 fn an_array_literal_takes_its_element_type_from_its_slot() {
     let e = body("f():Array[\\ZZ64\\] = [1, 2, 3]");
-    assert_eq!(e.ty, Type::Array(fortress_types::Elem::ZZ64));
+    assert_eq!(e.ty, Type::Array(fortress_types::Elem::ZZ64, 1));
 }
 
 #[test]
@@ -464,7 +464,7 @@ fn an_unpinned_array_literal_defaults_to_zz32_like_a_bare_literal() {
     let Some(fortress_types::TypedBlockItem::Binding { ty, .. }) = items.first() else {
         panic!("expected the a binding")
     };
-    assert_eq!(*ty, Type::Array(fortress_types::Elem::ZZ32));
+    assert_eq!(*ty, Type::Array(fortress_types::Elem::ZZ32, 1));
 }
 
 #[test]
@@ -521,7 +521,7 @@ fn a_sized_array_takes_its_element_type_from_the_binding() {
     let Some(fortress_types::TypedBlockItem::Binding { ty, .. }) = items.first() else {
         panic!("expected the a binding")
     };
-    assert_eq!(*ty, Type::Array(fortress_types::Elem::ZZ64));
+    assert_eq!(*ty, Type::Array(fortress_types::Elem::ZZ64, 1));
 }
 
 #[test]

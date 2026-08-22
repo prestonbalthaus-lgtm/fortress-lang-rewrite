@@ -1,0 +1,11 @@
+component badarrayrank
+export Executable
+
+(* `length` on a higher rank is refused by NAME rather than answered. 1.0 gives
+   `Array2` a per-dimension extent and no single `length`, so a total would be
+   inventing a meaning and an extent would be picking a dimension. *)
+run(): () = do
+    a: ZZ32[2,3] = array(2,3)
+    println(length(a))
+end
+end

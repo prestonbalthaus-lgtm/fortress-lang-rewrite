@@ -122,7 +122,7 @@ impl Registry {
 
     fn reaches_from(&self, ty: Type, seen: &mut BTreeSet<&'static str>) -> Option<String> {
         match ty {
-            Type::Array(_) => Some(String::new()),
+            Type::Array(..) => Some(String::new()),
             Type::Object(name) => {
                 if !seen.insert(name) {
                     return None;
@@ -191,10 +191,10 @@ impl Registry {
                     form: "an arrow type",
                 })
             }
-            // THE SINGLE GATE for every shape suffix. `Type::Array` holds one
-            // `Elem`, so nothing below this line can construct a second
-            // dimension, a non-zero origin or a matrix -- which is what makes
-            // the invariant checkable by reading one function rather than by
+            // THE SINGLE GATE for every shape suffix. `Type::Array` carries a
+            // RANK now and no extent, so nothing below this line can construct
+            // a non-zero origin or a matrix -- which is what makes the
+            // invariant checkable by reading one function rather than by
             // trusting every construction site.
             TypeRef::Shaped {
                 base,
@@ -217,7 +217,11 @@ impl Registry {
                     position: "an array element",
                 });
             }
-            return Elem::of(inner).map(Type::Array).ok_or_else(|| {
+            // `Array[\\T\\]` written by name is RANK ONE. The higher ranks have
+            // no spelling in static-argument position in this subset -- 1.0
+            // writes `Array2[\\T, b0, s0, b1, s1\\]` and nothing in the corpus
+            // does -- so they arrive only through a shape suffix below.
+            return Elem::of(inner).map(|e| Type::Array(e, 1)).ok_or_else(|| {
                 TypeError::UnsupportedElementType {
                     span: argument.span(),
                     name: inner.name().to_owned(),
@@ -266,29 +270,41 @@ impl Registry {
                 form: "a vector or matrix type",
             });
         }
-        let [extent] = extents else {
+        // EVERY DIMENSION IS CHECKED, not just the first. The extents were
+        // always a `Vec` -- the parser has read `ZZ32[2,3]` since `T[n]`
+        // landed -- and this was the single line that refused what it read.
+        if extents.is_empty() {
+            return Err(TypeError::ArrayDimensions {
+                span,
+                dimensions: 0,
+            });
+        }
+        let Ok(rank) = u8::try_from(extents.len()) else {
             return Err(TypeError::ArrayDimensions {
                 span,
                 dimensions: extents.len(),
             });
         };
-        let Some(size) = extent.plain_size() else {
-            if extent.form == ExtentForm::Size {
-                return Err(TypeError::ArraySizeMissing { span });
+        for extent in extents {
+            let Some(size) = extent.plain_size() else {
+                if extent.form == ExtentForm::Size {
+                    return Err(TypeError::ArraySizeMissing { span });
+                }
+                return Err(TypeError::ExtentRangeNotImplemented {
+                    span: extent.span,
+                    written: extent.written(),
+                });
+            };
+            // A name here survived `mono`'s substitution, which means it
+            // resolved to nothing. Saying so beats `unknown type `n``, which
+            // sends the reader looking for a declaration that was never meant
+            // to exist.
+            if !matches!(size, TypeRef::Static { .. }) {
+                return Err(TypeError::ArraySizeNotStatic {
+                    span: size.span(),
+                    written: size.written(),
+                });
             }
-            return Err(TypeError::ExtentRangeNotImplemented {
-                span: extent.span,
-                written: extent.written(),
-            });
-        };
-        // A name here survived `mono`'s substitution, which means it resolved
-        // to nothing. Saying so beats `unknown type `n``, which sends the
-        // reader looking for a declaration that was never meant to exist.
-        if !matches!(size, TypeRef::Static { .. }) {
-            return Err(TypeError::ArraySizeNotStatic {
-                span: size.span(),
-                written: size.written(),
-            });
         }
         let inner = self.resolve(base)?;
         if inner == Type::Void {
@@ -298,7 +314,7 @@ impl Registry {
             });
         }
         Elem::of(inner)
-            .map(Type::Array)
+            .map(|e| Type::Array(e, rank))
             .ok_or_else(|| TypeError::UnsupportedElementType {
                 span: base.span(),
                 name: inner.name().to_owned(),

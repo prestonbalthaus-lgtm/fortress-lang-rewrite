@@ -836,9 +836,12 @@ impl Pass {
                 scope.pop();
                 result
             }
-            Expr::Index { base, index, .. } => {
+            Expr::Index { base, indices, .. } => {
                 self.rewrite_expr(base, scope)?;
-                self.rewrite_expr(index, scope)
+                for index in indices {
+                    self.rewrite_expr(index, scope)?;
+                }
+                Ok(())
             }
             Expr::While { cond, body, .. } => {
                 self.rewrite_expr(cond, scope)?;
@@ -1152,9 +1155,11 @@ fn free_names(e: &Expr, bound: &mut Vec<BTreeSet<String>>, out: &mut BTreeSet<St
             }
             bound.pop();
         }
-        Expr::Index { base, index, .. } => {
+        Expr::Index { base, indices, .. } => {
             free_names(base, bound, out);
-            free_names(index, bound, out);
+            for index in indices {
+                free_names(index, bound, out);
+            }
         }
         Expr::While { cond, body, .. } => {
             free_names(cond, bound, out);

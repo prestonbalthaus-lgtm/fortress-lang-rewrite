@@ -27,9 +27,9 @@ pub use types::{
     intern, intern_types, ArithOp, AssignTarget, CompareOp, DispatchFn, DispatchNode, Elem, MpiOp,
     Target, Type, TypedBlockItem, TypedCapture, TypedComponent, TypedExpr, TypedExprKind,
     TypedField, TypedFn, TypedObject, TypedParam, TypedReduction, TypedTypeCaseArm, ARRAY_ALLOC,
-    ARRAY_LENGTH, ARRAY_SLOT, ASSERT_FAILED, ATOMIC_ENTER, ATOMIC_LEAVE, CASE_FAILED,
-    DISPATCH_FAILED, ENV_ALLOC, FIRST_TAG, OBJECT_ALLOC, PARALLEL_FOR, REDUCTION_ALLOC,
-    REDUCTION_WORKERS,
+    ARRAY_ALLOC_N, ARRAY_LENGTH, ARRAY_SLOT, ARRAY_SLOT_N, ASSERT_FAILED, ATOMIC_ENTER,
+    ATOMIC_LEAVE, CASE_FAILED, DISPATCH_FAILED, ENV_ALLOC, FIRST_TAG, OBJECT_ALLOC, PARALLEL_FOR,
+    REDUCTION_ALLOC, REDUCTION_WORKERS,
 };
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -408,6 +408,17 @@ fn overload_counts(component: &Component) -> HashMap<String, usize> {
 /// is not caught, and a parameter declared `f(a: ZZ32[3])` is not checked
 /// against a five-element argument. A parameter, a return type, a trait field
 /// and a `typecase` arm have no initializer, so they get nothing.
+/// THE SUBSCRIPT COUNT AGAINST THE RANK, in one place because both the read
+/// and the compound-assignment path ask it. The runtime shim asks too, but a
+/// mismatch is a STATIC fact -- rank is in the type -- and a program that only
+/// fails at run time is a program this compiler accepted.
+fn subscript_arity(rank: u8, found: usize, span: Span) -> Checked<()> {
+    if found == usize::from(rank) {
+        return Ok(());
+    }
+    Err(TypeError::SubscriptArity { span, rank, found })
+}
+
 fn check_declared_extent(written: &TypeRef, value: &Expr) -> Checked<()> {
     let TypeRef::Shaped {
         spelling: ShapeSpelling::Bracket,
@@ -2141,7 +2152,11 @@ impl Checker {
             } => self.if_expr(cond, then_branch, else_branch.as_deref(), *span, expected),
             Expr::Block { items, span } => self.block(items, *span, expected),
             Expr::ArrayLit { items, span } => self.array_literal(items, *span, expected),
-            Expr::Index { base, index, span } => self.index(base, index, *span, expected),
+            Expr::Index {
+                base,
+                indices,
+                span,
+            } => self.index(base, indices, *span, expected),
             Expr::While { cond, body, span } => self.while_expr(cond, body, *span, expected),
             Expr::Field { base, name, span } => self.field(base, name, *span, expected),
             Expr::For {
@@ -2390,8 +2405,13 @@ impl Checker {
         span: Span,
         expected: Option<Type>,
     ) -> Checked<TypedExpr> {
+        // RANK ONE ONLY. `[1 2 3]` is the one-dimensional aggregate; the
+        // matrix form `[3 4; 5 6]` is a separate unbuilt parser feature, so a
+        // literal in a `ZZ32[2,3]` slot must not quietly take its element type
+        // and then satisfy `require`. Leaving it `None` here sends it to the
+        // ordinary mismatch, which names both types.
         let mut elem = match expected {
-            Some(Type::Array(e)) => Some(e),
+            Some(Type::Array(e, 1)) => Some(e),
             _ => None,
         };
         if elem.is_none() {
@@ -2421,7 +2441,7 @@ impl Checker {
         for item in items {
             typed.push(self.expr(item, Some(elem.as_type()))?);
         }
-        let ty = Type::Array(elem);
+        let ty = Type::Array(elem, 1);
         self.require(ty, expected, span)?;
         Ok(TypedExpr {
             kind: TypedExprKind::ArrayLit { elem, items: typed },
@@ -2433,26 +2453,30 @@ impl Checker {
     fn index(
         &mut self,
         base: &Expr,
-        index: &Expr,
+        indices: &[Expr],
         span: Span,
         expected: Option<Type>,
     ) -> Checked<TypedExpr> {
         let base = self.expr(base, None)?;
-        let Type::Array(elem) = base.ty else {
+        let Type::Array(elem, rank) = base.ty else {
             return Err(TypeError::NotAnArray {
                 span,
                 found: base.ty,
             });
         };
+        subscript_arity(rank, indices.len(), span)?;
         // Subscripts are ZZ64 so that an array can be longer than 2^31, which
         // is the ceiling the JVM implementation could never get past.
-        let index = self.expr(index, Some(Type::ZZ64))?;
+        let indices = indices
+            .iter()
+            .map(|i| self.expr(i, Some(Type::ZZ64)))
+            .collect::<Checked<Vec<_>>>()?;
         let ty = elem.as_type();
         self.require(ty, expected, span)?;
         Ok(TypedExpr {
             kind: TypedExprKind::Index {
                 base: Box::new(base),
-                index: Box::new(index),
+                indices,
                 elem,
             },
             ty,
@@ -2787,8 +2811,9 @@ impl Checker {
                 BlockItem::Assign(a) => self.reads_shared(&a.value, floor),
                 BlockItem::Expr(e) => self.reads_shared(e, floor),
             }),
-            Expr::Index { base, index, .. } => {
-                self.reads_shared(base, floor) || self.reads_shared(index, floor)
+            Expr::Index { base, indices, .. } => {
+                self.reads_shared(base, floor)
+                    || indices.iter().any(|i| self.reads_shared(i, floor))
             }
             Expr::While { cond, body, .. } => {
                 self.reads_shared(cond, floor) || self.reads_shared(body, floor)
@@ -2915,7 +2940,11 @@ impl Checker {
                         });
                     }
                 }
-                Expr::Index { base, index, span } if !in_atomic => {
+                Expr::Index {
+                    base,
+                    indices,
+                    span,
+                } if !in_atomic => {
                     // An array the body created ITSELF is private to this
                     // iteration, so any index into it is safe. Only a shared
                     // array -- one whose name resolves below the loop, or one
@@ -2925,10 +2954,21 @@ impl Checker {
                         Expr::Var { name, .. } => self.shared_in_loop(name, floor),
                         _ => true,
                     };
-                    let names_binder = matches!(
-                        (index.as_ref(), binder.as_deref()),
-                        (Expr::Var { name, .. }, Some(b)) if name == b
-                    );
+                    // ANY ONE SUBSCRIPT NAMING THE BINDER IS ENOUGH, and for
+                    // rank one that is the rule this has always been. The
+                    // argument is the same at every rank: two iterations of
+                    // this loop hold different binder values, so the coordinate
+                    // written at that position differs, so the slots differ --
+                    // whatever the other subscripts evaluate to. A nest is what
+                    // needs it: `for i ... for j ... a[i,j] := e` owns column
+                    // `j` in the inner loop and row `i` in the outer, and a
+                    // first-subscript-only rule refuses the inner one.
+                    let names_binder = indices.iter().any(|index| {
+                        matches!(
+                            (index, binder.as_deref()),
+                            (Expr::Var { name, .. }, Some(b)) if name == b
+                        )
+                    });
                     if shared && !names_binder {
                         return Err(TypeError::ParallelIndexNotBinder {
                             span: *span,
@@ -2977,21 +3017,29 @@ impl Checker {
             }
             // The binding is immutable, the container is not: `a` cannot be
             // rebound, but its elements are storage.
-            Expr::Index { base, index, span } => {
+            Expr::Index {
+                base,
+                indices,
+                span,
+            } => {
                 let base = self.expr(base, None)?;
-                let Type::Array(elem) = base.ty else {
+                let Type::Array(elem, rank) = base.ty else {
                     return Err(TypeError::NotAnArray {
                         span: *span,
                         found: base.ty,
                     });
                 };
-                let index = self.expr(index, Some(Type::ZZ64))?;
+                subscript_arity(rank, indices.len(), *span)?;
+                let indices = indices
+                    .iter()
+                    .map(|i| self.expr(i, Some(Type::ZZ64)))
+                    .collect::<Checked<Vec<_>>>()?;
                 let op = self.compound_op(a.op, elem.as_type(), *span)?;
                 let value = self.expr(&a.value, Some(elem.as_type()))?;
                 Ok(TypedBlockItem::Assign {
                     target: AssignTarget::Element {
                         base: Box::new(base),
-                        index: Box::new(index),
+                        indices,
                         elem,
                     },
                     op,
@@ -3095,7 +3143,7 @@ impl Checker {
         let Some(floor) = self.parallel_loop().map(|c| c.floor) else {
             return;
         };
-        if !ty.is_reference() && !matches!(ty, Type::Array(_)) {
+        if !ty.is_reference() && !matches!(ty, Type::Array(..)) {
             return;
         }
         if !self.reads_shared(value, floor) {
@@ -3875,7 +3923,7 @@ impl Checker {
         let Some(ty) = self.lookup(name).map(|l| l.ty) else {
             return Ok(());
         };
-        if matches!(ty, Type::Array(_)) {
+        if matches!(ty, Type::Array(..)) {
             return Err(TypeError::ParallelSharedArrayArgument {
                 span: *span,
                 name: name.clone(),
@@ -3912,7 +3960,7 @@ impl Checker {
             if !self.shared_in_loop(name, floor) {
                 continue;
             }
-            if matches!(ty, Type::Array(_)) {
+            if matches!(ty, Type::Array(..)) {
                 return Err(TypeError::ParallelSharedArrayArgument {
                     span: *span,
                     name: name.clone(),
@@ -4385,26 +4433,33 @@ impl Checker {
         })
     }
 
-    /// `array(n)`. There is nothing in the call to say what it holds, so the
-    /// element type comes from the slot and its absence is a diagnostic rather
-    /// than a guess.
+    /// `array(n)`, and `array(m, n)` for a higher rank. There is nothing in
+    /// the call to say what it holds, so the element type comes from the slot
+    /// and its absence is a diagnostic rather than a guess -- and the RANK
+    /// comes from the same place, which is what makes one argument per
+    /// dimension checkable instead of guessed at.
+    ///
+    /// THIS IS THE ONLY CONSTRUCTOR A HIGHER RANK HAS. The corpus builds one
+    /// with a matrix aggregate, `[3 4; 5 6]`, which is a separate unbuilt
+    /// parser feature -- so without this the whole run-time path would be
+    /// unreachable and therefore ungateable.
     fn array_new(
         &mut self,
         args: &[Expr],
         span: Span,
         expected: Option<Type>,
     ) -> Checked<TypedExpr> {
-        let [count] = args else {
+        let Some(Type::Array(elem, rank)) = expected else {
+            return Err(TypeError::ElementTypeUnknown { span });
+        };
+        if args.len() != usize::from(rank) {
             return Err(TypeError::ArityMismatch {
                 span,
                 name: "array".to_owned(),
-                expected: 1,
+                expected: usize::from(rank),
                 found: args.len(),
             });
-        };
-        let Some(Type::Array(elem)) = expected else {
-            return Err(TypeError::ElementTypeUnknown { span });
-        };
+        }
         // `array(n)` hands back slots nothing has written, so every element type
         // it accepts needs a value the runtime can legitimately put there.
         // `fortress_array_alloc` writes a one-byte static "" into pointer slots,
@@ -4418,13 +4473,16 @@ impl Checker {
                 found: elem.as_type(),
             });
         }
-        let count = self.expr(count, Some(Type::ZZ64))?;
+        let counts = args
+            .iter()
+            .map(|c| self.expr(c, Some(Type::ZZ64)))
+            .collect::<Checked<Vec<_>>>()?;
         Ok(TypedExpr {
             kind: TypedExprKind::Apply {
-                target: Target::ArrayNew { elem },
-                args: vec![count],
+                target: Target::ArrayNew { elem, rank },
+                args: counts,
             },
-            ty: Type::Array(elem),
+            ty: Type::Array(elem, rank),
             span,
         })
     }
@@ -4444,7 +4502,20 @@ impl Checker {
             });
         };
         let array = self.expr(array, None)?;
-        if !matches!(array.ty, Type::Array(_)) {
+        // `length` ON A HIGHER RANK IS REFUSED BY NAME rather than answered.
+        // 1.0 gives `Array2` a `bounds` and a per-dimension extent and no
+        // single `length`, so returning the total here would be inventing a
+        // meaning, and returning an extent would be picking a dimension.
+        if let Some(rank) = array.ty.array_rank() {
+            if rank != 1 {
+                return Err(TypeError::ArrayRankNotImplemented {
+                    span,
+                    what: "`length`",
+                    rank,
+                });
+            }
+        }
+        if !matches!(array.ty, Type::Array(..)) {
             return Err(TypeError::NotAnArray {
                 span,
                 found: array.ty,
@@ -4970,12 +5041,22 @@ impl Checker {
         expected: Option<Type>,
     ) -> Checked<TypedExpr> {
         let typed_source = self.expr(source, None)?;
-        let Type::Array(_) = typed_source.ty else {
+        let Type::Array(_, rank) = typed_source.ty else {
             return Err(TypeError::NotAnArray {
                 span: source.span(),
                 found: typed_source.ty,
             });
         };
+        // The desugaring below is one index over one extent. A higher rank
+        // needs a nest, and which order it walks in is 1.0's question rather
+        // than a default worth guessing.
+        if rank != 1 {
+            return Err(TypeError::ArrayRankNotImplemented {
+                span: source.span(),
+                what: "iteration",
+                rank,
+            });
+        }
         let array = format!("$in{}", self.cases);
         let index = format!("$at{}", self.cases);
         self.cases = self.cases.saturating_add(1);
@@ -5016,7 +5097,7 @@ impl Checker {
                                 ty: None,
                                 value: Expr::Index {
                                     base: Box::new(array_ref()),
-                                    index: Box::new(Expr::Var { name: index, span }),
+                                    indices: vec![Expr::Var { name: index, span }],
                                     span,
                                 },
                                 mutable: false,

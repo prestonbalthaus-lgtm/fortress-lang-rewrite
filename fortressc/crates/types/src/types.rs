@@ -74,7 +74,9 @@ impl Elem {
             Type::RR64 => Some(Self::RR64),
             Type::Boolean => Some(Self::Boolean),
             Type::String => Some(Self::String),
-            Type::Void | Type::Array(_) | Type::Object(_) | Type::Trait(_) | Type::Tuple(_) => None,
+            Type::Void | Type::Array(..) | Type::Object(_) | Type::Trait(_) | Type::Tuple(_) => {
+                None
+            }
         }
     }
 
@@ -127,8 +129,29 @@ pub enum Type {
     Boolean,
     String,
     Void,
-    /// One dimensional and homogeneous. Nesting arrives with generics.
-    Array(Elem),
+    /// Homogeneous, and RANK IS PART OF THE TYPE as of the multi-dimensional
+    /// milestone: `ZZ32[5]` is `Array(ZZ32, 1)` and `ZZ32[2,3]` is
+    /// `Array(ZZ32, 2)`. Nesting still arrives with generics -- an element is
+    /// an [`Elem`] and never another array.
+    ///
+    /// RANK IS IN THE TYPE AND THE EXTENT IS NOT, and the two decisions point
+    /// opposite ways on purpose. `Type` is `Copy` and compared with `==` at
+    /// `is_subtype`, at overload duplicate detection and across M3c's whole
+    /// dispatch domain, so anything carried here re-decides what type equality
+    /// MEANS. Rank survives that test and an extent does not:
+    ///   * Rank is STATIC. `array(2,3)` and `array(m,n)` are both rank two
+    ///     whatever their arguments are, so every construction site can supply
+    ///     it. An extent cannot: `array(n)` takes a RUN-TIME count and has no
+    ///     extent to give.
+    ///   * Rank DISTINGUISHES. A rank-1 and a rank-2 array have different
+    ///     subscript arities, different storage and different shims, so
+    ///     calling them equal would be a wrong answer rather than a coarse
+    ///     one. Two `ZZ32[5]` of different sizes ARE the same type, and 1.0
+    ///     says so.
+    ///
+    /// The extent is still validated at a declaration and dropped there, and
+    /// that NAMED DEVIATION with its two stated holes is unchanged.
+    Array(Elem, u8),
     /// A concrete object type: a heap block whose first four bytes are its tag.
     Object(&'static str),
     /// A trait. No run-time representation of its own -- a trait typed value is
@@ -173,11 +196,21 @@ impl Type {
             Self::Boolean => "Boolean",
             Self::String => "String",
             Self::Void => "()",
-            Self::Array(Elem::ZZ32) => "Array[\\ZZ32\\]",
-            Self::Array(Elem::ZZ64) => "Array[\\ZZ64\\]",
-            Self::Array(Elem::RR64) => "Array[\\RR64\\]",
-            Self::Array(Elem::Boolean) => "Array[\\Boolean\\]",
-            Self::Array(Elem::String) => "Array[\\String\\]",
+            // RANK 1 KEEPS ITS EXACT SPELLING, which is not cosmetic: this name
+            // reaches diagnostics and `symbol` below reaches the emitted object,
+            // and every module that compiled before this milestone has to lower
+            // byte for byte unchanged. 1.0's own names for the higher ranks are
+            // `Array2` and `Array3`, `arrays.tex`.
+            Self::Array(elem, 1) => match elem {
+                Elem::ZZ32 => "Array[\\ZZ32\\]",
+                Elem::ZZ64 => "Array[\\ZZ64\\]",
+                Elem::RR64 => "Array[\\RR64\\]",
+                Elem::Boolean => "Array[\\Boolean\\]",
+                Elem::String => "Array[\\String\\]",
+            },
+            Self::Array(elem, rank) => {
+                intern(&format!("Array{rank}[\\{}\\]", elem.as_type().name()))
+            }
             Self::Object(name) | Self::Trait(name) => name,
             Self::Tuple(elems) => {
                 let inner: Vec<&str> = elems.iter().map(|t| t.name()).collect();
@@ -196,16 +229,34 @@ impl Type {
             Self::Boolean => "boolean",
             Self::String => "string",
             Self::Void => "void",
-            Self::Array(Elem::ZZ32) => "array_zz32",
-            Self::Array(Elem::ZZ64) => "array_zz64",
-            Self::Array(Elem::RR64) => "array_rr64",
-            Self::Array(Elem::Boolean) => "array_boolean",
-            Self::Array(Elem::String) => "array_string",
+            Self::Array(elem, 1) => match elem {
+                Elem::ZZ32 => "array_zz32",
+                Elem::ZZ64 => "array_zz64",
+                Elem::RR64 => "array_rr64",
+                Elem::Boolean => "array_boolean",
+                Elem::String => "array_string",
+            },
+            // RANK IS IN THE MANGLE. Without it `ZZ32[5]` and `ZZ32[2,3]` build
+            // the same symbol as static arguments to one generic, which is a
+            // silent collision in the emitted object rather than a diagnostic --
+            // the same argument the tuple variant's `name` makes.
+            Self::Array(elem, rank) => intern(&format!("array{rank}_{}", elem.symbol())),
             Self::Object(name) | Self::Trait(name) => name,
             Self::Tuple(elems) => {
                 let inner: Vec<&str> = elems.iter().map(|t| t.symbol()).collect();
                 intern(&format!("tuple_{}", inner.join("_")))
             }
+        }
+    }
+
+    /// How many subscripts one of these takes, and `None` for anything that is
+    /// not an array. Asked at every site that used to write
+    /// `matches!(ty, Type::Array(_))` and then assume one.
+    #[must_use]
+    pub const fn array_rank(self) -> Option<u8> {
+        match self {
+            Self::Array(_, rank) => Some(rank),
+            _ => None,
         }
     }
 
@@ -371,6 +422,11 @@ pub const REDUCTION_WORKERS: &str = "fortress_reduction_workers";
 pub const ARRAY_ALLOC: &str = "fortress_array_alloc";
 pub const ARRAY_LENGTH: &str = "fortress_array_length";
 pub const ARRAY_SLOT: &str = "fortress_array_slot";
+/// Rank two and above. A SEPARATE PAIR on purpose: rank one keeps the shims
+/// above unchanged so that every module that compiled before the
+/// multi-dimensional milestone lowers to the IR it lowered to then.
+pub const ARRAY_ALLOC_N: &str = "fortress_array_alloc_n";
+pub const ARRAY_SLOT_N: &str = "fortress_array_slot_n";
 
 /// A statically chosen implementation. `symbol()` is the name codegen emits.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -441,11 +497,13 @@ pub enum Target {
         symbol: String,
     },
     Mpi(MpiOp),
-    /// `array(n)`. The element type is not in the symbol: the runtime is told
-    /// the element width and whether it holds pointers, and that is all it
-    /// needs to know.
+    /// `array(n)`, and `array(m, n)` above rank one. The element type is not
+    /// in the symbol: the runtime is told the element width and whether it
+    /// holds pointers, and that is all it needs to know. The RANK is, because
+    /// it picks which of the two allocators is called.
     ArrayNew {
         elem: Elem,
+        rank: u8,
     },
     ArrayLength,
 }
@@ -471,7 +529,8 @@ impl Target {
             Self::UserFn { name } => name.clone(),
             Self::Dispatch { symbol } | Self::ObjectNew { symbol } => symbol.clone(),
             Self::Mpi(op) => op.symbol().to_owned(),
-            Self::ArrayNew { .. } => ARRAY_ALLOC.to_owned(),
+            Self::ArrayNew { rank: 1, .. } => ARRAY_ALLOC.to_owned(),
+            Self::ArrayNew { .. } => ARRAY_ALLOC_N.to_owned(),
             Self::ArrayLength => ARRAY_LENGTH.to_owned(),
         }
     }
@@ -615,7 +674,8 @@ pub enum TypedExprKind {
     },
     Index {
         base: Box<TypedExpr>,
-        index: Box<TypedExpr>,
+        /// As many as the array's rank, checked before this was built.
+        indices: Vec<TypedExpr>,
         elem: Elem,
     },
     While {
@@ -768,7 +828,8 @@ pub enum AssignTarget {
     /// `TypedBlockItem` several hundred bytes wide once `Type` grew a name.
     Element {
         base: Box<TypedExpr>,
-        index: Box<TypedExpr>,
+        /// As many as the array's rank, checked before this was built.
+        indices: Vec<TypedExpr>,
         elem: Elem,
     },
     /// `o.f := e`, and a bare `f := e` inside a method, which resolves to the

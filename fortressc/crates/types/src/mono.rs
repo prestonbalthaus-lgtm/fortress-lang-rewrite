@@ -964,9 +964,16 @@ impl<'a> Expander<'a> {
                 items: self.exprs(items, subst)?,
                 span: *span,
             },
-            Expr::Index { base, index, span } => Expr::Index {
+            Expr::Index {
+                base,
+                indices,
+                span,
+            } => Expr::Index {
                 base: Box::new(self.expr(base, subst)?),
-                index: Box::new(self.expr(index, subst)?),
+                indices: indices
+                    .iter()
+                    .map(|i| self.expr(i, subst))
+                    .collect::<Result<Vec<_>, _>>()?,
                 span: *span,
             },
             Expr::While { cond, body, span } => Expr::While {

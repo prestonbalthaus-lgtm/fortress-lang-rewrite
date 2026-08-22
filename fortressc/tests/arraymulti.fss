@@ -1,0 +1,44 @@
+component arraymulti
+export Executable
+
+(* RANK TWO AND RANK THREE, AND NOTHING SQUARE. A 3 by 3 hides a transposed
+   linearisation and a 2 by 2 by 2 hides two of them; every extent here is
+   distinct so a wrong stride collides two subscripts onto one slot, and the
+   fill-then-read below is what makes that collision visible. *)
+
+fill2(a: ZZ64[2,3]): () = do
+    for i <- 0#2 do
+        for j <- 0#3 do
+            a[i,j] := 10 i + j
+        end
+    end
+end
+
+show2(a: ZZ64[2,3]): () = do
+    for i <- 0#2 do
+        for j <- 0#3 do
+            println(a[i,j])
+        end
+    end
+end
+
+run(): () = do
+    a: ZZ64[2,3] = array(2,3)
+    fill2(a)
+    show2(a)
+
+    (* Rank three, and the compound form: the base and all three subscripts are
+       evaluated once for the load and the store alike. *)
+    b: ZZ64[2,3,4] = array(2,3,4)
+    b[1,2,3] := 100
+    b[1,2,3] += 23
+    b[0,0,0] := 7
+    println(b[1,2,3])
+    println(b[0,0,0])
+
+    (* A rank-one array in the same program, on the SAME code path it always
+       had: one subscript, one shim, no buffer. *)
+    c: ZZ32[4] = [9 8 7 6]
+    println(c[2])
+end
+end

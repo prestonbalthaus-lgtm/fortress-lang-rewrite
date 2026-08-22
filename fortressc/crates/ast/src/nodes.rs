@@ -766,11 +766,16 @@ pub enum Expr {
         items: Vec<Expr>,
         span: Span,
     },
-    /// `a[i]`, a tight subscript. Spaced, `a [i]` is a juxtaposition, exactly
-    /// as `f (x)` is.
+    /// `a[i]` and `a[i,j]`, a tight subscript. Spaced, `a [i]` is a
+    /// juxtaposition, exactly as `f (x)` is.
+    ///
+    /// ONE OR MORE INDICES, never zero: the parser reads a comma separated
+    /// list and `a[]` is a parse error, so the arity here is the arity the
+    /// source wrote. Whether it MATCHES the array's rank is the checker's
+    /// question, because rank is a type fact and this node is not typed.
     Index {
         base: Box<Expr>,
-        index: Box<Expr>,
+        indices: Vec<Expr>,
         span: Span,
     },
     While {

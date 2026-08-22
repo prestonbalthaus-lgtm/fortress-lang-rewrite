@@ -1,20 +1,24 @@
 #!/usr/bin/env bash
 #
-# The array-type gate: `T[n]`, `traits.tex:97-108`.
+# The array-type gate: `T[n]` and `T[m,n]`, `traits.tex:97-108`.
 #
-# Six things cargo cannot check on its own: that `a: ZZ32[5] = [0 1 2 3 4]`
+# Eight things cargo cannot check on its own: that `a: ZZ32[5] = [0 1 2 3 4]`
 # becomes a real ELF that prints the right elements, that a declared size and a
 # literal's length are COMPARED rather than the size being dropped, that the
-# five forms this subset does not build are each refused BY NAME rather than by
-# a parse error naming the wrong mechanism, that `ZZ32[3]` and `Array[\ZZ32\]`
+# forms this subset does not build are each refused BY NAME rather than by a
+# parse error naming the wrong mechanism, that `ZZ32[3]` and `Array[\ZZ32\]`
 # lower to the SAME type, that an extent survives monomorphization's
-# substitution so `g[\nat n\](a: ZZ32[n])` works, and that a SPACED bracket is
-# still not an array size.
+# substitution so `g[\nat n\](a: ZZ32[n])` works, that a SPACED bracket is
+# still not an array size, that a HIGHER RANK is filled and read back through
+# the right slots, and that a subscript is bounds checked in EVERY dimension.
 #
-# The refusals are the point. `Type::Array` holds one `Elem` and `Elem` is a
-# separate five-variant enum, so a second dimension is UNREPRESENTABLE rather
-# than merely rejected -- one refusal in `Registry::resolve` keeps it that way,
-# and this gate is what proves that refusal is still there.
+# THE NON-SQUARE FIXTURE IS THE POINT OF THE RANK-TWO CHECK. A wrong stride in
+# the linearisation collides two subscripts onto one slot, and a 3 by 3 hides
+# it: the mutation that multiplies by `extents[0]` instead of `extents[d]`
+# prints `0 1 10 10 11 12` on the 2 by 3 here and the RIGHT answer on a square
+# one. And the per-dimension bound is a correctness requirement rather than a
+# nicety -- `a[0,4]` on a 2 by 3 linearises to 4, which is inside six, so a
+# check made after the linearisation returns `a[1,1]` at exit 0.
 #
 #   ./tools/arraytype-gate.sh              run the gate
 #   ./tools/arraytype-gate.sh --selftest   only prove the assertions can refuse
@@ -129,7 +133,10 @@ refusals() {
     local entry name pattern label err status
     for entry in \
         "badarrayextent|declared with 5 element(s) and 6 are written|a declared size must match the literal that fills it" \
-        "badarraydims|has 2 dimensions; an array in this subset is one dimensional|a second dimension is refused by name" \
+        "badsubscriptfew|a rank 2 array takes 2 subscript(s), found 1|too few subscripts is refused by name" \
+        "badsubscriptmany|a rank 1 array takes 1 subscript(s), found 2|too many subscripts is refused by name" \
+        "badarrayrank|\`length\` of a rank 2 array is not in this subset|a rank-one operation above rank one is refused by name" \
+        "badarraynewarity|\`array\` takes 2 argument(s), found 1|one constructor argument per dimension" \
         "badextentrange|is an extent range|a hash extent range is refused by name" \
         "badarraysize|writes no size|an array type with no size is refused by name" \
         "badmatrixtype|a vector or matrix type is not implemented|a caret shape is refused by name" \
@@ -143,6 +150,46 @@ refusals() {
             bad "$label" "status $status: $err"
         fi
     done
+}
+
+# RANK TWO AND RANK THREE, FILLED AND READ BACK. Nothing here is square, so a
+# wrong stride collides two subscripts onto one slot and the read shows it.
+multi() {
+    printf '== a higher rank is filled and read back ==\n'
+    if ! timeout 300 "$fortressc" "$repo/fortressc/tests/arraymulti.fss" \
+        -o "$build/arraymulti" >"$build/multi.log" 2>&1; then
+        bad 'arraymulti.fss compiles and links' "$(cat "$build/multi.log")"
+        return
+    fi
+    local out status
+    out=$("$build/arraymulti" 2>&1)
+    status=$?
+    if [[ $status -eq 0 && $out == $'0\n1\n2\n10\n11\n12\n123\n7\n7' ]]; then
+        ok "a 2 by 3, a 2 by 3 by 4 and a rank one array in one program: $(printf '%s' "$out" | tr '\n' ' ')"
+    else
+        bad 'a higher rank is filled and read back' \
+            "status $status: $(printf '%s' "$out" | tr '\n' ' ')"
+    fi
+}
+
+# EVERY DIMENSION ON ITS OWN. This is the check a linearise-first
+# implementation passes while being wrong: offset 4 is inside the six slots a
+# 2 by 3 holds.
+bounds() {
+    printf '== a subscript is bounds checked in every dimension ==\n'
+    if ! timeout 300 "$fortressc" "$repo/fortressc/tests/arrayoob.fss" \
+        -o "$build/arrayoob" >"$build/oob.log" 2>&1; then
+        bad 'arrayoob.fss compiles and links' "$(cat "$build/oob.log")"
+        return
+    fi
+    local out status
+    out=$("$build/arrayoob" 2>&1)
+    status=$?
+    if refused_cleanly "$status" && [[ $out == *'out of bounds in dimension 1'* ]]; then
+        ok 'a[0,4] on a 2 by 3 halts and names the dimension'
+    else
+        bad 'a[0,4] on a 2 by 3 halts and names the dimension' "status $status: $out"
+    fi
 }
 
 # A size that is not a number by the time the checker sees it resolved to
@@ -196,7 +243,12 @@ EOF
 MUTATIONS=(
   'crates/types/src/lib.rs|if declared_len == items.len() {|if true {|stop comparing a declared size with the literal that fills it'
   'crates/types/src/registry.rs|if spelling == ShapeSpelling::Caret {|if false {|let a caret shape resolve as an array'
-  'crates/types/src/registry.rs|let [extent] = extents else {|let [extent, ..] = extents else {|let a multi dimensional array resolve as its first dimension'
+  # THE RANK, at each of the four places it can be wrong: the linearisation,
+  # the per-dimension bound, the checker's arity comparison, and the mangle.
+  'runtime/shims.c|offset = offset * a->extents[d] + index;|offset = offset * a->extents[0] + index;|linearise every dimension with the first extent'
+  'runtime/shims.c|if (index >= extent) {|if (index >= a->total) {|check every dimension against the TOTAL instead of its own extent'
+  'crates/types/src/lib.rs|if found == usize::from(rank) {|if true {|stop comparing the subscript count with the rank'
+  'crates/types/src/registry.rs|let Ok(rank) = u8::try_from(extents.len()) else {|let Ok(rank) = u8::try_from(1usize) else {|resolve every shape suffix as rank one'
   'crates/types/src/registry.rs|if !matches!(size, TypeRef::Static { .. }) {|if false {|let a size that resolved to nothing through'
   'crates/parser/src/lib.rs|let glued_bracket = self.at(&Kind::LBracket) && self.glued_left(self.pos);|let glued_bracket = self.at(&Kind::LBracket);|let a spaced bracket be an array size'
 )
@@ -252,6 +304,8 @@ PY
             rm -rf "$build"; mkdir -p "$build"
             passed=0; failed=0
             running >/dev/null 2>&1
+            multi
+            bounds
             one_type >/dev/null 2>&1
             refusals
             unresolved_size
@@ -288,6 +342,8 @@ case "${1:-}" in
         selftest
         preflight
         running
+        multi
+        bounds
         one_type
         refusals
         unresolved_size

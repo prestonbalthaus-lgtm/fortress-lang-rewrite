@@ -3335,13 +3335,23 @@ impl<'t, 'a> Parser<'t, 'a> {
             if self.at(&Kind::LBracket) && self.glued_left(self.pos) {
                 self.pos += 1;
                 self.skip_newlines();
-                let index = self.expr()?;
+                // A COMMA SEPARATED LIST, `arrays.tex`'s `a[i,j]`. Before this
+                // the second index was a parse error -- `expected `]`, found
+                // Comma` -- which named the delimiter rather than the feature
+                // and sent the reader to the wrong place.
+                let mut indices = vec![self.expr()?];
                 self.skip_newlines();
+                while self.at(&Kind::Comma) {
+                    self.pos += 1;
+                    self.skip_newlines();
+                    indices.push(self.expr()?);
+                    self.skip_newlines();
+                }
                 let close = self.expect(&Kind::RBracket, "`]`")?.span;
                 let span = Span::new(expr.span().start, close.end);
                 expr = Expr::Index {
                     base: Box::new(expr),
-                    index: Box::new(index),
+                    indices,
                     span,
                 };
                 continue;

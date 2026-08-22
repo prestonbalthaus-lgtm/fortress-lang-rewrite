@@ -210,7 +210,20 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # tools/oracle-accepted-must-fail.txt with that reason written out. So the list
 # is 38 and the slack is 38 + XXXequalityTesting.fss = 39, and the floor is
 # 346 - 39 = 307.
-OBJECT_FLOOR=307
+#
+# `pi` AS A DIMENSIONLESS CONSTANT: 347 objects, 64 apis. ONE file,
+# `Library/incomplete/basic/Fortress.SIUnits.fss`, and the floor rises with it
+# to 347 - 39 = 308.
+#
+# MULTI-DIMENSIONAL ARRAYS: 347 objects, 64 apis. ZERO, AND THE ZERO WAS
+# DECLARED BEFORE THE WORK STARTED. Every one of the ten corpus files that
+# first-block on a second dimension ALSO writes a `[3 4; 5 6]` matrix
+# aggregate, which is a separate unbuilt parser feature -- measured, not
+# assumed. The acceptance test here is that nothing was LOST and that the IR
+# BODY of all 411 modules that compiled before is byte for byte unchanged, with
+# the two unconditional runtime `declare` lines filtered; the gates are where
+# the feature is proved.
+OBJECT_FLOOR=308
 API_FLOOR=64
 
 passed=0

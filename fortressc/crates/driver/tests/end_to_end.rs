@@ -2724,15 +2724,76 @@ fn a_declared_extent_must_match_the_literal_that_fills_it() {
     );
 }
 
-/// `Type::Array` holds one `Elem`, so a second dimension is UNREPRESENTABLE
-/// rather than merely rejected -- which is why one refusal in `resolve` is
-/// enough. The wall behind it is not the type: 21 of the 32 corpus files that
-/// write a two-dimensional array also write a `[3 4; 5 6]` aggregate.
+/// RANK TWO AND THREE, END TO END: a non-square fill through a nest of loops,
+/// the compound form at rank three, and a rank-one array in the same program on
+/// the code path it always had.
+///
+/// NOTHING SQUARE, deliberately. A wrong stride in the linearisation collides
+/// two subscripts onto one slot, and a 3 by 3 hides that -- the mutation that
+/// multiplies by `extents[0]` instead of `extents[d]` prints `0 1 10 10 11 12`
+/// here and would print the right answer on a square one.
 #[test]
-fn a_multi_dimensional_array_type_is_refused_by_name() {
-    let message = refusal("badarraydims.fss");
+fn a_multi_dimensional_array_is_filled_and_read_back() {
+    let binary = compile_fixture("arraymulti.fss", "arraymulti");
+    let out = run(&binary);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "0\n1\n2\n10\n11\n12\n123\n7\n7\n"
+    );
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// EVERY DIMENSION IS CHECKED ON ITS OWN. `a[0,4]` on a 2 by 3 linearises to
+/// offset 4, which is inside the six slots the array holds -- so a check made
+/// after the linearisation lets it through and hands back `a[1,1]`. Measured,
+/// not argued: with the per-dimension check replaced by a total comparison this
+/// program prints `0` at exit 0.
+#[test]
+fn a_subscript_is_bounds_checked_in_each_dimension() {
+    let binary = compile_fixture("arrayoob.fss", "arrayoob");
+    let out = run(&binary);
+    assert_eq!(out.status.code(), Some(1));
     assert!(
-        message.contains("has 2 dimensions; an array in this subset is one dimensional"),
+        String::from_utf8_lossy(&out.stderr).contains("out of bounds in dimension 1"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// The rank is a fact about the TYPE and the subscript count is a fact about
+/// the SOURCE, so only the checker can compare them. Both directions, because
+/// only one of them was ever a parse error.
+#[test]
+fn a_subscript_count_must_match_the_rank() {
+    let message = refusal("badsubscriptfew.fss");
+    assert!(
+        message.contains("a rank 2 array takes 2 subscript(s), found 1"),
+        "{message}"
+    );
+    let message = refusal("badsubscriptmany.fss");
+    assert!(
+        message.contains("a rank 1 array takes 1 subscript(s), found 2"),
+        "{message}"
+    );
+}
+
+/// `length` and iteration are rank-one operations and are refused BY NAME above
+/// it -- 1.0 gives `Array2` a per-dimension extent and no single `length`, so a
+/// total would be inventing a meaning and an extent would be picking a
+/// dimension. `array(6)` for a `ZZ32[2,3]` is the constructor's half of the
+/// same rule.
+#[test]
+fn a_rank_two_array_refuses_the_rank_one_operations() {
+    let message = refusal("badarrayrank.fss");
+    assert!(
+        message.contains("`length` of a rank 2 array is not in this subset"),
+        "{message}"
+    );
+    let message = refusal("badarraynewarity.fss");
+    assert!(
+        message.contains("`array` takes 2 argument(s), found 1"),
         "{message}"
     );
 }

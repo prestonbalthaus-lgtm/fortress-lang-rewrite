@@ -262,16 +262,30 @@ pub enum TypeError {
         name: String,
         kind: &'static str,
     },
-    /// `ZZ32[8,8]`. `Type::Array` holds ONE `Elem` and `Elem` is a separate
-    /// five-variant enum, so a second dimension is UNREPRESENTABLE rather than
-    /// merely rejected -- which is why one refusal in `Registry::resolve` is
-    /// enough, the same way one refusal there keeps `Type::Tuple`
-    /// unconstructable. The wall behind it is not the type: 21 of the 32
-    /// corpus files that write one also write a `[3 4; 5 6]` aggregate, which
-    /// is an unbuilt parser feature.
+    /// A rank this compiler cannot represent. `ZZ32[2,3]` resolves now --
+    /// `Type::Array` carries a rank -- so what is left here is a shape with NO
+    /// dimensions at all, and one with more than a `u8` can hold.
     ArrayDimensions {
         span: Span,
         dimensions: usize,
+    },
+    /// `a[i]` on a `ZZ32[2,3]`, or `a[i,j]` on a `ZZ32[5]`. The rank is a fact
+    /// about the TYPE and the count is a fact about the SOURCE, so only the
+    /// checker can compare them -- the parser reads a list of whatever length
+    /// was written.
+    SubscriptArity {
+        span: Span,
+        rank: u8,
+        found: usize,
+    },
+    /// Something a rank-one array can do and a higher one cannot yet. Named
+    /// with the rank and the operation rather than refused as "not an array",
+    /// which is what `length(a)` on a `ZZ32[2,3]` would otherwise say about a
+    /// value that plainly is one.
+    ArrayRankNotImplemented {
+        span: Span,
+        what: &'static str,
+        rank: u8,
     },
     /// `ZZ32[0#5]` and `ZZ32[1:5]`. `traits.tex:106-108` gives an extent three
     /// spellings and only the bare size resolves here, because a lower bound
@@ -729,6 +743,8 @@ impl TypeError {
             | Self::DimensionNameCollides { span, .. }
             | Self::DimensionIsNotAType { span, .. }
             | Self::ArrayDimensions { span, .. }
+            | Self::SubscriptArity { span, .. }
+            | Self::ArrayRankNotImplemented { span, .. }
             | Self::ExtentRangeNotImplemented { span, .. }
             | Self::ArraySizeMissing { span }
             | Self::ArraySizeNotStatic { span, .. }
@@ -1016,7 +1032,15 @@ impl core::fmt::Display for TypeError {
             ),
             Self::ArrayDimensions { dimensions, .. } => write!(
                 f,
-                "this array type has {dimensions} dimensions; an array in this subset is one dimensional"
+                "this array type has {dimensions} dimensions, which this compiler cannot represent"
+            ),
+            Self::SubscriptArity { rank, found, .. } => write!(
+                f,
+                "a rank {rank} array takes {rank} subscript(s), found {found}"
+            ),
+            Self::ArrayRankNotImplemented { what, rank, .. } => write!(
+                f,
+                "{what} of a rank {rank} array is not in this subset"
             ),
             Self::ExtentRangeNotImplemented { written, .. } => write!(
                 f,

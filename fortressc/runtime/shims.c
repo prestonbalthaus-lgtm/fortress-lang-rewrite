@@ -755,3 +755,118 @@ void *fortress_array_slot(void *array, long long index) {
     }
     return a->data + (size_t)index * (size_t)a->elem_bytes;
 }
+
+/*
+ * Arrays of rank two and above. A SEPARATE STRUCT AND A SEPARATE PAIR OF SHIMS,
+ * deliberately: rank one keeps the layout and the entry points above, byte for
+ * byte, so every module that compiled before this milestone lowers to the same
+ * IR it lowered to then. Generalising the rank-one signature would have moved
+ * all of it.
+ *
+ * ONE ALLOCATION, as before: the header, then `rank` extents, then the
+ * elements. `extents` is 8-aligned by the three fields above it and each entry
+ * is 8 bytes, so the element block behind it is 8-aligned too -- which is what
+ * every element type the language has needs.
+ *
+ * ROW MAJOR, and the linearisation is HERE and nowhere else, for the same
+ * reason the rank-one bounds check is: one place it can be wrong in.
+ */
+typedef struct {
+    long long rank;
+    long long elem_bytes;
+    long long total;
+    /* `rank` entries, then the elements. */
+    long long extents[];
+} FortressArrayN;
+
+static char *arrayn_data(FortressArrayN *a) {
+    return (char *)(void *)(a->extents + a->rank);
+}
+
+/* THREE NUMBERS, not two, and that is the whole point of a separate reporter.
+ * `fortress_halt` prints a pair; a bound violation on rank two has to say WHICH
+ * dimension as well as the index and the extent, or `(4, 3)` leaves the reader
+ * to guess whether the row or the column was wrong. */
+static void fortress_halt_dim(const char *what, long long dim, long long a, long long b) {
+    fprintf(stderr, "fortress: %s in dimension %lld (%lld, %lld)\n", what, dim, a, b);
+    fortress_abnormal_exit();
+}
+
+void *fortress_array_alloc_n(long long rank, const long long *extents, long long elem_bytes,
+                             int holds_pointers) {
+    if (rank < 2) {
+        fortress_halt("array rank is below two", rank, elem_bytes);
+    }
+    long long total = 1;
+    for (long long d = 0; d < rank; d++) {
+        long long extent = extents[d];
+        if (extent < 0) {
+            fortress_halt_dim("array extent is negative", d, extent, rank);
+        }
+        /* Checked BEFORE the multiply rather than after: the product is what
+         * would wrap, and a wrapped total is a short allocation that every
+         * later bounds check then agrees with. */
+        if (extent != 0 && total > LLONG_MAX / extent) {
+            fortress_halt_dim("array is too large to allocate", d, extent, total);
+        }
+        total *= extent;
+    }
+    if (elem_bytes <= 0) {
+        fortress_halt("array element size is not positive", elem_bytes, rank);
+    }
+    size_t header = sizeof(FortressArrayN) + (size_t)rank * sizeof(long long);
+    if ((unsigned long long)total > (SIZE_MAX - header) / (unsigned long long)elem_bytes) {
+        fortress_halt("array is too large to allocate", total, elem_bytes);
+    }
+
+    size_t bytes = (size_t)total * (size_t)elem_bytes;
+    FortressArrayN *a = fortress_alloc_scanned(header + bytes);
+    a->rank = rank;
+    a->elem_bytes = elem_bytes;
+    a->total = total;
+    for (long long d = 0; d < rank; d++) {
+        a->extents[d] = extents[d];
+    }
+
+    char *data = arrayn_data(a);
+    if (holds_pointers) {
+        static const char empty[] = "";
+        char **slots = (char **)(void *)data;
+        for (long long i = 0; i < total; i++) {
+            slots[i] = (char *)empty;
+        }
+    } else {
+        memset(data, 0, bytes);
+    }
+    return a;
+}
+
+/*
+ * EVERY DIMENSION IS CHECKED ON ITS OWN, and that is a correctness requirement
+ * rather than a nicety. Linearising first and checking the result against
+ * `total` accepts `a[0,4]` on a 3 by 3 array -- the linear offset is 4, which
+ * is inside 9 -- and hands back the address of `a[1,1]`. That is a silent wrong
+ * answer, which is the class this project hunts.
+ */
+void *fortress_array_slot_n(void *array, long long rank, const long long *indices) {
+    FortressArrayN *a = array;
+    if (rank != a->rank) {
+        fortress_halt("array subscript has the wrong rank", rank, a->rank);
+    }
+    long long offset = 0;
+    for (long long d = 0; d < rank; d++) {
+        long long index = indices[d];
+        long long extent = a->extents[d];
+        /* TWO STATEMENTS AND NOT ONE `||`, so that a mutation table can replace
+         * the upper bound on a line of its own: the gate splits its rows on
+         * `|`, and a row carrying `||` cannot be written at all. */
+        if (index < 0) {
+            fortress_halt_dim("array index out of bounds", d, index, extent);
+        }
+        if (index >= extent) {
+            fortress_halt_dim("array index out of bounds", d, index, extent);
+        }
+        offset = offset * a->extents[d] + index;
+    }
+    return arrayn_data(a) + (size_t)offset * (size_t)a->elem_bytes;
+}

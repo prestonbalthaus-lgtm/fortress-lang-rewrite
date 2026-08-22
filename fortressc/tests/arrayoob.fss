@@ -1,0 +1,13 @@
+component arrayoob
+export Executable
+
+(* `a[0,4]` ON A 2 BY 3. The linear offset is 4 and the array holds 6, so a
+   check made AFTER the linearisation lets it through and hands back the address
+   of `a[1,1]` -- a silent wrong answer. Every dimension is checked on its own,
+   and the halt names which one. *)
+run(): () = do
+    a: ZZ32[2,3] = array(2,3)
+    a[1,1] := 99
+    println(a[0,4])
+end
+end

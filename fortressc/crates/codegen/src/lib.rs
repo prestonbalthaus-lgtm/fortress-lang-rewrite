@@ -10,9 +10,9 @@ use std::path::Path;
 use fortress_types::{
     ArithOp, AssignTarget, CompareOp, DispatchFn, DispatchNode, Elem, Target, Type, TypedBlockItem,
     TypedCapture, TypedComponent, TypedExpr, TypedExprKind, TypedFn, TypedObject, TypedReduction,
-    TypedTypeCaseArm, ARRAY_ALLOC, ARRAY_LENGTH, ARRAY_SLOT, ASSERT_FAILED, ATOMIC_ENTER,
-    ATOMIC_LEAVE, CASE_FAILED, DISPATCH_FAILED, ENV_ALLOC, OBJECT_ALLOC, PARALLEL_FOR,
-    REDUCTION_ALLOC, REDUCTION_WORKERS,
+    TypedTypeCaseArm, ARRAY_ALLOC, ARRAY_ALLOC_N, ARRAY_LENGTH, ARRAY_SLOT, ARRAY_SLOT_N,
+    ASSERT_FAILED, ATOMIC_ENTER, ATOMIC_LEAVE, CASE_FAILED, DISPATCH_FAILED, ENV_ALLOC,
+    OBJECT_ALLOC, PARALLEL_FOR, REDUCTION_ALLOC, REDUCTION_WORKERS,
 };
 use inkwell::attributes::AttributeLoc;
 use inkwell::basic_block::BasicBlock;
@@ -209,7 +209,7 @@ impl<'ctx> Lowering<'ctx> {
             Type::ZZ64 => Some(self.context.i64_type().into()),
             Type::RR64 => Some(self.context.f64_type().into()),
             Type::Boolean => Some(self.context.bool_type().into()),
-            Type::String | Type::Array(_) | Type::Object(_) | Type::Trait(_) => Some(self.ptr()),
+            Type::String | Type::Array(..) | Type::Object(_) | Type::Trait(_) => Some(self.ptr()),
             Type::Void => None,
             // A TUPLE HAS NO REPRESENTATION IN THIS BACKEND, and `None` here
             // means "no storage" -- which is what `Void` means and is NOT what
@@ -365,6 +365,20 @@ impl<'ctx> Lowering<'ctx> {
         self.module.add_function(
             ARRAY_SLOT,
             ptr.fn_type(&[ptr.into(), i64t.into()], false),
+            Some(Linkage::External),
+        );
+        // Rank two and above. The extents and the indices cross as a POINTER to
+        // a buffer the caller owns rather than as a variadic call: a shim whose
+        // arity depends on a rank would need one declaration per rank, and the
+        // rank is already an argument.
+        self.module.add_function(
+            ARRAY_ALLOC_N,
+            ptr.fn_type(&[i64t.into(), ptr.into(), i64t.into(), i32t.into()], false),
+            Some(Linkage::External),
+        );
+        self.module.add_function(
+            ARRAY_SLOT_N,
+            ptr.fn_type(&[ptr.into(), i64t.into(), ptr.into()], false),
             Some(Linkage::External),
         );
 
@@ -936,8 +950,12 @@ impl<'ctx> Lowering<'ctx> {
             } => self.if_expr(cond, then_branch, else_branch.as_deref(), e.ty),
             TypedExprKind::Block { items, tail } => self.block(items, tail.as_deref()),
             TypedExprKind::ArrayLit { elem, items } => self.array_literal(*elem, items).map(Some),
-            TypedExprKind::Index { base, index, elem } => {
-                let slot = self.slot(base, index)?;
+            TypedExprKind::Index {
+                base,
+                indices,
+                elem,
+            } => {
+                let slot = self.slot(base, indices)?;
                 self.load_element(*elem, slot).map(Some)
             }
             TypedExprKind::While { cond, body } => self.while_loop(cond, body).map(|()| None),
@@ -1618,6 +1636,70 @@ impl<'ctx> Lowering<'ctx> {
         .ok_or_else(|| CodegenError::internal("the allocator returned nothing".to_owned()))
     }
 
+    /// One `i64` buffer in the ENTRY BLOCK, filled here. A buffer allocated
+    /// where the subscript appears would be one stack slot per iteration of any
+    /// loop around it, which is the silent stack overflow `entry_alloca` exists
+    /// to stop.
+    ///
+    /// A STRUCT OF `n` `i64`s AND NOT `[n x i64]`, and the reason is inkwell
+    /// rather than LLVM: `build_gep` is an `unsafe fn` and this crate denies
+    /// unsafe code, and `build_struct_gep` refuses an array pointee outright --
+    /// "GEP pointee is not a struct". The two layouts are the same bytes, so
+    /// the shim reads either one as `const long long *`.
+    fn i64_buffer(
+        &mut self,
+        name: &str,
+        values: &[BasicValueEnum<'ctx>],
+    ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+        let i64t = self.context.i64_type();
+        let fields: Vec<BasicTypeEnum<'ctx>> = vec![i64t.into(); values.len()];
+        let buffer = self.context.struct_type(&fields, false);
+        let slot = self.entry_alloca(name, buffer.into())?;
+        for (at, value) in values.iter().enumerate() {
+            let element = self
+                .builder
+                .build_struct_gep(
+                    buffer,
+                    slot,
+                    u32::try_from(at).unwrap_or(u32::MAX),
+                    &format!("{name}.{at}"),
+                )
+                .map_err(CodegenError::from_builder)?;
+            self.builder
+                .build_store(element, *value)
+                .map_err(CodegenError::from_builder)?;
+        }
+        Ok(slot.into())
+    }
+
+    /// `array(m, n)` and above. RANK ONE DOES NOT COME THROUGH HERE -- it keeps
+    /// `array_alloc` and the shim it always called, so every module that
+    /// compiled before this milestone lowers unchanged.
+    fn array_alloc_n(
+        &mut self,
+        elem: Elem,
+        counts: &[TypedExpr],
+    ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+        let mut extents = Vec::with_capacity(counts.len());
+        for count in counts {
+            extents.push(self.operand(count)?);
+        }
+        let buffer = self.i64_buffer("extents", &extents)?;
+        let i64t = self.context.i64_type();
+        let rank = i64t.const_int(counts.len() as u64, false);
+        let bytes = i64t.const_int(elem.bytes(), false);
+        let holds_pointers = self
+            .context
+            .i32_type()
+            .const_int(u64::from(elem.is_pointer()), false);
+        self.call_runtime(
+            ARRAY_ALLOC_N,
+            &[rank.into(), buffer, bytes.into(), holds_pointers.into()],
+            true,
+        )?
+        .ok_or_else(|| CodegenError::internal("the allocator returned nothing".to_owned()))
+    }
+
     fn array_literal(
         &mut self,
         elem: Elem,
@@ -1647,11 +1729,27 @@ impl<'ctx> Lowering<'ctx> {
     fn slot(
         &mut self,
         base: &TypedExpr,
-        index: &TypedExpr,
+        indices: &[TypedExpr],
     ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
         let array = self.operand(base)?;
-        let at = self.operand(index)?;
-        self.slot_of(array, at)
+        // THE BASE IS EVALUATED ONCE AND SO IS EVERY INDEX, which is what makes
+        // `a[i,j] += v` a single load and store through one address rather than
+        // two walks of the same subscript expression.
+        if let [index] = indices {
+            let at = self.operand(index)?;
+            return self.slot_of(array, at);
+        }
+        let mut at = Vec::with_capacity(indices.len());
+        for index in indices {
+            at.push(self.operand(index)?);
+        }
+        let buffer = self.i64_buffer("subscript", &at)?;
+        let rank = self
+            .context
+            .i64_type()
+            .const_int(indices.len() as u64, false);
+        self.call_runtime(ARRAY_SLOT_N, &[array, rank.into(), buffer], true)?
+            .ok_or_else(|| CodegenError::internal("the slot shim returned nothing".to_owned()))
     }
 
     fn slot_of(
@@ -1847,10 +1945,11 @@ impl<'ctx> Lowering<'ctx> {
             }
             Target::CaseFailed => self.call_runtime(&target.symbol(), &[], false),
             Target::Mpi(op) => self.call_runtime(&target.symbol(), &[], op.returns() != Type::Void),
-            Target::ArrayNew { elem } => {
+            Target::ArrayNew { elem, rank: 1 } => {
                 let count = self.one(args)?;
                 self.array_alloc(*elem, count).map(Some)
             }
+            Target::ArrayNew { elem, .. } => self.array_alloc_n(*elem, args).map(Some),
             Target::ArrayLength => {
                 let array = self.one(args)?;
                 self.call_runtime(ARRAY_LENGTH, &[array], true)
@@ -2398,10 +2497,14 @@ impl<'ctx> Lowering<'ctx> {
                     .map_err(CodegenError::from_builder)?;
                 Ok(())
             }
-            AssignTarget::Element { base, index, elem } => {
-                // One `slot` call, so the base and the index are evaluated
+            AssignTarget::Element {
+                base,
+                indices,
+                elem,
+            } => {
+                // One `slot` call, so the base and every index are evaluated
                 // once for the read and the write alike.
-                let slot = self.slot(base, index)?;
+                let slot = self.slot(base, indices)?;
                 let stored = match op {
                     None => lowered,
                     Some(op) => {

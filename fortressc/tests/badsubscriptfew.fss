@@ -1,4 +1,4 @@
-component badarraydims
+component badsubscriptfew
 export Executable
 f(a: ZZ32[8,8]): ZZ32 = a[0]
 run() = ()
