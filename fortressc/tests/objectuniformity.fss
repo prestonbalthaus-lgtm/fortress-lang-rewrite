@@ -1,0 +1,8 @@
+component objectuniformity
+export Executable
+object Pair[\A, B\](a: A, b: B) end
+object Pair[\A\](a: A) end
+run(): () = do
+    println(1)
+end
+end

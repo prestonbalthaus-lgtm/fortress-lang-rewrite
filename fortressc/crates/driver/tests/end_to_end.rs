@@ -2396,6 +2396,34 @@ fn calling_a_filed_growing_member_names_the_mechanism() {
     );
 }
 
+/// A TRAIT OR OBJECT OVERLOAD SET WAS UNIFORMITY-CHECKED BY NOTHING.
+/// `check_uniformity` walked `Decl::Function` alone, so `trait Holder[\T\]`
+/// beside `trait Holder` compiled to EXIT 0 -- and expansion then met a set
+/// whose members disagree on how many static arguments they take, which is the
+/// one thing `expand_types` states it may assume.
+///
+/// Retroactive cost measured before landing, not asserted: 1956 corpus files
+/// swept, 397 compiling either way, 0 gained, 0 lost, 0 IR bodies changed. No
+/// corpus file writes such a set, which is why these two fixtures exist.
+#[test]
+fn a_trait_overload_set_is_uniformity_checked() {
+    for name in ["traituniformity.fss", "objectuniformity.fss"] {
+        let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+            .arg(fixture(name))
+            .arg("--emit-obj")
+            .arg("-o")
+            .arg("/dev/null")
+            .output()
+            .expect("could not run fortressc");
+        let message = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{name} must refuse:\n{message}");
+        assert!(
+            message.contains("differ in their static parameters"),
+            "{name} must refuse by name:\n{message}"
+        );
+    }
+}
+
 /// A GETTER WHOSE RETURN TYPE IS OMITTED RETURNED NOTHING, SILENTLY. Not a
 /// refusal and not a crash -- `getter label() = "1"` compiled, linked, ran and
 /// printed an empty line at exit 0, which is the worst class this project

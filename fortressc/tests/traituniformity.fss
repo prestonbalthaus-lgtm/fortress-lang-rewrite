@@ -1,0 +1,8 @@
+component traituniformity
+export Executable
+trait Holder[\T\] end
+trait Holder end
+run(): () = do
+    println(1)
+end
+end
