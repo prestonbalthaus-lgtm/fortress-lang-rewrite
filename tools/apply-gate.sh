@@ -267,8 +267,11 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # nothing. We do not know 1.0's specific ground for refusing it and are not
 # guessing at one. So the list is 38, the slack is 38 + XXXequalityTesting +
 # XXXOprMethod = 40, and the floor is 361 - 40 = 321.
+# DEV-15, 2026-08-22: `ProjectFortress/BirdyLib/Tuple.fsi` -- three bodiless
+# `first` declarations at three static arities. 66 apis check; the api floor has
+# no slack, so it rises with the count.
 OBJECT_FLOOR=321
-API_FLOOR=64
+API_FLOOR=66
 
 passed=0
 failed=0

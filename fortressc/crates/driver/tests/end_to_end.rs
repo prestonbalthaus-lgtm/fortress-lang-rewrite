@@ -3303,35 +3303,114 @@ fn a_generic_methods_arrow_may_name_its_owners_static_parameter() {
     );
 }
 
-/// AND THE EXEMPTION IS WHAT MOVED IT. Without this the test above passes
-/// whether the exemption is doing anything or not -- the file could have
-/// reached :1117 for some unrelated reason and nothing would say so.
+/// AND THE PATH EXEMPTION NO LONGER MOVES IT. This asserted the opposite until
+/// DEV-15 landed: forcing `--no-legacy-library-uniformity` used to restore the
+/// :758 refusal, and now it changes NOTHING, because `__cond[\E,R\]` and
+/// `__cond[\E\]` are both bodiless and the CONTENT rule pays for them.
+///
+/// THIS TEST IS THE EVIDENCE FOR RETIRING DEV-14, and it is the reason the
+/// retirement is a measurement rather than a preference. Swept over all 136
+/// files under `Library/` and `CompilerLibrary/`: the flag changes neither the
+/// exit status nor one byte of the diagnostic for any of them.
 #[test]
-fn the_bootstrap_root_still_violates_uniformity_without_the_exemption() {
+fn the_path_exemption_no_longer_moves_the_bootstrap_root() {
+    let run = |extra: &[&str]| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_fortressc"));
+        cmd.arg(corpus("Library/FortressLibrary.fsi"));
+        for a in extra {
+            cmd.arg(a);
+        }
+        let out = cmd
+            .arg("--emit-obj")
+            .arg("-o")
+            .arg("/dev/null")
+            .output()
+            .expect("could not run fortressc");
+        (
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+    let (with_code, with_message) = run(&[]);
+    let (without_code, without_message) = run(&["--no-legacy-library-uniformity"]);
+    assert_eq!(with_code, without_code, "{without_message}");
+    assert_eq!(with_message, without_message);
+    assert!(
+        !with_message.contains("differ in their static parameters"),
+        ":758 is paid by DEV-15 and no longer appears: {with_message}"
+    );
+}
+
+/// DEV-15, AUTHORIZED 2026-08-22. `copiedcond.fsi` is
+/// `FortressLibrary.fsi:757-758`'s shape copied verbatim into a file OUTSIDE
+/// `Library/`, and it is now ACCEPTED -- not because of where it sits but
+/// because both declarations are bodiless. This test asserted the opposite
+/// until the deviation landed, and it is kept rather than deleted because it is
+/// the one that says the relaxation is CONTENT-based: a path exemption alone
+/// would still refuse this file.
+#[test]
+fn a_bodiless_overload_set_may_differ_in_its_static_parameters() {
     let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
-        .arg(corpus("Library/FortressLibrary.fsi"))
+        .arg(fixture("copiedcond.fsi"))
         .arg("--no-legacy-library-uniformity")
         .arg("--emit-obj")
         .arg("-o")
         .arg("/dev/null")
         .output()
         .expect("could not run fortressc");
-    let message = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        message.contains("differ in their static parameters"),
-        "forcing the exemption off must restore the :758 refusal: {message}"
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "two bodiless `__cond` declarations are DEV-15's whole subject:\n{}",
+        String::from_utf8_lossy(&out.stderr)
     );
 }
 
-/// THE EXEMPTION IS EARNED BY BEING THE LEGACY LIBRARY, NEVER BY WHAT IS
-/// WRITTEN. `copiedcond.fsi` is `FortressLibrary.fsi:757-758`'s shape copied
-/// verbatim into a file outside `Library/`, and it stays refused. Without this
-/// fixture the exemption would be indistinguishable from having relaxed the
-/// rule for everyone -- which was measured and costs a must-fail acceptance,
-/// `ProjectFortress/compiler_tests/Compiled6.ak.fss`.
+/// AND THE OTHER SIDE OF IT, which is what keeps DEV-15 from being "the rule is
+/// gone". A BODY is what takes the exemption away: `size(x: ZZ32): ZZ32 = 2`
+/// beside `size[\T\](x: T): ZZ32` is refused, in an api, where the bodiless
+/// pair one line up is accepted. Without this the deviation would be
+/// indistinguishable from a blanket relaxation -- which was measured and costs
+/// a must-fail acceptance, `ProjectFortress/compiler_tests/Compiled6.ak.fss`.
 #[test]
-fn the_uniformity_exemption_does_not_reach_outside_the_legacy_library() {
-    let message = refusal("copiedcond.fsi");
+fn a_declaration_with_a_body_is_not_exempt_from_uniformity() {
+    let message = refusal("mixedoverload.fsi");
+    assert!(
+        message.contains("differ in their static parameters"),
+        "{message}"
+    );
+}
+
+/// AND A TRAIT IS NEVER A SIGNATURE. It writes no body because it cannot, not
+/// because it is a promise somebody else keeps -- and its name is written in
+/// TYPE position, which is demand expansion has to serve. `trait Holder[\T\]`
+/// beside `trait Holder` stays refused INSIDE AN API, where every function
+/// declaration around it is exempt.
+#[test]
+fn a_trait_in_an_api_is_not_exempt_from_uniformity() {
+    let message = refusal("bodilesstrait.fsi");
+    assert!(
+        message.contains("differ in their static parameters"),
+        "{message}"
+    );
+}
+
+/// THE MUST-FAIL THE BLANKET RELAXATION WOULD HAVE COST, asserted directly.
+/// `Compiled6.ak.fss` writes `f(x: ZZ32) = ()` beside `f[\T extends Any\](x:
+/// T) = ()` -- two BODIES -- and its `.test` expects two errors. It is the
+/// single file that separates DEV-15 from the general version, so it is named
+/// here rather than left to the oracle ratchet alone.
+#[test]
+fn dev15_does_not_accept_the_bodied_must_fail() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(corpus("ProjectFortress/compiler_tests/Compiled6.ak.fss"))
+        .arg("--emit-obj")
+        .arg("-o")
+        .arg("/dev/null")
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{message}");
     assert!(
         message.contains("differ in their static parameters"),
         "{message}"

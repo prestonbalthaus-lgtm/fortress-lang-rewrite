@@ -1460,12 +1460,61 @@ fn mangle_type(t: &TypeRef) -> String {
     }
 }
 
+/// The first declaration of a name, and whether it was a SIGNATURE. DEV-15
+/// needs the third field: the exemption is a property of the PAIR, not of the
+/// declaration in hand.
+struct FirstSeen<'a> {
+    params: &'a [StaticParam],
+    span: Span,
+    signature: bool,
+}
+
+/// A declaration that supplies NO IMPLEMENTATION -- a function with no body.
+///
+/// DEV-15 IS SCOPED TO EXACTLY THIS AND THE SCOPE IS THE ARGUMENT. A bodiless
+/// declaration generates no demand (there is no body to write a static argument
+/// in) and the import resolver never merges `Decl::Function` into an importer,
+/// so a relaxed set cannot reach `expand_types`, cannot reach a dispatch table
+/// and cannot reach codegen. The moment either half stops being true, this
+/// predicate is what has to be re-argued.
+///
+/// A TRAIT OR AN OBJECT IS NEVER A SIGNATURE HERE, and that is not an oversight.
+/// Its name is written in TYPE position, which is demand -- `Condition[\()\]`
+/// is exactly that -- so an api's `trait Holder[\T\]` beside `trait Holder`
+/// reaches expansion with members that disagree on static arity. A value is not
+/// one either: it takes no static parameters, so exempting it could only ever
+/// weaken the comparison against a generic function of the same name.
+fn is_signature_only(decl: &Decl) -> bool {
+    let Decl::Function(f) = decl else {
+        return NOTHING_ELSE_IS_A_SIGNATURE;
+    };
+    f.body.is_none()
+}
+
+/// Named so the mutation table has a bar-free line to invert: a row splits on
+/// `IFS='|'`, and a match arm listing the other three `Decl` variants cannot be
+/// one.
+const NOTHING_ELSE_IS_A_SIGNATURE: bool = false;
+
 /// Specification 1.0 `basic/overloading.tex:100-108`: two declarations of one
 /// functional name may not differ in their static parameters, nor may one have
 /// them and another not. Enforcing it is what makes an overload set uniformly
 /// generic or uniformly ground, which is what makes monomorphizing one produce a
 /// fresh disjoint set rather than adding a member to an existing one -- and
 /// therefore what makes the dispatch tables built after this pass correct.
+///
+/// DEV-15, AUTHORIZED 2026-08-22: THE RULE IS RELAXED FOR A PAIR OF BODILESS
+/// DECLARATIONS AND FOR NOTHING ELSE. `Library/FortressLibrary.fsi:757-758`
+/// declares `__cond[\E,R\]` beside `__cond[\E\]` and 1.0 calls that an
+/// error, so the SHIPPED library is not conformant with the SHIPPED
+/// specification; `BIG //`, `#` and `:` are three more pairs, and
+/// `CompilerLibrary/FortressLibrary.fsi:764-765` repeats the first. The
+/// deviation is content-based and earned by writing no body -- see
+/// [`is_signature_only`] for why that is the safe boundary and what has to be
+/// re-argued if it moves.
+///
+/// IT SUBSUMES THE PATH EXEMPTION FOR EVERY FILE THAT NEEDED ONE, measured:
+/// see `docs/superpowers/specs/2026-08-22-dev15-bodiless-uniformity.md`.
 fn check_uniformity(component: &Component) -> Result<(), TypeError> {
     // EVERY DECLARATION, NOT JUST `Decl::Function`. This walked functions
     // alone, so a trait or object overload set was uniformity-checked by
@@ -1479,7 +1528,7 @@ fn check_uniformity(component: &Component) -> Result<(), TypeError> {
     // over all 1956 corpus files, 397 compiling either way, 0 gained, 0 lost,
     // and 0 of the 397 emitted IR bodies changed by a single byte. No corpus
     // file writes such a set, which is exactly why fixtures carry this rule.
-    let mut seen: BTreeMap<&str, (&[StaticParam], Span)> = BTreeMap::new();
+    let mut seen: BTreeMap<&str, FirstSeen<'_>> = BTreeMap::new();
     for decl in &component.decls {
         let (f_name, params, f_span) = match decl {
             Decl::Function(f) => (&f.name, f.static_params.as_slice(), f.span),
@@ -1490,11 +1539,27 @@ fn check_uniformity(component: &Component) -> Result<(), TypeError> {
             // other ground declaration of that name.
             Decl::Value(v) => (&v.name, &[][..], v.span),
         };
+        let signature = is_signature_only(decl);
         match seen.get(f_name.as_str()) {
             None => {
-                seen.insert(f_name, (params, f_span));
+                seen.insert(
+                    f_name,
+                    FirstSeen {
+                        params,
+                        span: f_span,
+                        signature,
+                    },
+                );
             }
-            Some((first, first_span)) => {
+            Some(first) => {
+                // DEV-15, AND BOTH SIDES HAVE TO BE SIGNATURES. One bodiless
+                // declaration beside a bodied one is still refused: the bodied
+                // one can be CALLED, and a call is what needs an overload set
+                // whose members agree on how many static arguments they take.
+                let exempt = signature && first.signature;
+                if exempt {
+                    continue;
+                }
                 // KIND IS PART OF THE SHAPE, not just count and bound-count.
                 // An overload set mixing `f[\T\]` and `f[\nat n\]` has one
                 // parameter each with no bounds either side, so the length
@@ -1502,8 +1567,9 @@ fn check_uniformity(component: &Component) -> Result<(), TypeError> {
                 // type and the other a number at the same position. That is
                 // the GenFun6 coarseness class on a new axis, and it is the
                 // axis this milestone created.
-                let same = first.len() == params.len()
+                let same = first.params.len() == params.len()
                     && first
+                        .params
                         .iter()
                         .zip(params)
                         .all(|(a, b)| a.bounds.len() == b.bounds.len() && a.kind == b.kind);
@@ -1511,7 +1577,7 @@ fn check_uniformity(component: &Component) -> Result<(), TypeError> {
                     return Err(TypeError::OverloadSetStaticParamsDiffer {
                         span: f_span,
                         name: f_name.clone(),
-                        first: *first_span,
+                        first: first.span,
                     });
                 }
             }

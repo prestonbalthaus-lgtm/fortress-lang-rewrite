@@ -276,13 +276,17 @@ overload_set() {
     fi
 }
 
-# The legacy library's own source breaks the uniformity rule 1.0 states, so the
-# rule is suspended FOR THAT SOURCE and for nothing else. Both directions are
-# asserted here, because either alone passes with the scope wrong: the accept
-# alone passes if the exemption is universal, and the refusal alone passes if
-# the exemption does not exist.
+# DEV-15: the uniformity rule is relaxed for a pair of BODILESS declarations and
+# for nothing else. All four directions are asserted, because no one of them
+# pins the scope on its own -- the accept alone passes if the rule is gone, and
+# any single refusal passes if the relaxation was never written.
+#
+# THE SCOPE IS CONTENT AND NOT PATH, which is what the first two cases together
+# say: the same file is accepted whether or not it sits under a Library
+# directory, and a bodied declaration beside a bodiless one is refused in the
+# same api where the bodiless pair is fine.
 uniformity_exemption() {
-    printf '== the uniformity exemption is scoped to the legacy library ==\n'
+    printf '== DEV-15 is scoped to a pair of bodiless declarations ==\n'
     local fixture=$repo/fortressc/tests/copiedcond.fsi
     local outside=$build/copiedcond.fsi
     local inside=$build/Library/copiedcond.fsi
@@ -293,27 +297,36 @@ uniformity_exemption() {
     local err status
     err=$(timeout 300 "$fortressc" "$outside" --emit-obj -o /dev/null 2>&1 >/dev/null)
     status=$?
-    if refused_cleanly "$status" && [[ $err == *'differ in their static parameters'* ]]; then
-        ok 'the same declarations outside a Library directory are refused'
+    if [[ $status -eq 0 ]]; then
+        ok 'two bodiless `__cond` declarations are accepted outside Library'
     else
-        bad 'the same declarations outside a Library directory are refused' "status $status: $err"
+        bad 'two bodiless `__cond` declarations are accepted outside Library' "status $status: $err"
     fi
 
     err=$(timeout 300 "$fortressc" "$inside" --emit-obj -o /dev/null 2>&1 >/dev/null)
     status=$?
     if [[ $status -eq 0 ]]; then
-        ok 'inside a Library directory the rule is suspended'
+        ok 'and inside one, which is the same answer for the same reason'
     else
-        bad 'inside a Library directory the rule is suspended' "status $status: $err"
+        bad 'and inside one, which is the same answer for the same reason' "status $status: $err"
     fi
 
-    err=$(timeout 300 "$fortressc" "$inside" --no-legacy-library-uniformity \
-            --emit-obj -o /dev/null 2>&1 >/dev/null)
+    local bodied=$repo/fortressc/tests/mixedoverload.fsi
+    err=$(timeout 300 "$fortressc" "$bodied" --emit-obj -o /dev/null 2>&1 >/dev/null)
     status=$?
     if refused_cleanly "$status" && [[ $err == *'differ in their static parameters'* ]]; then
-        ok 'forcing the exemption off restores the refusal inside Library'
+        ok 'one BODY in the pair takes the exemption away, inside an api'
     else
-        bad 'forcing the exemption off restores the refusal inside Library' "status $status: $err"
+        bad 'one BODY in the pair takes the exemption away, inside an api' "status $status: $err"
+    fi
+
+    local traits=$repo/fortressc/tests/bodilesstrait.fsi
+    err=$(timeout 300 "$fortressc" "$traits" --emit-obj -o /dev/null 2>&1 >/dev/null)
+    status=$?
+    if refused_cleanly "$status" && [[ $err == *'differ in their static parameters'* ]]; then
+        ok 'a TRAIT is never a signature, in an api or anywhere else'
+    else
+        bad 'a TRAIT is never a signature, in an api or anywhere else' "status $status: $err"
     fi
 }
 
@@ -347,6 +360,14 @@ MUTATIONS=(
   # COULD NOT BE APPLIED. Inverting the test is the one-token change that keeps
   # every binding used -- `if false` would leave `uniformity` unread.
   'crates/types/src/mono.rs|if uniformity == Uniformity::Enforced {|if uniformity != Uniformity::Enforced {|stop enforcing the uniformity rule'
+  # DEV-15, ALL THREE AXES. The relaxation is a property of the PAIR, of the
+  # BODY and of the DECLARATION KIND, and one row cannot reach more than one of
+  # them. Every target line here is bar-free on purpose; `NOTHING_ELSE_IS_A_
+  # SIGNATURE` exists only because the match arm it replaced was not.
+  'crates/types/src/mono.rs|let exempt = signature && first.signature;|let exempt = false;|remove the DEV-15 relaxation, so a bodiless pair is refused again'
+  'crates/types/src/mono.rs|let exempt = signature && first.signature;|let exempt = signature;|widen DEV-15 to a pair with a body on one side'
+  'crates/types/src/mono.rs|f.body.is_none()|f.body.is_some()|call a function with a BODY the signature and a bodiless one not'
+  'crates/types/src/mono.rs|const NOTHING_ELSE_IS_A_SIGNATURE: bool = false;|const NOTHING_ELSE_IS_A_SIGNATURE: bool = true;|make a trait or an object a signature too'
   # THE EXEMPTION MUST NOT REACH OUTSIDE THE LEGACY LIBRARY. Without this row
   # the exemption is guarded by nothing: `badoverload.fss` is refused whether
   # the scope is a path test or `true`, because it is not in a Library
