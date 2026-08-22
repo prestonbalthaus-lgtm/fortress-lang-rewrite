@@ -16,6 +16,7 @@ export Fortress.SIUnits
 (* SI base units *)
 
 dim Length  SI_unit meter meters m_
+unit decimeter decimeters dm_: Length = 1/10 meter
 dim Mass default kilogram; SI_unit gram grams g_: Mass
 unit kilogram kilograms kg_: Mass = 1000 gram
 dim Time  SI_unit second seconds s_
@@ -113,7 +114,7 @@ unit minute minutes min_: Time = 60 seconds
 unit hour hours h_: Time = 60 minutes
 unit day days d_: Time = 24 hours
 unit degreeOfAngle degrees: Angle  = (180/pi) radian
-unit minuteOfAngle minutesOfAngle: Angle = 1/60 degree
+unit minuteOfAngle minutesOfAngle: Angle = 1/60 degreeOfAngle
 unit secondOfAngle secondsOfAngle: Angle = 1/60 minuteOfAngle
 SI_unit metricTon metricTons tonne tonnes t_: Mass = 1000 kilograms
 SI_unit liter liters  L_: Volume = cubic decimeter
