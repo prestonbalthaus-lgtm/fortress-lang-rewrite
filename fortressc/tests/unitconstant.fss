@@ -1,0 +1,15 @@
+component unitconstant
+export Executable
+
+(* `Library/incomplete/basic/Fortress.SIUnits.fss:115` writes
+   `unit degreeOfAngle degrees: Angle = (180/pi) radian`. `pi` is a
+   dimensionless numeric CONSTANT declared in `Library/Constants.fss:15`, in a
+   different component, and every identifier in a unit's definition was
+   required to be a UNIT -- so the shipped library was refused for a name that
+   was never meant to be one. *)
+dim Angle = Unity SI_unit radian radians rad_
+unit degreeOfAngle degrees: Angle = (180/pi) radian
+unit halfDegree: Angle = 1/2 degreeOfAngle
+
+run() = println("units declared")
+end

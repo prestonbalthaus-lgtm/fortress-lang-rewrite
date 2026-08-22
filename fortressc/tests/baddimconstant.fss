@@ -1,0 +1,11 @@
+component baddimconstant
+export Executable
+
+(* A CONSTANT IS ALLOWED WHERE A NUMBER IS ALLOWED, AND A DIMENSION DERIVATION
+   IS NOT THAT PLACE. `dim X = pi` is not a dimension; the allowance is scoped
+   to a UNIT's definition and this is what asks. *)
+dim Length SI_unit meter meters m_
+dim Bogus = Length / pi
+
+run() = println("x")
+end

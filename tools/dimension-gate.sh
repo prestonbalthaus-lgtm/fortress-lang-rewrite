@@ -92,6 +92,42 @@ declaring() {
     fi
 }
 
+# `(180/pi) radian` IS WHAT THE SHIPPED LIBRARY WRITES, and until the resolver
+# admitted a dimensionless constant beside a number this rung refused
+# `Library/incomplete/basic/Fortress.SIUnits.fss` for it. The unit is DECLARED
+# and then USED by a second unit, so a fix that admitted the name without
+# registering the unit would fail the second line.
+constants() {
+    printf '== a dimensionless constant stands where a number stands ==\n'
+    if ! timeout 300 "$fortressc" "$repo/fortressc/tests/unitconstant.fss" \
+        -o "$build/unitconstant" >"$build/constants.log" 2>&1; then
+        bad 'unitconstant.fss compiles and links' "$(cat "$build/constants.log")"
+        return
+    fi
+    ok 'a unit defined with `(180/pi) radian` compiles, and one defined from it does too'
+
+    local out status
+    out=$("$build/unitconstant" 2>&1)
+    status=$?
+    if [[ $status -eq 0 && $out == 'units declared' ]]; then
+        ok 'it runs and exits 0'
+    else
+        bad 'it runs and exits 0' "status $status: $out"
+    fi
+
+    # THE FILE THE RUNG WAS REFUSING. Named rather than left to the corpus
+    # metric, because a floor moving by one is not a reason a reader can see.
+    if timeout 300 "$fortressc" \
+        "$repo/Library/incomplete/basic/Fortress.SIUnits.fss" \
+        --emit-obj -o /dev/null >/dev/null 2>&1; then
+        ok 'the shipped SI library compiles'
+    else
+        bad 'the shipped SI library compiles' \
+            "$("$fortressc" "$repo/Library/incomplete/basic/Fortress.SIUnits.fss" \
+               --emit-obj -o /dev/null 2>&1 | head -1)"
+    fi
+}
+
 # A DIMENSION IS ERASED, AND THE PROOF IS THAT IT WAS NEVER THERE. Rung one
 # admits no dimensioned value at all, so a component that declares dimensions
 # must emit exactly what the same component without them emits.
@@ -139,7 +175,9 @@ refusals() {
         "baddimdup|is declared twice|a dimension is declared once" \
         "baddimcollide|separate namespaces|a name is a dimension or a type, never both" \
         "baddiminstance|instantiating one is not implemented|a unit static parameter cannot be instantiated" \
-        "badunitop|reserved word \`in\`|a unit operator is not an identifier"; do
+        "badunitop|reserved word \`in\`|a unit operator is not an identifier" \
+        "badunitconstant|\`tau\` is not a declared unit|a name that is neither a unit nor a listed constant is refused" \
+        "baddimconstant|\`pi\` is not a declared dimension|a constant is refused in a DIMENSION derivation"; do
         IFS='|' read -r name pattern label <<<"$entry"
         err=$(timeout 300 "$fortressc" "$repo/fortressc/tests/$name.fss" --emit-obj -o /dev/null 2>&1 >/dev/null)
         status=$?
@@ -180,7 +218,13 @@ EOF
 # --------------------------------------------------------------- mutations
 
 MUTATIONS=(
-  'crates/types/src/dimensions.rs|            resolve_names(derivation, &known.dims, "dimension")?;|            let _ = derivation;|stop resolving the names in a dimension derivation'
+  'crates/types/src/dimensions.rs|            resolve_names(derivation, &known.dims, "dimension", &[])?;|            let _ = derivation;|stop resolving the names in a dimension derivation'
+  # A CONSTANT IS ALLOWED WHERE A NUMBER IS, AND ONLY IN A UNIT DEFINITION. Two
+  # rows because the allowance has two ways to be wrong: not consulted at all,
+  # which puts the shipped SI library back on `pi`, and consulted for a
+  # DIMENSION's derivation too, which would make `dim X = pi` a dimension.
+  'crates/types/src/dimensions.rs|const DIMENSIONLESS_CONSTANTS: [&str; 1] = ["pi"];|const DIMENSIONLESS_CONSTANTS: [&str; 1] = ["__none"];|stop admitting a dimensionless constant in a unit definition'
+  'crates/types/src/dimensions.rs|            resolve_names(derivation, &known.dims, "dimension", &[])?;|            resolve_names(derivation, &known.dims, "dimension", &DIMENSIONLESS_CONSTANTS)?;|admit a constant in a dimension derivation as well'
   'crates/types/src/registry.rs|if let Some(kind) = self.dimensions.describes(other) {|if let Some(kind) = None::<&str> {|let a dimension name reach the unknown-type diagnostic'
   'crates/types/src/dimensions.rs|if seen.insert(name, span).is_some() {|if false {|stop refusing a dimension declared twice'
   'crates/types/src/dimensions.rs|if declared.contains_key(dim.name.as_str()) {|if false {|let a dimension and a type share one name'
@@ -237,6 +281,7 @@ PY
             rm -rf "$build"; mkdir -p "$build"
             passed=0; failed=0
             declaring >/dev/null 2>&1
+            constants >/dev/null 2>&1
             erasure >/dev/null 2>&1
             refusals
             operators >/dev/null 2>&1
@@ -272,6 +317,7 @@ case "${1:-}" in
         selftest
         preflight
         declaring
+        constants
         erasure
         refusals
         operators

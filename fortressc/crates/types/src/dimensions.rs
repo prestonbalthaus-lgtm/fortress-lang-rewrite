@@ -42,6 +42,31 @@ const SI_PREFIXES: [&str; 20] = [
 /// `dimensions.tex:36-37` gives the dimensionless one two spellings.
 pub(crate) const UNITY: [&str; 2] = ["Unity", "dimensionless"];
 
+/// Dimensionless numeric CONSTANTS that may stand where a number may stand.
+///
+/// `Fortress.SIUnits.fss:115` writes
+/// `unit degreeOfAngle degrees: Angle = (180/pi) radian`, and every identifier
+/// in a unit's definition was required to be a unit -- so the file was refused
+/// for a name that is not a unit and was never meant to be one. `pi` is
+/// declared in `Library/Constants.fss:15` as `pi : FloatLiteral =
+/// 3.141592653589793`, in a DIFFERENT COMPONENT.
+///
+/// LISTED RATHER THAN LOOKED UP, and the phase order is why: unit checking sees
+/// one component and nothing imports a value's name across components yet. The
+/// list is replaced by a lookup on the day one does.
+///
+/// A CONSTANT IS ALLOWED EXACTLY WHERE A NUMBER IS ALLOWED, which is a UNIT's
+/// definition and NOT a DIMENSION's derivation -- `dim X = pi` is not a
+/// dimension and stays refused by name. THE CHECK IS NO WEAKER THAN IT WAS:
+/// `unit foo: Length = 60` already passed, because a `Number` is not a `Name`,
+/// so this admits the spelled form of something the grammar already admitted.
+///
+/// ONE NAME, MEASURED. Two corpus sites write a constant in unit position and
+/// both write `pi`: SIUnits:115 and `Fortress.Potrzebie.fss:118`
+/// (`1/100 (2 pi radian)`), and Potrzebie first-blocks in its import list
+/// forty lines earlier. `e` is not in `Library/Constants.fss` at all.
+const DIMENSIONLESS_CONSTANTS: [&str; 1] = ["pi"];
+
 /// Every dimension and unit name the component declares. Built once and read
 /// by `Registry::resolve`, which is what turns `x: Length` from
 /// `unknown type` -- a diagnostic sending the reader to look for a declaration
@@ -106,7 +131,7 @@ pub fn check(component: &Component) -> Result<(), TypeError> {
             });
         }
         if let Some(derivation) = &dim.derivation {
-            resolve_names(derivation, &known.dims, "dimension")?;
+            resolve_names(derivation, &known.dims, "dimension", &[])?;
         }
         if let Some(unit) = &dim.default_unit {
             if !known.units.contains(unit) {
@@ -140,7 +165,7 @@ pub fn check(component: &Component) -> Result<(), TypeError> {
         // name must be in is decided HERE, by the position it was written in,
         // and nowhere else.
         if let Some(definition) = &unit.definition {
-            resolve_names(definition, &known.units, "unit")?;
+            resolve_names(definition, &known.units, "unit", &DIMENSIONLESS_CONSTANTS)?;
         }
     }
     Ok(())
@@ -166,11 +191,15 @@ fn resolve_names(
     expr: &DimExpr,
     known: &BTreeSet<String>,
     wanted: &'static str,
+    constants: &[&str],
 ) -> Result<(), TypeError> {
     let mut names = Vec::new();
     expr.names(&mut names);
     for (name, span) in names {
-        if known.contains(&name) || UNITY.contains(&name.as_str()) {
+        if known.contains(&name)
+            || UNITY.contains(&name.as_str())
+            || constants.contains(&name.as_str())
+        {
             continue;
         }
         return Err(unknown(span, name, wanted, known));

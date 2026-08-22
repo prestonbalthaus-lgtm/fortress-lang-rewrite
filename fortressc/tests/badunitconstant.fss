@@ -1,0 +1,11 @@
+component badunitconstant
+export Executable
+
+(* The allowance is a LIST of dimensionless constants, not a hole. A name that
+   is neither a unit nor one of them is still refused, and by the diagnostic
+   that names the mechanism. *)
+dim Angle = Unity SI_unit radian radians rad_
+unit degreeOfAngle degrees: Angle = (180/tau) radian
+
+run() = println("x")
+end
