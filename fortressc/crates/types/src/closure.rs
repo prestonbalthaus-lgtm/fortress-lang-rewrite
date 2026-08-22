@@ -302,6 +302,13 @@ impl Pass {
     /// case.
     fn rewrite_type(&mut self, t: &mut TypeRef) -> Result<(), TypeError> {
         match t {
+            // The ELEMENT of a shape may be an arrow -- `(A -> B)[5]` -- and it
+            // is lifted like any other. The extents are static arguments and
+            // hold no arrow.
+            TypeRef::Shaped { base, .. } => {
+                self.rewrite_type(base)?;
+                return Ok(());
+            }
             TypeRef::Arrow { from, to, span } => {
                 self.rewrite_type(from)?;
                 self.rewrite_type(to)?;
@@ -379,6 +386,7 @@ impl Pass {
                 self.undeclared_in(from).or_else(|| self.undeclared_in(to))
             }
             TypeRef::Tuple { elems, .. } => elems.iter().find_map(|e| self.undeclared_in(e)),
+            TypeRef::Shaped { base, .. } => self.undeclared_in(base),
             // A static VALUE names no type, so there is no type name in it to
             // be undeclared. Whether the names INSIDE it resolve to value
             // parameters is expansion's question and it answers it by name.
@@ -981,8 +989,14 @@ impl Pass {
                     && args.iter().all(|a| self.liftable(a))
             }
             TypeRef::Arrow { from, to, .. } => self.liftable_domain(from) && self.liftable(to),
-            // A static value is not a type and there is nothing to lift.
-            TypeRef::Tuple { .. } | TypeRef::Unit { .. } | TypeRef::Static { .. } => false,
+            // A static value is not a type and there is nothing to lift. A
+            // shaped type is not an arrow either -- and it must answer false
+            // rather than recursing into its element, or `(A -> B)[5]` would
+            // be lifted to the minted trait and lose its shape.
+            TypeRef::Tuple { .. }
+            | TypeRef::Unit { .. }
+            | TypeRef::Static { .. }
+            | TypeRef::Shaped { .. } => false,
         }
     }
 

@@ -236,6 +236,84 @@ pub enum TypeRef {
     /// callee's declared kinds. That is what keeps demand SYNTACTIC and lets
     /// expansion keep running before `Checker::new`.
     Static { expr: StaticExpr, span: Span },
+    /// A SHAPE SUFFIX: `ZZ32[5]`, `ZZ32[8,8]`, `RR64^3`, `ZZ32^(2 BY 4)`.
+    ///
+    /// `Specification/basic/traits.tex:97-101` makes the bracket and the caret
+    /// ALTERNATIVES OF ONE PRODUCTION, so they are one variant here. Splitting
+    /// them would let a program stack one on the other, which 1.0 forbids at
+    /// three separate sites (`NodeUtil.isExponentiation`).
+    ///
+    /// ONE NODE AT PARSE TIME, CLASSIFIED AT RESOLVE TIME, which is the rule
+    /// the reference implementation itself uses: `Type.rats:276-317` builds one
+    /// node for `^ IntExpr` and `TypeResolver` decides afterwards whether it is
+    /// a matrix shape or a dimension exponent, by the POSITION it was written
+    /// in. Keeping the spelling rather than the meaning is what lets sub-phase
+    /// 4d reach the same node without a second parser hole.
+    Shaped {
+        base: Box<TypeRef>,
+        spelling: ShapeSpelling,
+        extents: Vec<ExtentRange>,
+        span: Span,
+    },
+}
+
+/// Which of the two spellings of a shape suffix was written. The MEANING is
+/// not decided here -- see `TypeRef::Shaped`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShapeSpelling {
+    /// `T[ ... ]`, `traits.tex:98`.
+    Bracket,
+    /// `T^n` and `T^( ... )`, `traits.tex:99-101`.
+    Caret,
+}
+
+/// `traits.tex:106-108`. One dimension's extent, in one of three spellings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtentRange {
+    /// The lower bound. `0#5` and `1:5` write one; a bare `5` does not, and
+    /// its lower bound is zero by `ArrayType`'s own default.
+    pub lower: Option<TypeRef>,
+    /// The SIZE for a bare extent and for the `#` form; the upper bound for
+    /// the `:` form. Which one it is is `form`'s to say, and `#` and `:` are
+    /// refused by name today, so only the bare reading is ever acted on.
+    pub upper: Option<TypeRef>,
+    pub form: ExtentForm,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtentForm {
+    /// `5`, `n`, `2 n` -- a size and nothing else.
+    Size,
+    /// `0#5` -- a base and a size.
+    Hash,
+    /// `1:5` -- a base and an inclusive bound.
+    Colon,
+}
+
+impl ExtentRange {
+    /// The size, when the range writes one plainly. `#` and `:` are excluded
+    /// on purpose rather than arithmetic being invented for them: both are
+    /// refused by name, and a helper that quietly answered for them would be
+    /// the place the refusal got forgotten.
+    #[must_use]
+    pub const fn plain_size(&self) -> Option<&TypeRef> {
+        match (self.form, &self.upper) {
+            (ExtentForm::Size, Some(size)) => Some(size),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn written(&self) -> String {
+        let lower = self.lower.as_ref().map_or(String::new(), TypeRef::written);
+        let upper = self.upper.as_ref().map_or(String::new(), TypeRef::written);
+        match self.form {
+            ExtentForm::Size => upper,
+            ExtentForm::Hash => format!("{lower}#{upper}"),
+            ExtentForm::Colon => format!("{lower}:{upper}"),
+        }
+    }
 }
 
 impl TypeRef {
@@ -246,7 +324,8 @@ impl TypeRef {
             | Self::Unit { span }
             | Self::Tuple { span, .. }
             | Self::Arrow { span, .. }
-            | Self::Static { span, .. } => *span,
+            | Self::Static { span, .. }
+            | Self::Shaped { span, .. } => *span,
         }
     }
 
@@ -266,6 +345,22 @@ impl TypeRef {
             }
             Self::Arrow { from, to, .. } => format!("{} -> {}", from.written(), to.written()),
             Self::Static { expr, .. } => expr.written(),
+            Self::Shaped {
+                base,
+                spelling,
+                extents,
+                ..
+            } => {
+                let inner: Vec<String> = extents.iter().map(ExtentRange::written).collect();
+                let inner = inner.join(", ");
+                match spelling {
+                    ShapeSpelling::Bracket => format!("{}[{inner}]", base.written()),
+                    ShapeSpelling::Caret if extents.len() == 1 => {
+                        format!("{}^{inner}", base.written())
+                    }
+                    ShapeSpelling::Caret => format!("{}^({inner})", base.written()),
+                }
+            }
         }
     }
 }

@@ -18,7 +18,7 @@
 //! `f(x: ZZ32)` in the component match, and nothing here pretends to know that
 //! `f(x: List)` and `f(x: PureList.List)` might.
 
-use fortress_ast::{Component, Decl, Modifiers, Param, TypeRef};
+use fortress_ast::{Component, Decl, ExtentRange, Modifiers, Param, TypeRef};
 
 /// One way a component fails its api.
 pub struct Violation {
@@ -56,8 +56,42 @@ fn same_type(a: &TypeRef, b: &TypeRef) -> bool {
                 from: bf, to: bt, ..
             },
         ) => same_type(af, bf) && same_type(at, bt),
+        (
+            TypeRef::Shaped {
+                base: ab,
+                spelling: asp,
+                extents: ax,
+                ..
+            },
+            TypeRef::Shaped {
+                base: bb,
+                spelling: bsp,
+                extents: bx,
+                ..
+            },
+        ) => {
+            asp == bsp
+                && same_type(ab, bb)
+                && ax.len() == bx.len()
+                && ax.iter().zip(bx).all(|(x, y)| same_extent(x, y))
+        }
         _ => false,
     }
+}
+
+/// An extent's own spans differ between two files for the same reason a type's
+/// do, so this is `same_type`'s counterpart one level down.
+fn same_extent(a: &ExtentRange, b: &ExtentRange) -> bool {
+    fn same_side(a: Option<&TypeRef>, b: Option<&TypeRef>) -> bool {
+        match (a, b) {
+            (None, None) => true,
+            (Some(x), Some(y)) => same_type(x, y),
+            _ => false,
+        }
+    }
+    a.form == b.form
+        && same_side(a.lower.as_ref(), b.lower.as_ref())
+        && same_side(a.upper.as_ref(), b.upper.as_ref())
 }
 
 /// The varargs flag is part of the shape: `run()` and `run(args: String...)`

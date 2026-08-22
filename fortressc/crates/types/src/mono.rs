@@ -16,9 +16,9 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use fortress_ast::{
-    Assign, BlockItem, BoundObligation, CaseArm, Component, Decl, Expr, FieldDecl, FnDecl, Member,
-    MethodDecl, ObjectDecl, Param, Span, StaticExpr, StaticOp, StaticParam, TraitDecl, TypeCaseArm,
-    TypeRef,
+    Assign, BlockItem, BoundObligation, CaseArm, Component, Decl, Expr, ExtentRange, FieldDecl,
+    FnDecl, Member, MethodDecl, ObjectDecl, Param, Span, StaticExpr, StaticOp, StaticParam,
+    TraitDecl, TypeCaseArm, TypeRef,
 };
 
 use crate::error::TypeError;
@@ -491,6 +491,39 @@ impl<'a> Expander<'a> {
         let (name, args, span) = match t {
             TypeRef::Named { name, args, span } => (name, args, *span),
             TypeRef::Unit { .. } => return Ok(t.clone()),
+            // A shape substitutes structurally, ELEMENT AND EXTENTS BOTH. The
+            // extents are where `ZZ32[n]` inside `f[\nat n\]` gets its number,
+            // and they are ordinary static arguments, so they go through this
+            // same function and are evaluated at the substitution like every
+            // other one.
+            TypeRef::Shaped {
+                base,
+                spelling,
+                extents,
+                span,
+            } => {
+                let mut substituted = Vec::with_capacity(extents.len());
+                for extent in extents {
+                    substituted.push(ExtentRange {
+                        lower: match &extent.lower {
+                            Some(l) => Some(self.ty(l, subst)?),
+                            None => None,
+                        },
+                        upper: match &extent.upper {
+                            Some(u) => Some(self.ty(u, subst)?),
+                            None => None,
+                        },
+                        form: extent.form,
+                        span: extent.span,
+                    });
+                }
+                return Ok(TypeRef::Shaped {
+                    base: Box::new(self.ty(base, subst)?),
+                    spelling: *spelling,
+                    extents: substituted,
+                    span: *span,
+                });
+            }
             // A STATIC VALUE IS EVALUATED HERE, at the substitution, and never
             // later. `[\ 2 + 3 \]` and `[\ 5 \]` must be ONE stamp against
             // MAX_INSTANTIATIONS, and they are only one if the value and not
@@ -1235,6 +1268,19 @@ fn mangle_type(t: &TypeRef) -> String {
     match t {
         TypeRef::Named { name, args, .. } => mangle_static(name, args),
         TypeRef::Unit { .. } => "$unit".to_owned(),
+        // TWO SPELLINGS OF ONE TYPE MANGLE DIFFERENTLY, and that is a stated
+        // cost rather than an oversight: `ZZ32[5]` and `Array[\ZZ32\]` resolve
+        // to the same `Type`, so writing both as static arguments to one
+        // generic stamps it twice. Two specialisations of one ground type is
+        // wasteful and never wrong -- the symbols differ, so nothing collides.
+        // Zero corpus files write either as a static argument.
+        TypeRef::Shaped { base, extents, .. } => {
+            let inner: Vec<String> = extents
+                .iter()
+                .map(|e| e.plain_size().map_or_else(|| "$r".to_owned(), mangle_type))
+                .collect();
+            format!("$arr{}{}", mangle_type(base), inner.concat())
+        }
         // The VALUE, not the expression it was written as. A negative is `n`
         // rather than `-`, because `-` is not legal in a symbol.
         TypeRef::Static { expr, .. } => match expr {
@@ -1366,6 +1412,10 @@ fn check_header_type(
             }
             Ok(())
         }
+        // The ELEMENT names a type and is checked; an extent is a static
+        // argument, and whether the names in one resolve is `eval_static`'s
+        // question at the substitution, exactly as for `TypeRef::Static`.
+        TypeRef::Shaped { base, .. } => check_header_type(base, known, params),
         // A static VALUE names no type. Whether the names inside it resolve to
         // value parameters is `eval_static`'s question, at the substitution,
         // where the kinds are known.

@@ -133,6 +133,9 @@ fn references(decl: &Decl, out: &mut Vec<String>) {
                 walk(from, out);
                 walk(to, out);
             }
+            // The ELEMENT names a type an import must bring; an extent is a
+            // static argument and names none.
+            TypeRef::Shaped { base, .. } => walk(base, out),
             TypeRef::Unit { .. } | TypeRef::Static { .. } => {}
         }
     }

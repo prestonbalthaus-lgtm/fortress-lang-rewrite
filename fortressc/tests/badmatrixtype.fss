@@ -1,0 +1,6 @@
+component badmatrixtype
+export Executable
+f(a: RR64^3): RR64 = 0.0
+g(b: ZZ32^(2 BY 4)): ZZ32 = 0
+run() = ()
+end

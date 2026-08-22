@@ -2359,6 +2359,88 @@ fn the_uniformity_exemption_does_not_reach_outside_the_legacy_library() {
     );
 }
 
+/// ARRAY TYPES. `traits.tex:97-108`, the one-dimensional bracket form.
+///
+/// `ZZ32[5]` IS `Array[\ZZ32\]` WITH A SIZE THE CHECKER CAN COMPARE, and the
+/// fixture asserts both halves at once: it runs, and it runs at a binding, at
+/// a parameter and behind a `nat` static parameter, because the extent has to
+/// survive monomorphization's substitution to reach the last one.
+#[test]
+fn an_array_type_runs_at_every_position() {
+    let binary = compile_fixture("arraytype.fss", "arraytype");
+    let out = run(&binary);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "4\n2.5\n9\n4\n5\n");
+    assert_eq!(out.status.code(), Some(0));
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// THE SIZE IS NOT DECORATION. `ProjectFortress/not_passing_yet/XXXwrongArrayDim.fss`
+/// is a must-FAIL filed from a user bug report and it is entirely about this
+/// shape. Without the check, `length(a)` answers 6 for a declared `ZZ32[5]`
+/// and `a[5]` passes the bounds check, because the runtime header is built
+/// from the literal's own length.
+#[test]
+fn a_declared_extent_must_match_the_literal_that_fills_it() {
+    let message = refusal("badarrayextent.fss");
+    assert!(
+        message.contains("declared with 5 element(s) and 6 are written"),
+        "{message}"
+    );
+}
+
+/// `Type::Array` holds one `Elem`, so a second dimension is UNREPRESENTABLE
+/// rather than merely rejected -- which is why one refusal in `resolve` is
+/// enough. The wall behind it is not the type: 21 of the 32 corpus files that
+/// write a two-dimensional array also write a `[3 4; 5 6]` aggregate.
+#[test]
+fn a_multi_dimensional_array_type_is_refused_by_name() {
+    let message = refusal("badarraydims.fss");
+    assert!(
+        message.contains("has 2 dimensions; an array in this subset is one dimensional"),
+        "{message}"
+    );
+}
+
+/// `traits.tex:106-108` gives an extent three spellings. Only the bare size
+/// resolves: a lower bound other than zero has nowhere to live, because
+/// `fortress_array_slot` indexes from zero and the header carries a length and
+/// no origin.
+#[test]
+fn an_extent_range_is_refused_by_name() {
+    let message = refusal("badextentrange.fss");
+    assert!(message.contains("is an extent range"), "{message}");
+    let message = refusal("badarraysize.fss");
+    assert!(message.contains("writes no size"), "{message}");
+}
+
+/// `RR^3` and `ZZ32^(2 BY 4)` are 1.0's VECTOR and MATRIX types. They are not
+/// `Array1` and do not share its trait, so resolving them to a one dimensional
+/// array would be a wrong answer rather than a partial one. All 18 corpus
+/// sites are shapes; not one is the dimension exponent that shares the
+/// spelling. `BY` reaches the parser as `OpWord`, not `Ident` -- the fixture
+/// would not even parse if the recogniser matched only the latter.
+#[test]
+fn a_vector_or_matrix_type_is_refused_by_name() {
+    let message = refusal("badmatrixtype.fss");
+    assert!(
+        message.contains("a vector or matrix type is not implemented"),
+        "{message}"
+    );
+}
+
+/// AT MOST ONE SHAPE SUFFIX. 1.0 forbids stacking at three separate sites and
+/// this compiler enforces it by returning after the first rather than looping,
+/// so the second is reported as whatever the caller expected next instead of
+/// being swallowed.
+#[test]
+fn a_shape_suffix_may_not_be_stacked() {
+    let message = refusal("badstackedshape.fss");
+    assert!(
+        message.contains("expected `)`, found LBracket"),
+        "{message}"
+    );
+}
+
 /// `subscripting.tex:53-54` -- a result type may appear "but it must be ()".
 /// WITHOUT THIS, Compiled5.az.fss became a new must-fail acceptance the moment
 /// the form parsed. The gate caught it; review did not.

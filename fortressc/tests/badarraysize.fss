@@ -1,0 +1,5 @@
+component badarraysize
+export Executable
+f(a: ZZ32[]): ZZ32 = a[0]
+run() = ()
+end

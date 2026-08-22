@@ -3,7 +3,8 @@
 #![allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 
 use fortress_ast::{
-    BinOp, BlockItem, Component, Decl, Expr, Fixity, ImportItems, ImportedName, TypeRef, UnOp,
+    BinOp, BlockItem, Component, Decl, Expr, ExtentForm, Fixity, ImportItems, ImportedName,
+    ShapeSpelling, TypeRef, UnOp,
 };
 use fortress_parser::{parse, ParseError};
 
@@ -20,6 +21,14 @@ fn expr(src: &str) -> Expr {
     match c.decls.into_iter().next() {
         Some(Decl::Function(f)) => f.body.expect("a body"),
         other => panic!("expected a function, got {other:?}"),
+    }
+}
+
+fn parse_error(src: &str) -> ParseError {
+    let tokens = fortress_lexer::lex(src).unwrap_or_else(|e| panic!("lex failed: {e}"));
+    match parse(&tokens) {
+        Ok(_) => panic!("expected {src:?} to fail to parse"),
+        Err(e) => e,
     }
 }
 
@@ -353,6 +362,93 @@ fn a_spaced_bracket_is_a_juxtaposition_not_a_subscript() {
     match expr("a [0]") {
         Expr::Juxt { items, .. } => assert_eq!(items.len(), 2),
         other => panic!("expected a juxtaposition, got {other:?}"),
+    }
+}
+
+/// A SHAPE SUFFIX MUST BE GLUED, the same rule a subscript already follows.
+/// The measured cost is zero -- all 62 corpus sites are glued -- and the
+/// alternative is that `x : ZZ32 [1,2,3]` silently changes what it means.
+#[test]
+fn a_spaced_bracket_after_a_type_is_not_an_array_size() {
+    let src = "component t\nf(a:ZZ32[3]):ZZ32 = 0\nend\n";
+    let c = component(src);
+    let Some(Decl::Function(f)) = c.decls.into_iter().next() else {
+        panic!("no decl")
+    };
+    let ty = &f.params.first().expect("a parameter").ty;
+    assert!(
+        matches!(
+            ty,
+            TypeRef::Shaped {
+                spelling: ShapeSpelling::Bracket,
+                ..
+            }
+        ),
+        "a glued bracket is an array size: {ty:?}"
+    );
+    // Spaced, the bracket is not a suffix at all, so the parameter list never
+    // closes and the error is the caller's.
+    let spaced = parse_error("component t\nf(a:ZZ32 [3]):ZZ32 = 0\nend\n");
+    assert!(
+        format!("{spaced}").contains("expected"),
+        "a spaced bracket must not be read as an array size: {spaced}"
+    );
+}
+
+/// `BY` IS THE ASCII CROSS AND IT ARRIVES AS `OpWord`. It is all caps with two
+/// distinct letters, so the operator-word rule takes it out of the identifier
+/// namespace -- the same trap that silently stopped the BIG reduction
+/// recogniser firing on `SUM`. A recogniser matching only `Ident` would leave
+/// this test failing to parse.
+#[test]
+fn the_matrix_shape_separator_is_a_word_operator() {
+    let src = "component t\nf(a:ZZ32^(2 BY 4)):ZZ32 = 0\nend\n";
+    let c = component(src);
+    let Some(Decl::Function(f)) = c.decls.into_iter().next() else {
+        panic!("no decl")
+    };
+    let ty = &f.params.first().expect("a parameter").ty;
+    let TypeRef::Shaped {
+        spelling: ShapeSpelling::Caret,
+        extents,
+        ..
+    } = ty
+    else {
+        panic!("expected a caret shape, got {ty:?}")
+    };
+    assert_eq!(extents.len(), 2);
+}
+
+/// `traits.tex:106-108`. All three extent spellings PARSE -- two of them are
+/// refused later, by name, in `Registry::resolve`. Refusing them in the parser
+/// would be the `comprises` mistake again: a parse refusal is swallowed by the
+/// resolver, and an api that loads today would vanish and take its names with
+/// it.
+#[test]
+fn all_three_extent_spellings_parse() {
+    for (src, form) in [
+        (
+            "component t\nf(a:ZZ32[5]):ZZ32 = 0\nend\n",
+            ExtentForm::Size,
+        ),
+        (
+            "component t\nf(a:ZZ32[0#5]):ZZ32 = 0\nend\n",
+            ExtentForm::Hash,
+        ),
+        (
+            "component t\nf(a:ZZ32[1:5]):ZZ32 = 0\nend\n",
+            ExtentForm::Colon,
+        ),
+    ] {
+        let c = component(src);
+        let Some(Decl::Function(f)) = c.decls.into_iter().next() else {
+            panic!("no decl")
+        };
+        let ty = &f.params.first().expect("a parameter").ty;
+        let TypeRef::Shaped { extents, .. } = ty else {
+            panic!("expected a shape, got {ty:?}")
+        };
+        assert_eq!(extents.first().expect("an extent").form, form, "{src}");
     }
 }
 

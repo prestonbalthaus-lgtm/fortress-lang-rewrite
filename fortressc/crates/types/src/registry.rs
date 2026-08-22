@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use fortress_ast::{Span, TypeRef};
+use fortress_ast::{ExtentForm, ExtentRange, ShapeSpelling, Span, TypeRef};
 
 use crate::error::TypeError;
 use crate::types::{Elem, Type, TypedField};
@@ -186,6 +186,17 @@ impl Registry {
                     form: "an arrow type",
                 })
             }
+            // THE SINGLE GATE for every shape suffix. `Type::Array` holds one
+            // `Elem`, so nothing below this line can construct a second
+            // dimension, a non-zero origin or a matrix -- which is what makes
+            // the invariant checkable by reading one function rather than by
+            // trusting every construction site.
+            TypeRef::Shaped {
+                base,
+                spelling,
+                extents,
+                span,
+            } => return self.resolve_shaped(base, *spelling, extents, *span),
         };
         if name == "Array" {
             let [argument] = args.as_slice() else {
@@ -216,7 +227,81 @@ impl Registry {
                 name: name.clone(),
             });
         }
-        match name.as_str() {
+        self.resolve_name(name, span)
+    }
+
+    /// `ZZ32[5]` is `Array[\ZZ32\]` with a size the checker can compare
+    /// against a literal, and nothing else in this subset resolves.
+    ///
+    /// THE SIZE IS VALIDATED HERE AND DROPPED HERE, and both halves are the
+    /// decision. Carrying it into `Type` was priced and refused: `Type` is
+    /// `Copy` and compared with `==` at `is_subtype`, at overload duplicate
+    /// detection and across M3c's whole dispatch domain, so an extent inside
+    /// it re-decides what type equality means -- and `array(n)` takes a
+    /// RUN-TIME count, which has no extent to supply at all. What survives is
+    /// a declaration-site check (`Checker::check_declared_extent`) and a
+    /// NAMED DEVIATION with two stated holes: a mismatch arriving through a
+    /// call is not caught, and a parameter's declared extent is not checked
+    /// against its argument.
+    fn resolve_shaped(
+        &self,
+        base: &TypeRef,
+        spelling: ShapeSpelling,
+        extents: &[ExtentRange],
+        span: Span,
+    ) -> Result<Type, TypeError> {
+        // `traits.tex:99-101`. `RR^3` and `ZZ32^(2 BY 4)` are 1.0's VECTOR and
+        // MATRIX types, which are not `Array1` and do not share its trait, so
+        // resolving them to a one dimensional array would be a wrong answer
+        // rather than a partial one. All 18 corpus sites are shapes; not one
+        // is the dimension exponent that shares the spelling.
+        if spelling == ShapeSpelling::Caret {
+            return Err(TypeError::TypeNotImplemented {
+                span,
+                form: "a vector or matrix type",
+            });
+        }
+        let [extent] = extents else {
+            return Err(TypeError::ArrayDimensions {
+                span,
+                dimensions: extents.len(),
+            });
+        };
+        let Some(size) = extent.plain_size() else {
+            if extent.form == ExtentForm::Size {
+                return Err(TypeError::ArraySizeMissing { span });
+            }
+            return Err(TypeError::ExtentRangeNotImplemented {
+                span: extent.span,
+                written: extent.written(),
+            });
+        };
+        // A name here survived `mono`'s substitution, which means it resolved
+        // to nothing. Saying so beats `unknown type `n``, which sends the
+        // reader looking for a declaration that was never meant to exist.
+        if !matches!(size, TypeRef::Static { .. }) {
+            return Err(TypeError::ArraySizeNotStatic {
+                span: size.span(),
+                written: size.written(),
+            });
+        }
+        let inner = self.resolve(base)?;
+        if inner == Type::Void {
+            return Err(TypeError::VoidNotStorable {
+                span: base.span(),
+                position: "an array element",
+            });
+        }
+        Elem::of(inner)
+            .map(Type::Array)
+            .ok_or_else(|| TypeError::UnsupportedElementType {
+                span: base.span(),
+                name: inner.name().to_owned(),
+            })
+    }
+
+    fn resolve_name(&self, name: &str, span: Span) -> Result<Type, TypeError> {
+        match name {
             "ZZ32" => Ok(Type::ZZ32),
             "ZZ64" => Ok(Type::ZZ64),
             "RR64" => Ok(Type::RR64),
@@ -231,7 +316,7 @@ impl Registry {
                 }
                 Err(TypeError::UnknownType {
                     span,
-                    name: name.clone(),
+                    name: name.to_owned(),
                 })
             }
         }

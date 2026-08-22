@@ -208,6 +208,46 @@ pub enum TypeError {
         span: Span,
         name: String,
     },
+    /// `ZZ32[8,8]`. `Type::Array` holds ONE `Elem` and `Elem` is a separate
+    /// five-variant enum, so a second dimension is UNREPRESENTABLE rather than
+    /// merely rejected -- which is why one refusal in `Registry::resolve` is
+    /// enough, the same way one refusal there keeps `Type::Tuple`
+    /// unconstructable. The wall behind it is not the type: 21 of the 32
+    /// corpus files that write one also write a `[3 4; 5 6]` aggregate, which
+    /// is an unbuilt parser feature.
+    ArrayDimensions {
+        span: Span,
+        dimensions: usize,
+    },
+    /// `ZZ32[0#5]` and `ZZ32[1:5]`. `traits.tex:106-108` gives an extent three
+    /// spellings and only the bare size resolves here, because a lower bound
+    /// other than zero has nowhere to live: `fortress_array_slot` indexes from
+    /// zero and the header carries a length and no origin.
+    ExtentRangeNotImplemented {
+        span: Span,
+        written: String,
+    },
+    /// `ZZ32[]`. `traits.tex:98` makes the size optional and nothing in this
+    /// compiler can act on its absence -- an array type with no size is
+    /// `Array[\T\]`, which is spelled that way.
+    ArraySizeMissing {
+        span: Span,
+    },
+    /// The size is not a number by the time the checker sees it. Every extent
+    /// goes through `mono`'s substitution, so a name that survives to here
+    /// resolved to nothing -- it is neither a value parameter in scope nor a
+    /// literal.
+    ArraySizeNotStatic {
+        span: Span,
+        written: String,
+    },
+    /// `a: ZZ32[5] = [1 2 3 4 5 6]`. The one place the declared extent and a
+    /// literal's length are both in hand. See `check_declared_extent`.
+    ArrayExtentMismatch {
+        span: Span,
+        declared: i64,
+        found: usize,
+    },
     AssignToImmutable {
         span: Span,
         name: String,
@@ -628,6 +668,11 @@ impl TypeError {
             | Self::NotAnArray { span, .. }
             | Self::ElementTypeUnknown { span }
             | Self::UnsupportedElementType { span, .. }
+            | Self::ArrayDimensions { span, .. }
+            | Self::ExtentRangeNotImplemented { span, .. }
+            | Self::ArraySizeMissing { span }
+            | Self::ArraySizeNotStatic { span, .. }
+            | Self::ArrayExtentMismatch { span, .. }
             | Self::AssignToImmutable { span, .. }
             | Self::AssignToUndeclared { span, .. }
             | Self::InvalidAssignTarget { span }
@@ -869,6 +914,28 @@ impl core::fmt::Display for TypeError {
             Self::ElementTypeUnknown { .. } => write!(
                 f,
                 "nothing here says what this array holds; annotate the binding, as in `a:Array[\\ZZ64\\] = ...`"
+            ),
+            Self::ArrayDimensions { dimensions, .. } => write!(
+                f,
+                "this array type has {dimensions} dimensions; an array in this subset is one dimensional"
+            ),
+            Self::ExtentRangeNotImplemented { written, .. } => write!(
+                f,
+                "`{written}` is an extent range; an array type in this subset writes its size and nothing else"
+            ),
+            Self::ArraySizeMissing { .. } => write!(
+                f,
+                "this array type writes no size; an array type with no size is written `Array[\\T\\]`"
+            ),
+            Self::ArraySizeNotStatic { written, .. } => write!(
+                f,
+                "`{written}` is not a number, so it cannot be an array size; a size is a literal or a value parameter in scope"
+            ),
+            Self::ArrayExtentMismatch {
+                declared, found, ..
+            } => write!(
+                f,
+                "this array is declared with {declared} element(s) and {found} are written"
             ),
             Self::UnsupportedElementType { name, .. } => write!(
                 f,

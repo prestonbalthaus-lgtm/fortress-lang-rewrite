@@ -15,9 +15,10 @@ mod error;
 pub use error::ParseError;
 
 use fortress_ast::{
-    Assign, BinOp, Binding, BlockItem, CaseArm, Component, Decl, Expr, FieldDecl, Fixity, FnDecl,
-    ImportDecl, ImportItems, ImportedName, Member, MethodDecl, Modifiers, ObjectDecl, Param, Span,
-    StaticExpr, StaticKind, StaticOp, StaticParam, TraitDecl, TypeCaseArm, TypeRef, UnOp,
+    Assign, BinOp, Binding, BlockItem, CaseArm, Component, Decl, Expr, ExtentForm, ExtentRange,
+    FieldDecl, Fixity, FnDecl, ImportDecl, ImportItems, ImportedName, Member, MethodDecl,
+    Modifiers, ObjectDecl, Param, ShapeSpelling, Span, StaticExpr, StaticKind, StaticOp,
+    StaticParam, TraitDecl, TypeCaseArm, TypeRef, UnOp,
 };
 use fortress_lexer::{Kind, Token};
 
@@ -60,6 +61,17 @@ fn widen(t: TypeRef, span: Span) -> TypeRef {
         // A static VALUE argument cannot be parenthesised into this function:
         // `widen` is only ever called on a parsed TYPE.
         TypeRef::Static { expr, .. } => TypeRef::Static { expr, span },
+        TypeRef::Shaped {
+            base,
+            spelling,
+            extents,
+            ..
+        } => TypeRef::Shaped {
+            base,
+            spelling,
+            extents,
+            span,
+        },
     }
 }
 
@@ -1858,7 +1870,180 @@ impl<'t, 'a> Parser<'t, 'a> {
         })
     }
 
+    /// A type atom plus at most one SHAPE SUFFIX. `traits.tex:97-101`.
+    ///
+    /// THE SUFFIX SITS HERE AND NOT IN `type_ref`, so `ZZ32[5] -> T` groups as
+    /// `(ZZ32[5]) -> T`: a size binds tighter than an arrow, which is the only
+    /// reading that makes sense of a function taking an array.
+    ///
+    /// `type_atom` HAS EXACTLY ONE CALLER, `type_ref`, which is why one hook
+    /// here reaches every type position in the language -- parameters, return
+    /// types, binding annotations, field types, `extends` clauses, static
+    /// arguments, `typecase` arms and lambda signatures alike.
     fn type_atom(&mut self) -> Parsed<TypeRef> {
+        let base = self.type_atom_base()?;
+        self.shape_suffix(base)
+    }
+
+    /// AT MOST ONE, AND NEVER STACKED. 1.0 says so at three separate sites
+    /// through `NodeUtil.isExponentiation`, and the reason is that
+    /// `ZZ32[3][4]` and `ZZ32^2^3` have no meaning it defines. Returning after
+    /// the first suffix rather than looping is what enforces it, and the
+    /// second suffix is then whatever the caller expected next -- a `)` or a
+    /// newline -- so it is reported as the caller's error and not swallowed.
+    ///
+    /// THE SUFFIX MUST BE GLUED. `crates/parser/tests/parser.rs` already
+    /// records that a spaced bracket is a juxtaposition and not a subscript,
+    /// and the same rule here keeps `x : ZZ32 [1,2,3]` reading the way it
+    /// reads today. Measured cost: zero. All 62 corpus sites are glued.
+    fn shape_suffix(&mut self, base: TypeRef) -> Parsed<TypeRef> {
+        let start = base.span().start;
+        let glued_bracket = self.at(&Kind::LBracket) && self.glued_left(self.pos);
+        if glued_bracket {
+            self.pos += 1;
+            self.skip_newlines();
+            let extents = self.extent_list(&Kind::RBracket)?;
+            let end = self.expect(&Kind::RBracket, "`]`")?.span.end;
+            return Ok(TypeRef::Shaped {
+                base: Box::new(base),
+                spelling: ShapeSpelling::Bracket,
+                extents,
+                span: Span::new(start, end),
+            });
+        }
+        let glued_caret = self.at(&Kind::Caret) && self.glued_left(self.pos);
+        if glued_caret {
+            self.pos += 1;
+            // `traits.tex:100-101`. The PARENTHESIS is the whole distinction
+            // between the two caret productions, which is exactly how the
+            // reference implementation reads it (`Type.rats:276-317`).
+            let (extents, end) = if self.at(&Kind::LParen) {
+                self.pos += 1;
+                self.skip_newlines();
+                let mut extents = vec![self.extent()?];
+                self.skip_newlines();
+                // `BY` is the ASCII cross, `Symbol.rats:232`. It is all caps
+                // with two distinct letters, so the operator-word rule lexes
+                // it `OpWord` and NOT `Ident` -- the same trap that silently
+                // stopped the BIG reduction recogniser firing on `SUM`.
+                while self.at_word_op("BY") {
+                    self.pos += 1;
+                    self.skip_newlines();
+                    extents.push(self.extent()?);
+                    self.skip_newlines();
+                }
+                (extents, self.expect(&Kind::RParen, "`)`")?.span.end)
+            } else {
+                let extent = self.extent()?;
+                let end = extent.span.end;
+                (vec![extent], end)
+            };
+            return Ok(TypeRef::Shaped {
+                base: Box::new(base),
+                spelling: ShapeSpelling::Caret,
+                extents,
+                span: Span::new(start, end),
+            });
+        }
+        Ok(base)
+    }
+
+    /// `traits.tex:104`. One or more extents, comma separated. An empty list
+    /// is ONE extent that writes no size rather than no extents at all, so
+    /// `ZZ32[]` is refused as a missing size and not as a zero-dimensional
+    /// array -- a diagnostic naming the wrong mechanism is the defect this
+    /// project has paid for twice.
+    fn extent_list(&mut self, close: &Kind<'_>) -> Parsed<Vec<ExtentRange>> {
+        if self.at(close) {
+            return Ok(vec![ExtentRange {
+                lower: None,
+                upper: None,
+                form: ExtentForm::Size,
+                span: self.span_here(),
+            }]);
+        }
+        let mut extents = vec![self.extent()?];
+        self.skip_newlines();
+        while self.at(&Kind::Comma) {
+            self.pos += 1;
+            self.skip_newlines();
+            extents.push(self.extent()?);
+            self.skip_newlines();
+        }
+        Ok(extents)
+    }
+
+    /// `traits.tex:106-108`, all three spellings. `5`, `0#5`, `1:5`, and the
+    /// open forms `#5`, `0#`, `:5`, `1:`.
+    fn extent(&mut self) -> Parsed<ExtentRange> {
+        let start = self.span_here().start;
+        let leading = if self.at(&Kind::Hash) || self.at(&Kind::Colon) {
+            None
+        } else {
+            Some(self.extent_arg()?)
+        };
+        let form = if self.at(&Kind::Hash) {
+            ExtentForm::Hash
+        } else if self.at(&Kind::Colon) {
+            ExtentForm::Colon
+        } else {
+            // A single argument IS the size, and its lower bound is zero.
+            let end = self.previous_span().end;
+            return Ok(ExtentRange {
+                lower: None,
+                upper: leading,
+                form: ExtentForm::Size,
+                span: Span::new(start, end),
+            });
+        };
+        self.pos += 1;
+        let trailing = if self.at_extent_terminator() {
+            None
+        } else {
+            Some(self.extent_arg()?)
+        };
+        Ok(ExtentRange {
+            lower: leading,
+            upper: trailing,
+            form,
+            span: Span::new(start, self.previous_span().end),
+        })
+    }
+
+    fn at_extent_terminator(&self) -> bool {
+        self.at(&Kind::Comma)
+            || self.at(&Kind::RBracket)
+            || self.at(&Kind::RParen)
+            || self.at(&Kind::Hash)
+            || self.at(&Kind::Colon)
+            || self.at_word_op("BY")
+    }
+
+    /// One extent's argument. THE TYPE IS TRIED FIRST AND THE POSITION IS
+    /// RESTORED IF IT DOES NOT REACH THE END, which is `static_arg`'s rule
+    /// with this position's terminators: it is what lets `ZZ32[n]` keep `n` as
+    /// a name for expansion to classify, while `ZZ32[2 n]` and `ZZ32[k+1]`
+    /// fall through to the static-value sublanguage that already parses them.
+    fn extent_arg(&mut self) -> Parsed<TypeRef> {
+        let save = self.pos;
+        if let Ok(t) = self.type_ref() {
+            let after = self.pos;
+            if self.at_extent_terminator() {
+                self.pos = after;
+                return Ok(t);
+            }
+        }
+        self.pos = save;
+        let start = self.span_here();
+        let expr = self.static_expr()?;
+        let end = self.previous_span();
+        Ok(TypeRef::Static {
+            expr,
+            span: Span::new(start.start, end.end),
+        })
+    }
+
+    fn type_atom_base(&mut self) -> Parsed<TypeRef> {
         if self.at(&Kind::LParen) {
             let start = self.expect(&Kind::LParen, "`(`")?.span.start;
             self.skip_newlines();

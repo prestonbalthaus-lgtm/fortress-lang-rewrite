@@ -24,11 +24,9 @@ ProjectFortress/compiler_tests/Compiled6.c.fss
 ProjectFortress/compiler_tests/Compiled6.d.fss
 ProjectFortress/compiler_tests/Compiled6.e.fss
 ProjectFortress/compiler_tests/Compiled6.f.fss
-ProjectFortress/compiler_tests/Compiled6.g.fss
 ProjectFortress/compiler_tests/Compiled6.h.fss
 ProjectFortress/compiler_tests/Compiled6.j.fss
 ProjectFortress/compiler_tests/Compiled6.k.fss
-ProjectFortress/compiler_tests/Compiled6.l.fss
 ProjectFortress/compiler_tests/Compiled6.m.fss
 ProjectFortress/compiler_tests/Compiled6.q.fss
 ProjectFortress/compiler_tests/Compiled7.a.fss

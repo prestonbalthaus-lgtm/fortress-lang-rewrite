@@ -1,0 +1,5 @@
+component badstackedshape
+export Executable
+f(a: ZZ32[3][4]): ZZ32 = a[0]
+run() = ()
+end

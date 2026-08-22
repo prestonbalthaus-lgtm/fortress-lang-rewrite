@@ -1,0 +1,7 @@
+component badextentrange
+export Executable
+run() = do
+  a: ZZ32[0#5] = [1 2 3 4 5]
+  println(a[0])
+end
+end

@@ -112,15 +112,37 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # test_library/TestNative.fsi, and genericTest1 checks its own arithmetic --
 # `f[\1\]() + g[\2,3\]() = 6` prints `pass`.
 #
-# THE SLACK IS 38 AND NOT 1, and that is the honest number rather than a
-# tradition: tools/oracle-accepted-must-fail.txt names 38 programs that MUST
-# FAIL and that this compiler still accepts, every one of them a `.fss` inside
-# the object count. Refusing any of them properly is a ratchet forward and must
-# not break this floor -- which is the same reason the floor was ever one below,
-# applied to the real population instead of to the one file that was known when
-# the rule was written. When that list shrinks, this floor rises with it, and
-# the two move in the same commit.
-OBJECT_FLOOR=290
+# ARRAY TYPES `T[n]`: 332 objects, 62 apis. FOUR files, zero lost, and the IR
+# body of all 390 modules that compiled before is BYTE FOR BYTE unchanged --
+# which is the acceptance test, not this count.
+#   ProjectFortress/tests/NatParamOverloading.fss           runs, exit 0
+#   SpecData/.../Overview.Expression.aggregate.a.fss        runs, exit 0
+#   ProjectFortress/not_passing_yet/singletonArray.fss      COMPILES, then
+#     halts at run time with `array index out of bounds (1, 1)`, which is
+#     correct: it declares `RR64[1]` and reads `a[1]`.
+#   ProjectFortress/parser_tests/XXXequalityTesting.fss     a must-FAIL by the
+#     XXX convention, and the slack below is where it is accounted for.
+# The first-blocker count for this syntax was 62 and the move is 4. That is a
+# 15x inflation of the same kind first-blocker counting has produced five
+# milestones running; the buckets behind it are 32 files needing a second
+# dimension and 23 needing something else entirely.
+#
+# THE SLACK IS 38 AND NOT 1, and it is COUNTED rather than traditional:
+# tools/oracle-accepted-must-fail.txt names 37 programs that MUST FAIL and that
+# this compiler still accepts, every one of them a `.fss` inside the object
+# count. The comment here used to say 38 against a list of 39, which was wrong
+# twice; the list is now 37 because the oracle gate reported two entries as
+# NEWLY REFUSED (Compiled6.g, Compiled6.l -- refused since the getters commit,
+# which owed the deletion) and its own header says a refused file must come out
+# in the same commit. The thirty-eighth is XXXequalityTesting.fss, a must-FAIL
+# by the XXX convention and by its own source comments, which NO `.test` file
+# names -- so the oracle ratchet cannot see it and it needs its slack here.
+# Refusing any of them properly is a ratchet forward and must not break this
+# floor -- which is the same reason the floor was ever one below, applied to
+# the real population instead of to the one file that was known when the rule
+# was written. When that list shrinks, this floor rises with it, and the two
+# move in the same commit.
+OBJECT_FLOOR=294
 API_FLOOR=62
 
 passed=0

@@ -35,7 +35,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use fortress_ast::{
     Assign, BinOp, BlockItem, CaseArm, Component, Decl, Expr, FieldDecl, FnDecl, Member,
-    MethodDecl, ObjectDecl, Span, TypeCaseArm, TypeRef, UnOp,
+    MethodDecl, ObjectDecl, ShapeSpelling, Span, StaticExpr, TypeCaseArm, TypeRef, UnOp,
 };
 
 use registry::{close_traits, ObjectInfo, Registry, TraitInfo};
@@ -389,10 +389,72 @@ fn overload_counts(component: &Component) -> HashMap<String, usize> {
 /// owner that is the object; for a trait owner it is the trait, which is what
 /// closed-world dispatch supports and is a stated deviation from 1.0, where
 /// `Self` is the run-time type of the receiver.
+/// `a: ZZ32[5] = [1 2 3 4 5 6]`.
+///
+/// THE ONE PLACE THE DECLARED SIZE AND A LENGTH ARE BOTH IN HAND, and the
+/// whole of what survives of the extent. `Registry::resolve` drops the number,
+/// because carrying it into `Type` would re-decide what type equality means
+/// -- so this is the narrowest rule that still catches the shape the corpus
+/// asks about by name (`ProjectFortress/not_passing_yet/XXXwrongArrayDim.fss`,
+/// filed from a user bug report, is entirely about it).
+///
+/// TWO HOLES, STATED RATHER THAN DISCOVERED LATER, and that same file writes
+/// both: a mismatch arriving through a CALL (`s3: RR64[4] = identity([9 14 18])`)
+/// is not caught, and a parameter declared `f(a: ZZ32[3])` is not checked
+/// against a five-element argument. A parameter, a return type, a trait field
+/// and a `typecase` arm have no initializer, so they get nothing.
+fn check_declared_extent(written: &TypeRef, value: &Expr) -> Checked<()> {
+    let TypeRef::Shaped {
+        spelling: ShapeSpelling::Bracket,
+        extents,
+        ..
+    } = written
+    else {
+        return Ok(());
+    };
+    let Expr::ArrayLit { items, span } = value else {
+        return Ok(());
+    };
+    let [extent] = extents.as_slice() else {
+        return Ok(());
+    };
+    let Some(TypeRef::Static {
+        expr: StaticExpr::Int(declared),
+        ..
+    }) = extent.plain_size()
+    else {
+        return Ok(());
+    };
+    let Ok(declared_len) = usize::try_from(*declared) else {
+        return Ok(());
+    };
+    if declared_len == items.len() {
+        return Ok(());
+    }
+    Err(TypeError::ArrayExtentMismatch {
+        span: *span,
+        declared: *declared,
+        found: items.len(),
+    })
+}
+
 fn substitute_self(t: &TypeRef, owner: &str) -> TypeRef {
     match t {
         // A static value holds no type name, so `Self` cannot occur in one.
         TypeRef::Static { .. } => t.clone(),
+        // An extent is a static argument and may name `Self` no more than a
+        // static value can, so only the element type is rewritten.
+        TypeRef::Shaped {
+            base,
+            spelling,
+            extents,
+            span,
+        } => TypeRef::Shaped {
+            base: Box::new(substitute_self(base, owner)),
+            spelling: *spelling,
+            extents: extents.clone(),
+            span: *span,
+        },
         TypeRef::Named { name, args, span } if name == "Self" && args.is_empty() => {
             TypeRef::Named {
                 name: owner.to_owned(),
@@ -1474,6 +1536,7 @@ impl Checker {
                     name: decl.name.clone(),
                 });
             };
+            check_declared_extent(&decl.ty, init)?;
             let value = self.expr(init, Some(field.ty))?;
             self.declare(field.name.clone(), field.ty, false);
             out.push(value);
@@ -5261,7 +5324,10 @@ impl Checker {
             match item {
                 BlockItem::Binding(b) => {
                     let declared = match &b.ty {
-                        Some(t) => Some(self.registry.resolve(t)?),
+                        Some(t) => {
+                            check_declared_extent(t, &b.value)?;
+                            Some(self.registry.resolve(t)?)
+                        }
                         None => None,
                     };
                     let value = self.expr(&b.value, declared)?;
