@@ -2396,6 +2396,46 @@ fn calling_a_filed_growing_member_names_the_mechanism() {
     );
 }
 
+/// A GETTER WHOSE RETURN TYPE IS OMITTED RETURNED NOTHING, SILENTLY. Not a
+/// refusal and not a crash -- `getter label() = "1"` compiled, linked, ran and
+/// printed an empty line at exit 0, which is the worst class this project
+/// recognises. `inferred_bodies` skipped every accessor, so the fixpoint never
+/// reached one and it kept its `Void` placeholder.
+///
+/// The filter's own comment claimed it mirrored `run`'s three loops exactly.
+/// It had stopped: `run` lifts accessors and says so at the `ACCESSORS ARE
+/// LIFTED HERE TOO` comment, and this side still skipped them.
+///
+/// Found by a full-driver sweep after the growing-member cut, NOT by the
+/// compile count -- the count read 397 either way. `ProjectFortress/tests/
+/// nestedInst.fss` is the corpus witness and its IR is the ONLY one of 397 that
+/// moved.
+#[test]
+fn a_getter_with_an_omitted_return_type_returns_its_body() {
+    let exe = std::env::temp_dir().join("fortress_inferredgetter");
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture("inferredgetter.fss"))
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .expect("could not run fortressc");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "must compile:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let ran = Command::new(&exe)
+        .output()
+        .expect("could not run the binary");
+    let stdout = String::from_utf8_lossy(&ran.stdout);
+    let _ = std::fs::remove_file(&exe);
+    assert_eq!(
+        stdout, "1\n5\n",
+        "a getter must return its body, not the Void placeholder"
+    );
+}
+
 /// THE PRE-EXISTING DEFECT THE CUT EXPOSED, and it is not the cut's: a generic
 /// method whose arrow parameter mentions its OWNER's static parameter was
 /// refused as `unknown type E` on master, with no cut involved. It reached no

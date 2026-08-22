@@ -1,0 +1,12 @@
+component inferredgetter
+export Executable
+object Tag()
+  getter mark() = "1"
+  getter count() = 5
+end
+run(): () = do
+  t = Tag()
+  println(t.mark)
+  println(t.count)
+end
+end

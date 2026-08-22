@@ -1408,7 +1408,7 @@ impl Checker {
                     }
                     continue;
                 }
-                if m.accessor || !m.static_params.is_empty() {
+                if !m.static_params.is_empty() {
                     continue;
                 }
                 if !self.method_slots.contains_key(&(owner, index))
