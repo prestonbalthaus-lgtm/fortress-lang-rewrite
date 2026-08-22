@@ -304,7 +304,11 @@ RUN_TIMEOUT     = 20
 # per recursion) and the other prints PASS. Raising it is what stops either
 # silently going back to a discarded Boolean comparison, which is what that
 # syntax parsed as before the binder node existed.
-PASS_FLOOR = 340
+# 2026-08-22: 340 -> 342, RAISED BECAUSE PASSES WERE WON. Component-level
+# values and the arrow work took the pass set up by two. Raising it is what
+# stops a top-level initializer silently not running again -- the exact defect
+# `badvaluebinding.fss` was written to guard, which no list can see.
+PASS_FLOOR = 342
 
 args, opt = sys.argv[1:], {}
 i = 0
