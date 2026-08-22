@@ -56,6 +56,14 @@ pub enum TypeError {
         span: Span,
         name: String,
     },
+    /// A member expansion refused to stamp, reached by a call. See
+    /// `Component::cuts`.
+    GrowingMemberNotStamped {
+        span: Span,
+        owner: String,
+        origin: String,
+        member: String,
+    },
     UnknownType {
         span: Span,
         name: String,
@@ -689,6 +697,7 @@ impl TypeError {
             | Self::LogicalOperandNotBoolean { span, .. }
             | Self::BooleanNotOrdered { span, .. }
             | Self::UnknownName { span, .. }
+            | Self::GrowingMemberNotStamped { span, .. }
             | Self::UnknownType { span, .. }
             | Self::StaticValueWhereTypeRequired { span, .. }
             | Self::TypeWhereStaticValueRequired { span, .. }
@@ -843,6 +852,18 @@ impl core::fmt::Display for TypeError {
                 right.name()
             ),
             Self::UnknownName { name, .. } => write!(f, "unknown name `{name}`"),
+            Self::GrowingMemberNotStamped {
+                owner,
+                origin,
+                member,
+                ..
+            } => write!(
+                f,
+                "`{member}` on `{owner}` returns `{origin}` at static arguments that \
+                 properly contain its own, so every stamp demands a larger one; this \
+                 compiler monomorphizes and the chain has no fixpoint. The member is \
+                 declared and cannot be called"
+            ),
             Self::UnknownType { name, .. } => write!(f, "unknown type `{name}`"),
             Self::StaticValueWhereTypeRequired { written, .. } => write!(
                 f,

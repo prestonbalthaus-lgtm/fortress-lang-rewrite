@@ -1,0 +1,13 @@
+component arrowstaticparam
+export Executable
+trait Gen[\E\]
+    abstract shove[\R\](body: E->R): R
+end
+object Box[\E\](v: E) extends Gen[\E\]
+    shove[\R\](body: E->R): R = body(v)
+end
+run(): () = do
+    b: Gen[\ZZ32\] = Box[\ZZ32\](3)
+    println(1)
+end
+end

@@ -35,7 +35,7 @@ pub use types::{
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use fortress_ast::{
-    Assign, BinOp, BlockItem, CaseArm, Component, Decl, Expr, FieldDecl, FnDecl, Member,
+    Assign, BinOp, BlockItem, CaseArm, Component, CutMember, Decl, Expr, FieldDecl, FnDecl, Member,
     MethodDecl, ObjectDecl, ShapeSpelling, Span, StaticExpr, TypeCaseArm, TypeRef, UnOp,
 };
 
@@ -193,6 +193,10 @@ struct Checker {
     /// so a call reaches an empty overload set; naming the mechanism is what
     /// keeps the file out of the `unknown name` bucket.
     generic_functional: HashSet<String>,
+    /// `(owner, member)` for every member expansion refused to stamp. See
+    /// `Component::cuts`: reading one is a diagnostic that names the mechanism
+    /// rather than `has no field`.
+    cuts: HashMap<(String, String), CutMember>,
     /// Which member of which method set each declaration is, keyed by the
     /// owner and the member's index in that owner's member list. The pair is
     /// unique by construction and reads the same in both passes, so it cannot
@@ -583,6 +587,11 @@ impl Checker {
             methods: HashMap::new(),
             accessors: HashSet::new(),
             generic_functional: HashSet::new(),
+            cuts: component
+                .cuts
+                .iter()
+                .map(|c| ((c.owner.clone(), c.member.clone()), c.clone()))
+                .collect(),
             method_slots: HashMap::new(),
             functional_slots: HashMap::new(),
             self_ctx: None,
@@ -2230,10 +2239,24 @@ impl Checker {
         if self.accessors.contains(name) && !self.has_field(base.ty, name) {
             return self.dispatch_method(base, name, &[], span, span, expected);
         }
-        let unknown = || TypeError::UnknownField {
-            span,
-            found: base.ty,
-            name: name.to_owned(),
+        // A MEMBER EXPANSION CUT IS REPORTED AS ITSELF. Without this the only
+        // trace of it is an absence, and `has no field` names the wrong thing
+        // on a member the source plainly declares.
+        let unknown = || match self
+            .cuts
+            .get(&(base.ty.name().to_string(), name.to_owned()))
+        {
+            Some(cut) => TypeError::GrowingMemberNotStamped {
+                span,
+                owner: cut.owner.clone(),
+                origin: cut.origin.clone(),
+                member: cut.member.clone(),
+            },
+            None => TypeError::UnknownField {
+                span,
+                found: base.ty,
+                name: name.to_owned(),
+            },
         };
         let Type::Object(object) = base.ty else {
             return Err(unknown());

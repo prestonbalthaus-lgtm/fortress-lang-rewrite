@@ -640,6 +640,7 @@ impl<'t, 'a> Parser<'t, 'a> {
             imports,
             decls,
             bounds: Vec::new(),
+            cuts: Vec::new(),
             is_api,
             dims,
             units,

@@ -2302,8 +2302,21 @@ fn a_postfix_operator_declaration_parses() {
 ///
 /// THE :758 WALL IS PAID and the wall behind it has a different owner. The
 /// legacy library's own uniformity violation is exempted BY PATH -- see
-/// `fortress_types::Uniformity` -- and the root now reaches :1117, 359 lines
-/// further on, where it asks for more than `MAX_INSTANTIATIONS` allows.
+/// `fortress_types::Uniformity`.
+///
+/// AND :1117 IS PAID TOO. That was `MAX_INSTANTIATIONS`, and it was not a
+/// budget that wanted raising: `trait Indexed[\E,I\]` at :1138 declares
+/// `getter indexValuePairs(): Indexed[\(I,E),I\]`, which demands its own
+/// declaration at a strictly larger type, forever. Measured rather than read --
+/// a trace of the instantiation queue put 793 of the 4096 on that single
+/// `Indexed -> Indexed` edge. Expansion now FILES such a member instead of
+/// walking it, exactly as it already did for a generic method, so the chain
+/// never starts. See `Component::cuts`.
+///
+/// The root now reaches :654, and the wall there has a KNOWN OWNER: `Any` as a
+/// root trait is seeded on `semantics/phase2` (d0e264c81) and is not on master.
+/// This test pins the wall so that merging that branch is what moves it, and
+/// nothing else moves it silently.
 #[test]
 fn the_bootstrap_root_parses_in_full() {
     let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
@@ -2319,8 +2332,86 @@ fn the_bootstrap_root_parses_in_full() {
         "FortressLibrary.fsi must not fail to PARSE: {message}"
     );
     assert!(
-        message.contains("4096 instantiations"),
-        "the remaining blocker should be the instantiation budget: {message}"
+        !message.contains("4096 instantiations"),
+        "the instantiation budget is no longer the blocker; \
+         a growing member is filed, not walked: {message}"
+    );
+    assert!(
+        message.contains("unknown type `Any`"),
+        "the remaining blocker should be the unseeded root trait: {message}"
+    );
+}
+
+/// THE CUT IS WHAT MOVED IT, and without this the test above passes whether the
+/// cut is doing anything or not -- the file could have reached :654 for some
+/// unrelated reason and nothing would say so. A minimal growing trait, and the
+/// grown instantiation must be ABSENT from what expansion emits.
+///
+/// The failure mode this pins is not a wrong answer, it is an OOM: each round
+/// DOUBLES the mangled spelling, so `growA`'s two-parameter shape is killed by
+/// the allocator (exit 137) long before it reaches 4096 stamps.
+#[test]
+fn a_member_that_demands_its_owner_larger_is_filed_rather_than_walked() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture("growingmember.fss"))
+        .arg("--emit-ir")
+        .output()
+        .expect("could not run fortressc");
+    let ir = String::from_utf8_lossy(&out.stdout);
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "an ordinary member of a growing trait must still compile:\n{message}"
+    );
+    assert!(
+        !ir.contains("$tuple$"),
+        "no instantiation at a grown argument may be emitted:\n{ir}"
+    );
+}
+
+/// And CALLING the cut member names the mechanism. `has no field` was what it
+/// said before the cut list was carried, and that names the wrong thing on a
+/// member the source plainly declares.
+#[test]
+fn calling_a_filed_growing_member_names_the_mechanism() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture("growingmembercall.fss"))
+        .arg("--emit-ir")
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "the call must refuse:\n{message}"
+    );
+    assert!(
+        message.contains("properly contain its own") && message.contains("`pairs`"),
+        "the diagnostic must name the member and the mechanism:\n{message}"
+    );
+    assert!(
+        !message.contains("has no field"),
+        "an absence is not the diagnostic:\n{message}"
+    );
+}
+
+/// THE PRE-EXISTING DEFECT THE CUT EXPOSED, and it is not the cut's: a generic
+/// method whose arrow parameter mentions its OWNER's static parameter was
+/// refused as `unknown type E` on master, with no cut involved. It reached no
+/// diagnostic before only because no file got far enough to be checked.
+#[test]
+fn a_generic_methods_arrow_may_name_its_owners_static_parameter() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture("arrowstaticparam.fss"))
+        .arg("--emit-ir")
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "`body: E->R` inside `shove[\\R\\]` on `Gen[\\E\\]` is well formed:\n{message}"
     );
 }
 

@@ -17,6 +17,11 @@ pub struct Component {
     pub decls: Vec<Decl>,
     /// Empty until monomorphization has run.
     pub bounds: Vec<BoundObligation>,
+    /// Members expansion refused to stamp because their signature demands
+    /// their own owner at a strictly larger type. Empty until monomorphization
+    /// has run, and carried for one reason: so that CALLING such a member is a
+    /// diagnostic that names the mechanism instead of `has no field`.
+    pub cuts: Vec<CutMember>,
     /// `api Foo ... end` rather than `component Foo ... end`. Parsed so the
     /// corpus metric can move; an api has no bodies and is not executable, so
     /// the type checker refuses it rather than pretending to compile one.
@@ -607,6 +612,17 @@ pub struct BoundObligation {
     /// wrong, not that the program is. The checker prunes that stamp instead of
     /// refusing the component.
     pub speculative: Option<(String, String)>,
+    pub span: Span,
+}
+
+/// One member left out of one instantiation. See `Component::cuts`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CutMember {
+    /// The mangled instantiation the member was dropped from.
+    pub owner: String,
+    /// The source name of the generic declaration it came from.
+    pub origin: String,
+    pub member: String,
     pub span: Span,
 }
 

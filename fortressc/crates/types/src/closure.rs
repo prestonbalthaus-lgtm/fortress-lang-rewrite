@@ -270,6 +270,20 @@ impl Pass {
     fn rewrite_member_types(&mut self, m: &mut Member) -> Result<(), TypeError> {
         match m {
             Member::Field(f) => self.rewrite_type(&mut f.ty)?,
+            // A GENERIC METHOD IS NOT REWRITTEN, for the same reason
+            // monomorphization files it instead of expanding it: its static
+            // parameters are names, not types, so `body: E->R` inside
+            // `generate[\R\]` on `trait Generator[\E\]` reports `unknown type
+            // E` against a type that was never meant to exist. The stamp is
+            // what gets walked, once a call site has said at what arguments,
+            // and a genuinely unknown name is caught there.
+            //
+            // NARROWED TO GENERIC METHODS ON PURPOSE. Loosening it for a
+            // non-generic member would reopen the hole `rewrite_type` closed:
+            // an unliftable arrow in an abstract member is `TypeNotImplemented`,
+            // which `excusable` skips, so `m(g: Foo -> ZZ32): ZZ32` compiled to
+            // exit 0 in silence.
+            Member::Method(m) if !m.static_params.is_empty() => {}
             Member::Method(m) => {
                 for p in &mut m.params {
                     self.rewrite_type(&mut p.ty)?;

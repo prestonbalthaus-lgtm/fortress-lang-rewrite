@@ -16,9 +16,9 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use fortress_ast::{
-    Assign, BlockItem, BoundObligation, CaseArm, Component, Decl, Expr, ExtentRange, FieldDecl,
-    FnDecl, Member, MethodDecl, ObjectDecl, Param, Span, StaticExpr, StaticOp, StaticParam,
-    TraitDecl, TypeCaseArm, TypeRef,
+    Assign, BlockItem, BoundObligation, CaseArm, Component, CutMember, Decl, Expr, ExtentRange,
+    FieldDecl, FnDecl, Member, MethodDecl, ObjectDecl, Param, Span, StaticExpr, StaticOp,
+    StaticParam, TraitDecl, TypeCaseArm, TypeRef,
 };
 
 use crate::error::TypeError;
@@ -148,6 +148,12 @@ struct Expander<'a> {
     /// ground declaration, the mangled one for an instantiation. It is what a
     /// speculative bound obligation names, so the checker can find the stamp.
     owner_name: String,
+    /// The origin name and static-parameter names of the instantiation being
+    /// expanded, so a member signature can be asked whether it demands that
+    /// same declaration at a strictly larger type.
+    current_owner: Option<(String, Vec<String>)>,
+    /// See `Component::cuts`.
+    cuts: Vec<CutMember>,
     templates: BTreeMap<(OwnerKey, usize), MethodTemplate>,
     /// Keyed by mangled name and value arity: one written `m[\ZZ32\](x)` is
     /// one request no matter how many times it appears.
@@ -195,6 +201,8 @@ impl<'a> Expander<'a> {
             generic_methods,
             owner: None,
             owner_name: String::new(),
+            current_owner: None,
+            cuts: Vec::new(),
             templates: BTreeMap::new(),
             method_demand: BTreeMap::new(),
             stamps: BTreeMap::new(),
@@ -370,7 +378,12 @@ impl<'a> Expander<'a> {
                 self.record_bounds(params, &subst, job.span, None)?;
                 self.owner = Some(OwnerKey::Instance(job.mangled.clone(), member));
                 self.owner_name.clone_from(&job.mangled);
+                self.current_owner = Some((
+                    job.origin.clone(),
+                    params.iter().map(|p| p.name.clone()).collect(),
+                ));
                 let built = self.decl(template, &subst, Some(&job.mangled))?;
+                self.current_owner = None;
                 self.owner = None;
                 self.drain()?;
                 if let Some(slot) = self.instances.get_mut(&key) {
@@ -443,6 +456,7 @@ impl<'a> Expander<'a> {
             imports: component.imports.clone(),
             decls,
             bounds: self.obligations,
+            cuts: self.cuts,
             is_api: component.is_api,
             dims: component.dims.clone(),
             units: component.units.clone(),
@@ -692,10 +706,38 @@ impl<'a> Expander<'a> {
     /// A generic method is left exactly as written. Its body may name its own
     /// static parameters, and walking `Cell[\S\]` with `S` unbound would
     /// mangle a request for a type that does not exist.
+    /// Does this member's signature demand its OWN owner at static arguments
+    /// that properly contain the owner's own static parameters? That is the one
+    /// shape a monomorphizing compiler cannot stamp: every round adds a layer
+    /// and the chain has no fixpoint. `Library/FortressLibrary.fsi:1138` is the
+    /// live witness -- `trait Indexed[\E,I\]` declares
+    /// `getter indexValuePairs(): Indexed[\(I,E),I\]`.
+    ///
+    /// Deliberately NOT a depth or budget test. `reverse(): Indexed[\E,I\]`
+    /// names the owner at its own arguments and is a memo hit; `map[\R\](...):
+    /// Indexed[\R,I\]` names it at a FRESH parameter and converges. Only a
+    /// COMPOSITE argument that mentions an owner parameter grows.
+    fn signature_grows_its_owner(&self, m: &MethodDecl) -> bool {
+        let Some((origin, params)) = &self.current_owner else {
+            return false;
+        };
+        let mut grows = false;
+        for t in m.params.iter().map(|p| &p.ty).chain(m.return_type.iter()) {
+            walk_type(t, &mut |node| {
+                if let TypeRef::Named { name, args, .. } = node {
+                    if name == origin && args.iter().any(|a| properly_contains_param(a, params)) {
+                        grows = true;
+                    }
+                }
+            });
+        }
+        grows
+    }
+
     fn members(&mut self, members: &[Member], subst: &Subst) -> Result<Vec<Member>, TypeError> {
         let mut out = Vec::with_capacity(members.len());
         for (index, m) in members.iter().enumerate() {
-            out.push(match m {
+            let built = match m {
                 Member::Field(f) => Member::Field(FieldDecl {
                     name: f.name.clone(),
                     ty: self.ty(&f.ty, subst)?,
@@ -706,6 +748,26 @@ impl<'a> Expander<'a> {
                     mutable: f.mutable,
                     span: f.span,
                 }),
+                // FILED, NOT EXPANDED -- the same treatment the generic arm
+                // below gives, and for the same reason. Walking this signature
+                // demands the owner at a larger type, which demands it larger
+                // again. A DECLARATION IS NOT A DEMAND; a call is.
+                Member::Method(m)
+                    if m.static_params.is_empty() && self.signature_grows_its_owner(m) =>
+                {
+                    let origin = self
+                        .current_owner
+                        .as_ref()
+                        .map(|(o, _)| o.clone())
+                        .unwrap_or_default();
+                    self.cuts.push(CutMember {
+                        owner: self.owner_name.clone(),
+                        origin,
+                        member: m.name.clone(),
+                        span: m.span,
+                    });
+                    continue;
+                }
                 Member::Method(m) if m.static_params.is_empty() => Member::Method(MethodDecl {
                     modifiers: m.modifiers,
                     name: m.name.clone(),
@@ -741,7 +803,8 @@ impl<'a> Expander<'a> {
                     }
                     Member::Method(m.clone())
                 }
-            });
+            };
+            out.push(built);
         }
         Ok(out)
     }
@@ -1506,4 +1569,37 @@ fn check_template_headers(component: &Component) -> Result<(), TypeError> {
         }
     }
     Ok(())
+}
+
+/// Visit every node of a type term, outermost first.
+fn walk_type(t: &TypeRef, f: &mut impl FnMut(&TypeRef)) {
+    f(t);
+    match t {
+        TypeRef::Named { args, .. } => args.iter().for_each(|a| walk_type(a, f)),
+        TypeRef::Tuple { elems, .. } => elems.iter().for_each(|e| walk_type(e, f)),
+        TypeRef::Arrow { from, to, .. } => {
+            walk_type(from, f);
+            walk_type(to, f);
+        }
+        TypeRef::Shaped { base, .. } => walk_type(base, f),
+        TypeRef::Unit { .. } | TypeRef::Static { .. } => {}
+    }
+}
+
+/// `t` mentions one of `params` but is not simply that parameter written bare.
+fn properly_contains_param(t: &TypeRef, params: &[String]) -> bool {
+    if let TypeRef::Named { args, .. } = t {
+        if args.is_empty() {
+            return false;
+        }
+    }
+    let mut mentions = false;
+    walk_type(t, &mut |node| {
+        if let TypeRef::Named { name, args, .. } = node {
+            if args.is_empty() && params.iter().any(|p| p == name) {
+                mentions = true;
+            }
+        }
+    });
+    mentions
 }

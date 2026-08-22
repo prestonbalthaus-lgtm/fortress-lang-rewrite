@@ -1,0 +1,14 @@
+component growingmembercall
+export Executable
+trait Pairs[\E\]
+    abstract getter pairs(): Pairs[\(E,E)\]
+    abstract getter plain(): ZZ32
+end
+object Two(x: ZZ32) extends Pairs[\ZZ32\]
+    getter plain(): ZZ32 = x
+end
+run(): () = do
+    t: Pairs[\ZZ32\] = Two(7)
+    println(t.pairs.plain)
+end
+end
