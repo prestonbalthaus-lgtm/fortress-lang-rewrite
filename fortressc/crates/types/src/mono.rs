@@ -597,7 +597,15 @@ impl<'a> Expander<'a> {
         for a in args {
             expanded.push(self.ty(a, subst)?);
         }
-        if BUILTIN_CONSTRUCTORS.contains(&name.as_str()) {
+        // A DECLARED GENERIC OF THE SAME NAME WINS, the same order
+        // `resolve_name` takes for the builtin SCALARS. Without the second
+        // condition `Array` and `Thread` are a reserved namespace that a
+        // component cannot shadow -- and 1.0 declares one:
+        // `ProjectFortress/LibraryBuiltin/FortressBuiltin.fsi:209` writes
+        // `object Thread[\T\](fcn:()->T)`. Expansion would hand the reference
+        // straight through and the registry would build the builtin instead of
+        // stamping the declaration.
+        if BUILTIN_CONSTRUCTORS.contains(&name.as_str()) && !self.generics.contains_key(name) {
             return Ok(TypeRef::Named {
                 name: name.clone(),
                 args: expanded,
