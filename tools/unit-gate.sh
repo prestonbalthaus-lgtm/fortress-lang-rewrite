@@ -162,7 +162,7 @@ refusals() {
         fi
     done <<'CASES'
 badvoidparam|cannot be stored in a parameter
-badtupletype|a tuple type is not implemented
+badtupletype|cannot be the result of a function with a body
 badarrowtype|an arrow type is not implemented
 badtupleexpr|a tuple expression is not implemented
 CASES

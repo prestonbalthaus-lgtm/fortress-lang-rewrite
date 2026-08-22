@@ -28,9 +28,15 @@
 #   C. the refusal is still the ONLY gate: nothing outside types.rs and its
 #      tests constructs a `Type::Tuple`
 #
-# WHEN TUPLE VALUES LAND, part B goes red and that is this file's job: whoever
-# lands them converts B into positive fixtures, an IR shape and a mutation
-# table. Part A stays.
+# TUPLE VALUES PARTLY LANDED ON 2026-08-22 AND PART B WAS CONVERTED, which is
+# what the previous version of this line asked whoever landed them to do.
+# Part B is now positive fixtures asserted BY VALUE; part B2 is what is still
+# refused. Part A is unchanged.
+#
+# THE VALUES ARE THE ASSERTION. Without a binder node `(a,b) = (1,2)` parses as
+# INFIX EQUALITY -- a discarded Boolean comparison -- and tupleTest1/2 have no
+# asserts and no `.test`, so that reading compiles, exits 0, does nothing at
+# all, and counts as two files gained. An exit code cannot tell the two apart.
 #
 #   ./tools/tuple-gate.sh              run the gate
 #   ./tools/tuple-gate.sh --selftest   only prove the assertions can refuse
@@ -56,7 +62,7 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # unlock, and landing the type variant moved none of it.
 # 35 at the M6 merge, 40 at the consolidation: the corpus set itself moved
 # (api check mode, and the refusals the consolidation added), not the feature.
-TUPLE_FIRST_BLOCKERS=40
+TUPLE_FIRST_BLOCKERS=38
 
 passed=0
 failed=0
@@ -111,32 +117,89 @@ selftest() {
     [[ $failed -eq 0 ]]
 }
 
-run_gate() {
-    printf '== part B: tuple VALUES, refused at every position one can appear ==\n'
-    printf '   The TYPE variant has landed and tuple VALUES have not. This half\n'
-    printf '   pins the refusal and is MEANT to go red the day they do.\n\n'
+# <label> <expected stdout> <body>
+runs() {
+    mkdir -p "$build"
+    local label=$1 want=$2 body=$3 got
+    printf 'component t\nexport Executable\n%s\nend\n' "$body" > "$build/r.fss"
+    if ! "$fortressc" "$build/r.fss" -o "$build/r" >"$build/r.err" 2>&1; then
+        bad "$label compiles" "$(grep -v '^fortressc: ' "$build/r.err" | head -1)"
+        return
+    fi
+    got=$(timeout 20 "$build/r" 2>&1)
+    if [[ $got == "$want" ]]; then
+        ok "$label -> $(printf '%s' "$got" | tr '\n' ' ')"
+    else
+        bad "$label" "got '$(printf '%s' "$got" | tr '\n' ' ')', want '$(printf '%s' "$want" | tr '\n' ' ')'"
+    fi
+}
 
-    probe 'a tuple TYPE in a parameter' 'a tuple type' \
+run_gate() {
+    printf '== part B: what LANDED, asserted by VALUE ==\n'
+    printf '   THE VALUES ARE THE ASSERTION AND EXIT CODES ARE NOT ENOUGH. Without\n'
+    printf '   a binder node `(a,b) = (1,2)` parses as INFIX EQUALITY -- a\n'
+    printf '   discarded Boolean. tupleTest1/2 have no asserts and no .test, so\n'
+    printf '   that reading compiles, exits 0, does nothing, and reads as a win.\n\n'
+
+    runs 'a tuple binder BINDS' "$(printf '1\n2')" \
+'run(): () = do
+  (a, b) = (1, 2)
+  println(a)
+  println(b)
+end'
+
+    # Elements are checked BEFORE any name is declared, so both right-hand
+    # names still mean the OUTER bindings.
+    runs 'a binder reads the OUTER names' "$(printf '2\n1')" \
+'run(): () = do
+  a = 1
+  b = 2
+  (a2, b2) = (b, a)
+  println(a2)
+  println(b2)
+end'
+
+    runs 'a three-element binder' "$(printf '1\n2\n3')" \
+'run(): () = do
+  (a, b, c) = (1, 2, 3)
+  println(a)
+  println(b)
+  println(c)
+end'
+
+    # In statement position a tuple is its elements, evaluated. Both run.
+    runs 'a tuple in statement position runs both' "$(printf '1\n2\n9')" \
+'run(): () = do
+  (println(1), println(2))
+  println(9)
+end'
+
+    printf '\n== part B2: what has NOT landed, still refused BY NAME ==\n'
+
+    probe 'a tuple TYPE in a parameter' 'cannot be a parameter' \
 'f(p: (ZZ32, ZZ32)): ZZ32 = 1
 run(): () = println(1)'
 
-    probe 'a tuple TYPE as a return type' 'a tuple type' \
+    probe 'a tuple TYPE as a return type' 'cannot be the result' \
 'f(x: ZZ32): (ZZ32, ZZ32) = x
 run(): () = println(1)'
 
-    probe 'a tuple TYPE as a static argument' 'a tuple type' \
-'f[\T\](x: T): ZZ32 = 1
-run(): () = println(f[\(ZZ32, ZZ32)\](1))'
-
-    probe 'a tuple EXPRESSION' 'a tuple expression' \
+    probe 'a tuple EXPRESSION whose value is USED' 'a tuple expression' \
 'run(): () = do
   t = (1, 2)
   println(1)
 end'
 
-    probe 'a tuple BINDER' 'a tuple expression' \
+    probe 'a CALL on the right of a binder' 'unless it is written as a tuple' \
+'g(x: ZZ32): ZZ32 = x
+run(): () = do
+  (a, b) = g(1)
+  println(a)
+end'
+
+    probe 'a binder whose arity disagrees' 'names 2 value(s) and its initializer has 3' \
 'run(): () = do
-  (a, b) = (1, 2)
+  (a, b) = (1, 2, 3)
   println(a)
 end'
 
@@ -186,25 +249,46 @@ end'
     fi
 
     # ---------------------------------------------------------------- part C
-    printf '\n== the single construction gate ==\n'
-    local gate
-    gate=$(grep -c 'form: "a tuple type"' "$repo/fortressc/crates/types/src/registry.rs")
-    if [[ $gate -eq 1 ]]; then
-        ok 'registry.rs refuses `TypeRef::Tuple` at exactly one site'
+    printf '\n== the two gates, and they are DIFFERENT gates now ==\n'
+    # THIS SECTION USED TO ASSERT THAT `resolve` REFUSED. It BUILDS now -- that
+    # is Stage A -- so the invariant moved rather than went away: one site
+    # CONSTRUCTS from source, and one site REFUSES the positions a defined
+    # function would have to lower.
+    local built
+    built=$(grep -c 'Type::Tuple(crate::types::intern_types' \
+            "$repo/fortressc/crates/types/src/registry.rs")
+    if [[ $built -eq 1 ]]; then
+        ok 'registry.rs BUILDS a tuple type at exactly one site'
     else
-        bad 'registry.rs refuses TypeRef::Tuple at exactly one site' "found $gate"
+        bad 'registry.rs builds a tuple type at exactly one site' "found $built"
     fi
-    # Nothing outside the definition and its tests may BUILD one. That is what
-    # makes the twenty non-exhaustive sites safe rather than merely unexercised.
-    local builders
-    builders=$(grep -rln 'Type::Tuple(' "$repo/fortressc/crates" --include=*.rs \
-               | grep -vE 'crates/types/src/types.rs|crates/types/tests/|crates/types/src/registry.rs|crates/codegen/src/lib.rs' \
-               | wc -l)
-    if [[ $builders -eq 0 ]]; then
-        ok 'nothing outside the definition, the gate and codegen names `Type::Tuple`'
+    local refusal
+    refusal=$(grep -c 'TypeError::TupleNotStorable' \
+              "$repo/fortressc/crates/types/src/lib.rs")
+    if [[ $refusal -ge 1 ]]; then
+        ok "the checker refuses a tuple in a lowered position ($refusal site(s))"
     else
-        bad 'nothing outside the definition names `Type::Tuple`' \
-            "$builders other file(s) do -- a tuple can now be built without passing the gate"
+        bad 'the checker refuses a tuple in a lowered position' 'no TupleNotStorable'
+    fi
+    # AN api MAY NAME ONE. That is the whole point of the split, and without
+    # this the refusal above could simply be blanket and FortressLibrary.fsi
+    # would still be stuck at :1730.
+    mkdir -p "$build"
+    printf 'api t\nf(x: (ZZ32, ZZ32)): ZZ32\ng(): (ZZ32, String)\nend\n' > "$build/api.fsi"
+    if "$fortressc" "$build/api.fsi" >/dev/null 2>&1; then
+        ok 'an api signature MAY name a tuple -- it is never lowered'
+    else
+        bad 'an api signature MAY name a tuple' \
+            "$("$fortressc" "$build/api.fsi" 2>&1 | grep -v '^fortressc: ' | head -1)"
+    fi
+    # CODEGEN MAY NOT PANIC ON ONE. `basic_type`'s arm was an `unreachable!`
+    # and it became reachable the moment `resolve` started building: exit 101
+    # on user source. The checker is the real gate; this is the backstop.
+    if grep -q 'Type::Tuple(_) => None,' "$repo/fortressc/crates/codegen/src/lib.rs"; then
+        ok 'codegen has no `unreachable!` for a tuple type'
+    else
+        bad 'codegen has no `unreachable!` for a tuple type' \
+            'the arm that panicked at exit 101 is back'
     fi
 
     printf '\n%d passed, %d failed\n' "$passed" "$failed"
