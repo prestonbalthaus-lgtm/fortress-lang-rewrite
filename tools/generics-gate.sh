@@ -316,6 +316,15 @@ uniformity_exemption() {
 # --------------------------------------------------------------- mutations
 
 MUTATIONS=(
+  # THE OVERLOAD-MEMBER BOUND PRUNE. Drop it and every member's bound is a hard
+  # obligation again -- `f[\R\](R)` is charged the OTHER declaration's
+  # `T extends Blue` and refused, which is a wrong refusal on legal code.
+  'crates/types/src/lib.rs|self.prune_overload_member(&name, member);|let _ = (&name, member);|stop pruning the overload member whose bound failed'
+  # AND THE KEYING, which the row above cannot reach. Comparing the span alone
+  # is what the first attempt did: a span identifies the SOURCE declaration,
+  # which every instantiation shares, so pruning Blue at [\R\] also killed it
+  # at [\B\]. Widening the compare to every signature reproduces exactly that.
+  'crates/types/src/lib.rs|if signature.span == member {|if true {|prune every signature of the name, not the failing member'
   # THE GROWING-MEMBER CUT. Weaken the detector and every such member is walked
   # again -- `nestedInst.fss` goes back to being killed by the allocator rather
   # than refused, because each round DOUBLES the mangled spelling.
@@ -414,6 +423,7 @@ PY
             refusals
             uniformity_exemption
             growing_member
+            overload_member_bounds
             if [[ $failed -gt 0 ]]; then
                 printf 'REFUSED  %d check(s) failed, which is the point\n' "$failed"
             else
@@ -488,6 +498,37 @@ growing_member() {
     fi
 }
 
+overload_member_bounds() {
+    printf '== a bound is charged to its own member of an overload set ==\n'
+    local out err status exe=$build/overloadbound
+
+    # EVERY member instantiates at the same static arguments, because expansion
+    # has no types. Only ONE of them can be the member a call meant.
+    err=$(timeout 300 "$fortressc" "$repo/fortressc/tests/overloadbound.fss" \
+            -o "$exe" 2>&1 >/dev/null)
+    status=$?
+    out=$("$exe" 2>/dev/null | tr '\n' ' ')
+    if [[ $status -eq 0 && $out == '1 2 ' ]]; then
+        ok 'each call reaches the member whose bound it satisfies'
+    else
+        bad 'each call reaches the member whose bound it satisfies' \
+            "status $status, out [$out]: $err"
+    fi
+
+    # AND WHEN NO MEMBER HOLDS, THE CLEAN DIAGNOSTIC SURVIVES. Pruning them all
+    # turns this into a dispatch failure reading `takes 1 argument(s), found 1`.
+    err=$(timeout 300 "$fortressc" "$repo/fortressc/tests/overloadboundnone.fss" \
+            --emit-obj -o /dev/null 2>&1 >/dev/null)
+    status=$?
+    if refused_cleanly "$status" && [[ $err == *'does not satisfy'* ]] \
+        && [[ $err != *'argument(s), found'* ]]; then
+        ok 'every member failing its bound is still a bound diagnostic'
+    else
+        bad 'every member failing its bound is still a bound diagnostic' \
+            "status $status: $err"
+    fi
+}
+
 # ----------------------------------------------------------------- main
 
 case "${1:-}" in
@@ -513,6 +554,7 @@ case "${1:-}" in
         refusals
         uniformity_exemption
         growing_member
+        overload_member_bounds
         ;;
 esac
 
