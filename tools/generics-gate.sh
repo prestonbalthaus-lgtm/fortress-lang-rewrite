@@ -316,6 +316,18 @@ uniformity_exemption() {
 # --------------------------------------------------------------- mutations
 
 MUTATIONS=(
+  # THE GROWING-MEMBER CUT. Weaken the detector and every such member is walked
+  # again -- `nestedInst.fss` goes back to being killed by the allocator rather
+  # than refused, because each round DOUBLES the mangled spelling.
+  # `grows = true;` is the target because it is the only line in the detector
+  # with no vertical bar in it: this table splits on IFS='|' and the call site
+  # carries a closure.
+  'crates/types/src/mono.rs|grows = true;|grows = false;|never detect a member that demands its owner larger'
+  # AND THE ARROW HALF, which the row above cannot reach. Inverting the guard
+  # rewrites the signatures of GENERIC methods and leaves non-generic ones
+  # alone -- the exact swap that reported `unknown type E` on a static
+  # parameter.
+  'crates/types/src/closure.rs|Member::Method(m) if !m.static_params.is_empty() => {}|Member::Method(m) if m.static_params.is_empty() => {}|rewrite generic method signatures and skip non-generic ones'
   'crates/types/src/mono.rs|for ((mangled, slot), instance) in &self.instances {|for ((mangled, slot), instance) in self.instances.iter().rev() {|emit instantiations in reverse name order'
   # RE-TARGETED when the legacy-library exemption landed: the call is now
   # inside `if uniformity == Uniformity::Enforced`, so the old pattern reported
@@ -401,6 +413,7 @@ PY
             determinism
             refusals
             uniformity_exemption
+            growing_member
             if [[ $failed -gt 0 ]]; then
                 printf 'REFUSED  %d check(s) failed, which is the point\n' "$failed"
             else
@@ -415,6 +428,64 @@ PY
     printf '\nmutations: %d run, %d survived, %d could not be applied\n' \
         "${#MUTATIONS[@]}" "$survived" "$broken"
     [[ $survived -eq 0 && $broken -eq 0 ]]
+}
+
+growing_member() {
+    printf '== a member that demands its owner larger is filed, not walked ==\n'
+    local out err status exe=$build/growingmember
+
+    # (a) THE ORDINARY MEMBER STILL WORKS. Walking the growing signature is
+    #     what starts the chain; nothing else about the trait is affected.
+    err=$(timeout 300 "$fortressc" "$repo/fortressc/tests/growingmember.fss" \
+            -o "$exe" 2>&1 >/dev/null)
+    status=$?
+    out=$("$exe" 2>/dev/null)
+    if [[ $status -eq 0 && $out == 7 ]]; then
+        ok 'an ordinary member of a growing trait compiles, links and runs'
+    else
+        bad 'an ordinary member of a growing trait compiles, links and runs' \
+            "status $status, out [$out]: $err"
+    fi
+
+    # (b) AND CALLING THE CUT MEMBER NAMES THE MECHANISM. `has no field` is
+    #     what it said before Component::cuts was carried, and that names the
+    #     wrong thing on a member the source plainly declares.
+    err=$(timeout 300 "$fortressc" "$repo/fortressc/tests/growingmembercall.fss" \
+            --emit-obj -o /dev/null 2>&1 >/dev/null)
+    status=$?
+    if refused_cleanly "$status" && [[ $err == *'properly contain its own'* ]] \
+        && [[ $err != *'has no field'* ]]; then
+        ok 'calling the filed member is refused, and the diagnostic names it'
+    else
+        bad 'calling the filed member is refused, and the diagnostic names it' \
+            "status $status: $err"
+    fi
+
+    # (c) THE CORPUS WITNESS. It exists to test exactly this and says so.
+    err=$(timeout 300 "$fortressc" "$repo/ProjectFortress/tests/nestedInst.fss" \
+            -o "$build/nestedInst" 2>&1 >/dev/null)
+    status=$?
+    out=$("$build/nestedInst" 2>/dev/null | tr '\n' ' ')
+    if [[ $status -eq 0 && $out == 'Starting instantiation 1 ' ]]; then
+        ok 'nestedInst.fss compiles and prints the answer its source names'
+    else
+        bad 'nestedInst.fss compiles and prints the answer its source names' \
+            "status $status, out [$out]: $err"
+    fi
+
+    # (d) A GENERIC METHOD'S ARROW MAY NAME ITS OWNER'S STATIC PARAMETER. A
+    #     static parameter is a NAME, not a type; rewriting an unstamped
+    #     signature reported `unknown type E` against a type never meant to
+    #     exist. Pre-existing, and the growing-member cut is what reached it.
+    err=$(timeout 300 "$fortressc" "$repo/fortressc/tests/arrowstaticparam.fss" \
+            --emit-obj -o /dev/null 2>&1 >/dev/null)
+    status=$?
+    if [[ $status -eq 0 ]]; then
+        ok 'body: E->R inside a generic method on a generic trait is well formed'
+    else
+        bad 'body: E->R inside a generic method on a generic trait is well formed' \
+            "status $status: $err"
+    fi
 }
 
 # ----------------------------------------------------------------- main
@@ -441,6 +512,7 @@ case "${1:-}" in
         determinism
         refusals
         uniformity_exemption
+        growing_member
         ;;
 esac
 

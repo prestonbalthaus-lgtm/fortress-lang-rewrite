@@ -151,7 +151,24 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # names: `Fortress.SIUnits` writes `dim Mass default kilogram` and kilogram is
 # `gram` with an SI prefix, which is not generated; `dimensionUnitDecl.fss`
 # writes `dim Mass default Kilogram` with no such unit declared anywhere.
-OBJECT_FLOOR=295
+# THE GROWING-MEMBER CUT: 334 objects, 63 apis. ONE file, zero lost, and the IR
+# body of all 397 modules that compiled before is BYTE FOR BYTE unchanged --
+# which is the acceptance test, not this count.
+#   ProjectFortress/tests/nestedInst.fss   runs, exit 0
+# That file exists to test exactly this and says so: "We want to support
+# polymorphic recursion without falling off a cliff instantiating types with
+# ever deeper nesting. This is extracted from the FingerTree code."
+# It was NOT a budget that wanted raising. `Library/FortressLibrary.fsi:1138`
+# declares `getter indexValuePairs(): Indexed[\(I,E),I\]` on
+# `trait Indexed[\E,I\]`, and a trace of the instantiation queue put 793 of
+# the 4096 on that single `Indexed -> Indexed` edge.
+#
+# AND RUNNING THAT ONE GAINED FILE IS WHAT FOUND THE GETTER DEFECT. It printed
+# a blank line where its own source says "1": every accessor was skipped by the
+# inferred-return fixpoint, so a getter with an omitted return type returned
+# the Void placeholder at exit 0. The count read 397 either way. A compile-count
+# check would have called this milestone clean.
+OBJECT_FLOOR=296
 API_FLOOR=63
 
 passed=0
