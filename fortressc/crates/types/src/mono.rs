@@ -1491,11 +1491,11 @@ const NOTHING_ELSE_IS_A_SIGNATURE: bool = false;
 /// therefore what makes the dispatch tables built after this pass correct.
 ///
 /// DEV-15, AUTHORIZED 2026-08-22: THE RULE IS RELAXED FOR A PAIR OF BODILESS
-/// DECLARATIONS AND FOR NOTHING ELSE. `Library/FortressLibrary.fsi:757-758`
+/// DECLARATIONS AND FOR NOTHING ELSE. `Library/FortressLibrary.fsi:797-798`
 /// declares `__cond[\E,R\]` beside `__cond[\E\]` and 1.0 calls that an
 /// error, so the SHIPPED library is not conformant with the SHIPPED
 /// specification; `BIG //`, `#` and `:` are three more pairs, and
-/// `CompilerLibrary/FortressLibrary.fsi:764-765` repeats the first. The
+/// `CompilerLibrary/FortressLibrary.fsi:804-805` repeats the first. The
 /// deviation is content-based and earned by writing no body -- see
 /// [`is_signature_only`] for why that is the safe boundary and what has to be
 /// re-argued if it moves.

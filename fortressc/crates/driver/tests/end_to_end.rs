@@ -3359,7 +3359,7 @@ fn the_bootstrap_root_pays_758_by_content_and_not_by_path() {
 }
 
 /// DEV-15, AUTHORIZED 2026-08-22. `copiedcond.fsi` is
-/// `FortressLibrary.fsi:757-758`'s shape copied verbatim into a file OUTSIDE
+/// `FortressLibrary.fsi:797-798`'s shape copied verbatim into a file OUTSIDE
 /// `Library/`, and it is now ACCEPTED -- not because of where it sits but
 /// because both declarations are bodiless. This test asserted the opposite
 /// until the deviation landed, and it is kept rather than deleted because it is
