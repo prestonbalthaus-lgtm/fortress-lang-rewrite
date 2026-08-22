@@ -6214,12 +6214,42 @@ impl Checker {
         result
     }
 
+    /// `()` IS A SUBTYPE OF `Any` AND STILL HAS NO REPRESENTATION, and this
+    /// function is the whole of the difference. `types-vals-vars.tex:469-471` makes
+    /// `Any` its only supertype, so `is_subtype` says yes -- and a trait slot is a
+    /// tagged pointer, so there is nothing to put in one. The same split the
+    /// registry already draws for a tuple: RESOLVING IS NOT HAVING A
+    /// REPRESENTATION.
+    ///
+    /// WITHOUT IT `f(x: Any) = 1` called as `f(())` reached codegen and exited 70
+    /// on `a void expression used as a value` -- user source crashing the compiler.
+    /// `fortressc/tests/badvoidvalue.fss` is that program.
+    ///
+    /// IT ASKS FOR THE SUBTYPE RELATION TOO, and that is not redundant: without
+    /// it this arm fires ahead of `Mismatch` for EVERY wider slot, and
+    /// `expected ZZ32, found ()` -- which names the type the reader wants to
+    /// see -- becomes a sentence about representations. The only slot the
+    /// subtype test now admits is `Any`, so that is the only one this has
+    /// anything to say about.
+    ///
+    /// A FUNCTION OF ITS OWN so the mutation table has a line to invert; a
+    /// match guard is not a line a `from|to` row can reach.
+    fn void_needs_a_representation(&self, found: Type, want: Type) -> bool {
+        found == Type::Void && want != Type::Void && self.registry.is_subtype(found, want)
+    }
+
     /// Checks a computed type against its context. This is where the
     /// no-implicit-widening rule is enforced, and it never converts anything:
     /// an object in a trait slot stays the object it was.
     fn require(&self, found: Type, expected: Option<Type>, span: Span) -> Checked<()> {
         match expected {
             None => Ok(()),
+            Some(want) if self.void_needs_a_representation(found, want) => {
+                Err(TypeError::VoidNotStorable {
+                    span,
+                    position: "a slot of a wider type",
+                })
+            }
             Some(want) if self.registry.is_subtype(found, want) => Ok(()),
             Some(want) if want.is_widening_of(found) => Err(TypeError::ImplicitWideningRejected {
                 span,

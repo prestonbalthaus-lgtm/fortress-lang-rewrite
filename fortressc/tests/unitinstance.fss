@@ -1,0 +1,10 @@
+component unitinstance
+export Executable
+
+(* A GENERIC MONOMORPHIZED AT `()`, with a body, linked and run. The parameter
+   is dropped at the substitution, so the call site writes no argument. *)
+f[\T extends Any\](x: T): ZZ32 = 7
+
+run(): () = println(f[\()\]())
+
+end

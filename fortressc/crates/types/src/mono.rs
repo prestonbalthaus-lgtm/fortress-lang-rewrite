@@ -282,7 +282,7 @@ impl<'a> Expander<'a> {
                 modifiers: template.decl.modifiers,
                 name: request.mangled.clone(),
                 static_params: Vec::new(),
-                params: self.params(&template.decl.params, &subst)?,
+                params: self.functional_params(&template.decl.params, &subst)?,
                 return_type: match &template.decl.return_type {
                     Some(t) => Some(self.ty(t, &subst)?),
                     None => None,
@@ -639,6 +639,17 @@ impl<'a> Expander<'a> {
         Ok(out)
     }
 
+    /// A FUNCTIONAL's parameters: the same substitution, and then `()` DROPPED.
+    fn functional_params(
+        &mut self,
+        list: &[Param],
+        subst: &Subst,
+    ) -> Result<Vec<Param>, TypeError> {
+        let mut out = self.params(list, subst)?;
+        out.retain(|p| !is_void_parameter(p));
+        Ok(out)
+    }
+
     // ------------------------------------------------------ declarations
 
     fn decl(
@@ -668,7 +679,7 @@ impl<'a> Expander<'a> {
                 modifiers: f.modifiers,
                 name: rename.unwrap_or(&f.name).to_owned(),
                 static_params: Vec::new(),
-                params: self.params(&f.params, subst)?,
+                params: self.functional_params(&f.params, subst)?,
                 return_type: match &f.return_type {
                     Some(t) => Some(self.ty(t, subst)?),
                     None => None,
@@ -794,7 +805,7 @@ impl<'a> Expander<'a> {
                     modifiers: m.modifiers,
                     name: m.name.clone(),
                     static_params: Vec::new(),
-                    params: self.params(&m.params, subst)?,
+                    params: self.functional_params(&m.params, subst)?,
                     return_type: match &m.return_type {
                         Some(t) => Some(self.ty(t, subst)?),
                         None => None,
@@ -1126,7 +1137,7 @@ impl<'a> Expander<'a> {
                 body,
                 span,
             } => Expr::Lambda {
-                params: self.params(params, subst)?,
+                params: self.functional_params(params, subst)?,
                 return_type: match return_type {
                     Some(t) => Some(self.ty(t, subst)?),
                     None => None,
@@ -1560,6 +1571,38 @@ fn check_uniformity(component: &Component) -> Result<(), TypeError> {
         }
     }
     Ok(())
+}
+
+/// A `()` PARAMETER IS NO PARAMETER. `basic/overloading.tex:125` -- "a
+/// functional has a single parameter, which may be a tuple" -- and `()` is the
+/// empty tuple, so a functional written with one is a functional of no
+/// arguments. Monomorphizing `Condition[\E18\]` at `()` is what needs it:
+/// `getDefault(defaultValue: E18)` becomes `getDefault()`, and without this it
+/// is `()` has no value, so it cannot be stored in a parameter.
+///
+/// FUNCTIONALS ONLY. An object's value parameters are its FIELDS, they decide a
+/// layout, and dropping one silently changes a constructor's arity -- so they
+/// keep the refusal until something measures a use for them.
+///
+/// EVERY `()` PARAMETER AND NOT JUST A SOLE ONE, WHICH IS A NAMED DEVIATION
+/// (DEV-16). The citation covers the sole case exactly; 1.0 keeps a `()`
+/// BESIDE other parameters as a real value, and
+/// `ProjectFortress/other_compiler_tests/VoidArrowTest2.fss` is the witness --
+/// it declares `oneVoidOneString(x: (), y: String)` and calls it `((),"test")`.
+/// We have no representation for a `()` value, so it could not be called here
+/// either way.
+///
+/// THE NARROW RULE WAS SPIKED AND DOES NOT PAY: restricting the drop to a sole
+/// parameter leaves `CompilerBuiltin.fsi:453` exactly where it was, because
+/// `Condition[\()\]`'s `reduce(_:(E18,E18)->E18, id:E18)` puts a `()` beside
+/// an arrow. Measured, not argued.
+///
+/// IT CANNOT PRODUCE A WRONG ANSWER, only a wrong-shaped refusal: a call whose
+/// argument list still writes the `()` fails the arity check and says
+/// `takes 0 argument(s), found 1`, which is a diagnostic naming the wrong
+/// thing. That is DEF-VOIDARITY in the state file.
+fn is_void_parameter(p: &Param) -> bool {
+    matches!(p.ty, TypeRef::Unit { .. })
 }
 
 fn members_of(decl: &Decl) -> &[Member] {

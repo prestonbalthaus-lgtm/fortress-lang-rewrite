@@ -1,0 +1,12 @@
+component unitparam
+export Executable
+
+(* `basic/functions.tex:148-151`: no bindings, `()`, is EQUIVALENT to a single
+   plain binding `(_: ())`. So this declaration and `unitnoparam.fss`'s are the
+   same declaration, and the gate proves it by comparing the emitted module
+   rather than by both compiling. *)
+f(x: ()): ZZ32 = 1
+
+run(): () = println(f())
+
+end

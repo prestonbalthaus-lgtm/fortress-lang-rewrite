@@ -308,7 +308,7 @@ RUN_TIMEOUT     = 20
 # values and the arrow work took the pass set up by two. Raising it is what
 # stops a top-level initializer silently not running again -- the exact defect
 # `badvaluebinding.fss` was written to guard, which no list can see.
-PASS_FLOOR = 342
+PASS_FLOOR = 343
 
 args, opt = sys.argv[1:], {}
 i = 0

@@ -1,8 +1,0 @@
-component badvoidparam
-export Executable
-
-f(x: ()): ZZ32 = 1
-
-run(): () = ()
-
-end

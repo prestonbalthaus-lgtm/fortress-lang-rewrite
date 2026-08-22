@@ -1,0 +1,11 @@
+component voidnotobject
+export Executable
+
+(* `()` sits IMMEDIATELY under `Any` and NOT under `Object`
+   (`types-vals-vars.tex:136`, `basic-lib/objects.tex:20`). Without this fixture
+   nothing refuses widening the subtype rule from `Any` to every trait. *)
+g[\T extends Object\](x: ZZ32): ZZ32 = x
+
+run(): () = println(g[\()\](1))
+
+end

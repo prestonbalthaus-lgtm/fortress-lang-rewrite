@@ -92,6 +92,14 @@ impl Registry {
             // without anyone having decided. The day tuple values land, this
             // arm is where element-wise subtyping goes.
             Type::Tuple(_) => false,
+            // `()` IS AN IMMEDIATE SUBTYPE OF `Any` AND OF NOTHING ELSE.
+            // `basic/types-vals-vars.tex:469-471`: "The type `()` is the type
+            // of the value `()`. Its only supertype (other than itself) is
+            // `Any`, and it excludes every other type." :136 lists the
+            // immediate subtypes of `Any` as tuple types, arrow types, `()`
+            // and `Object` -- so it does NOT sit under `Object`, and writing it
+            // that way would put it below every user trait's root.
+            Type::Void => wanted == "Any",
             _ => false,
         }
     }

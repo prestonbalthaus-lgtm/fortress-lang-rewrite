@@ -8,6 +8,19 @@
 # parenthesises rather than a one-element tuple, and that the three parsed but
 # unimplemented forms halt with exit 1 rather than 70.
 #
+# 2026-08-22, `()` AS A STATIC ARGUMENT: ONE OF THOSE FOUR CHANGED SIDES.
+# `basic/functions.tex:148-151` says no bindings, `()`, is EQUIVALENT to a
+# single plain binding `(_: ())` -- so `f(x: ()): ZZ32` is not an error, it is
+# `f(): ZZ32`, and `badvoidparam.fss` is now `unitparam.fss` and an ACCEPTANCE.
+# Proved by comparing its module against the other spelling's, not by both
+# compiling.
+#
+# WHAT DID NOT CHANGE SIDES IS THE VALUE. `types-vals-vars.tex:469-471` makes
+# `Any` the only supertype of `()`, so the subtype test now says yes -- and a
+# trait slot is a tagged pointer with nothing to put in it. `badvoidvalue.fss`
+# is the program that found this by exiting 70, and it is why the refusal moved
+# rather than being deleted.
+#
 # Exit 70 is what makes this gate specific. The driver reserves it for compiler
 # bugs, and a gate that accepted any nonzero status would be green on exactly
 # the defect this milestone fixed.
@@ -161,11 +174,77 @@ refusals() {
             bad "$name.fss is refused" "status $status: $err"
         fi
     done <<'CASES'
-badvoidparam|cannot be stored in a parameter
+badvoidvalue|cannot be stored in a slot of a wider type
+voidnotobject|() does not satisfy `T extends Object`
 badtupletype|cannot be the result of a function with a body
 badarrowtype|an arrow type is not implemented
 badtupleexpr|a tuple expression is not implemented
 CASES
+}
+
+# A `()` PARAMETER IS NO PARAMETER, and the two spellings must generate THE SAME
+# MODULE. Both compiling proves nothing: a compiler that kept the parameter and
+# passed an undef would compile both too. The component names are deliberately
+# equal so even the module identity does not differ.
+unit_parameter_is_no_parameter() {
+    printf '== a `()` parameter is no parameter ==\n'
+    local a b
+    if ! a=$("$fortressc" "$repo/fortressc/tests/unitparam.fss" --emit-ir 2>/dev/null); then
+        bad 'f(x: ()) compiles' \
+            "$("$fortressc" "$repo/fortressc/tests/unitparam.fss" --emit-ir 2>&1 >/dev/null)"
+        return
+    fi
+    ok 'f(x: ()) compiles'
+    if ! b=$("$fortressc" "$repo/fortressc/tests/unitnoparam.fss" --emit-ir 2>/dev/null); then
+        bad 'f() compiles'
+        return
+    fi
+    if same_ir "$a" "$b"; then
+        ok 'f(x: ()) and f() generate the same module'
+    else
+        bad 'f(x: ()) and f() generate the same module' \
+            "$(diff <(printf '%s' "$a") <(printf '%s' "$b") | head -6 | tr '\n' ' ')"
+    fi
+}
+
+# `Condition[\()\]` IN TEN LINES. The wall this milestone cleared is in a
+# 754-line library file; reproduced here so a failure names the FEATURE. And
+# then the library file itself, because a fixture that passes while the real
+# thing does not is a gate measuring itself.
+unit_as_a_static_argument() {
+    printf '== `()` as a static argument ==\n'
+    local err status
+    err=$("$fortressc" "$repo/fortressc/tests/condunit.fsi" --emit-obj -o /dev/null 2>&1 >/dev/null)
+    status=$?
+    if [[ $status -eq 0 ]]; then
+        ok 'a trait instantiated at `()` checks'
+    else
+        bad 'a trait instantiated at `()` checks' "status $status: $err"
+    fi
+
+    err=$("$fortressc" "$repo/ProjectFortress/LibraryBuiltin/CompilerBuiltin.fsi" \
+            --emit-obj -o /dev/null 2>&1 >/dev/null)
+    status=$?
+    if [[ $status -eq 0 ]]; then
+        ok 'CompilerBuiltin.fsi checks clean, all four `Condition[\()\]` intact'
+    else
+        bad 'CompilerBuiltin.fsi checks clean' "status $status: $err"
+    fi
+
+    if ! "$fortressc" "$repo/fortressc/tests/unitinstance.fss" -o "$build/unitinstance" \
+            2>"$build/unitinstance.err"; then
+        bad 'a generic instantiated at `()` compiles and links' \
+            "$(cat "$build/unitinstance.err")"
+        return
+    fi
+    local out
+    out=$("$build/unitinstance" 2>&1)
+    status=$?
+    if [[ $status -eq 0 && $out == '7' ]]; then
+        ok 'a generic instantiated at `()` compiles, links and RUNS'
+    else
+        bad 'a generic instantiated at `()` compiles, links and RUNS' "status $status: $out"
+    fi
 }
 
 # ----------------------------------------------------------------- mutations
@@ -175,6 +254,13 @@ CASES
 
 MUTATIONS=(
   'crates/types/src/lib.rs|params.push(self.storable(&p.ty, "a parameter")?);|params.push(self.registry.resolve(&p.ty)?);|drop the void guard on parameters'
+  # `()` AS A STATIC ARGUMENT, THREE AXES. Dropping the parameter, `()` being a
+  # subtype of `Any`, and `()` still having no representation are three separate
+  # decisions and no one row reaches two of them.
+  'crates/types/src/mono.rs|matches!(p.ty, TypeRef::Unit { .. })|matches!(p.ty, TypeRef::Tuple { .. })|stop dropping a `()` parameter at the substitution'
+  'crates/types/src/registry.rs|Type::Void => wanted == "Any",|Type::Void => false,|put `()` under nothing, so no bound it is written against discharges'
+  'crates/types/src/registry.rs|Type::Void => wanted == "Any",|Type::Void => true,|put `()` under EVERY trait rather than under `Any` alone'
+  'crates/types/src/lib.rs|found == Type::Void && want != Type::Void && self.registry.is_subtype(found, want)|found != Type::Void && want != Type::Void && self.registry.is_subtype(found, want)|let a `()` VALUE into a wider slot, which has nothing to put there'
   'crates/parser/src/lib.rs|if elems.len() == 1 {|if false {|fold a one-element parenthesised type into Tuple'
   'crates/parser/src/lib.rs|return Ok(TypeRef::Tuple { elems, span });|return Ok(TypeRef::Named { name: "ZZ32".to_owned(), args: Vec::new(), span });|make a tuple type silently become ZZ32'
 )
@@ -232,7 +318,8 @@ PY
             rm -rf "$build"; mkdir -p "$build"
             passed=0; failed=0
             compile >/dev/null 2>&1
-            runs; parens; refusals
+            runs; parens; unit_parameter_is_no_parameter
+            unit_as_a_static_argument; refusals
             if [[ $failed -gt 0 ]]; then
                 printf 'REFUSED  %d check(s) failed, which is the point\n' "$failed"
             else
@@ -267,6 +354,8 @@ case "${1:-}" in
         compile
         runs
         parens
+        unit_parameter_is_no_parameter
+        unit_as_a_static_argument
         refusals
         ;;
 esac

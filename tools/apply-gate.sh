@@ -270,8 +270,10 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # DEV-15, 2026-08-22: `ProjectFortress/BirdyLib/Tuple.fsi` -- three bodiless
 # `first` declarations at three static arities. 66 apis check; the api floor has
 # no slack, so it rises with the count.
+# `()` AS A STATIC ARGUMENT, same day: `ProjectFortress/LibraryBuiltin/
+# CompilerBuiltin.fsi`, the bootstrap root's own root. 67.
 OBJECT_FLOOR=321
-API_FLOOR=66
+API_FLOOR=67
 
 passed=0
 failed=0

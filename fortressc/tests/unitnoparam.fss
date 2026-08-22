@@ -1,0 +1,11 @@
+component unitparam
+export Executable
+
+(* The other spelling of `unitparam.fss`. The component NAME is deliberately the
+   same: the module identity is the one thing the IR comparison has to let
+   differ, and keeping it equal removes even that. *)
+f(): ZZ32 = 1
+
+run(): () = println(f())
+
+end

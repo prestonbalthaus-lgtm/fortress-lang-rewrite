@@ -1,0 +1,13 @@
+component badvoidvalue
+export Executable
+
+(* `()` IS A SUBTYPE OF `Any` AND HAS NO REPRESENTATION.
+   `types-vals-vars.tex:469-471` makes `Any` its only supertype, so the subtype
+   test says yes -- and a trait slot is a tagged pointer with nothing to put in
+   it. This reached codegen and exited 70 while the `()` static argument was
+   being built; it must be a DIAGNOSTIC. *)
+f(x: Any): ZZ32 = 1
+
+run(): () = println(f(()))
+
+end

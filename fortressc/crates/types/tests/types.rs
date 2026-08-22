@@ -1229,10 +1229,45 @@ fn the_unit_type_resolves_to_void() {
     assert_eq!(c.functions.first().map(|f| f.return_type), Some(Type::Void));
 }
 
+/// A `()` PARAMETER IS NO PARAMETER, and this test asserted the opposite until
+/// 2026-08-22. `basic/functions.tex:148-151`: "it is permitted to have a single
+/// plain binding, or to have no bindings. The latter case, `()`, is considered
+/// equivalent to a single plain binding of the ignored identifier `_` of type
+/// `()`, that is, `(_: ())`." The two spellings are one declaration, so the one
+/// with the binding written out cannot be an error.
 #[test]
-fn a_unit_parameter_is_refused() {
-    match type_error("component t\nf(x: ()): ZZ32 = 1\nend\n") {
-        TypeError::VoidNotStorable { position, .. } => assert_eq!(position, "a parameter"),
+fn a_unit_parameter_is_no_parameter() {
+    let c = typed("component t\nf(x: ()): ZZ32 = 1\nend\n");
+    let f = c
+        .functions
+        .iter()
+        .find(|f| f.name == "f")
+        .map(|f| f.params.len());
+    assert_eq!(f, Some(0), "the `()` parameter is dropped, not stored");
+}
+
+/// AND THE BINDING IS GONE WITH IT. Nothing may read `x`, because there is no
+/// `x`: the whole point of the rule is that the declaration means the same
+/// thing as `f(): ZZ32`.
+#[test]
+fn a_unit_parameter_leaves_no_binding_behind() {
+    match type_error("component t\nf(x: ()): ZZ32 = do\n  ignore = x\n  1\nend\nend\n") {
+        TypeError::UnknownName { name, .. } => assert_eq!(name, "x"),
+        other => panic!("expected UnknownName, got {other:?}"),
+    }
+}
+
+/// A `()` VALUE STILL HAS NO REPRESENTATION, and that is a different question
+/// from whether `()` is a subtype. `types-vals-vars.tex:469-471` makes `Any`
+/// its only supertype, so `is_subtype` says yes -- and a trait slot is a tagged
+/// pointer with nothing to put in it. Refused BY NAME rather than reaching
+/// codegen, which is where it exited 70 while this was being built.
+#[test]
+fn a_unit_value_in_a_wider_slot_is_refused() {
+    match type_error("component t\nf(x: Any): ZZ32 = 1\ng(): ZZ32 = f(())\nend\n") {
+        TypeError::VoidNotStorable { position, .. } => {
+            assert_eq!(position, "a slot of a wider type")
+        }
         other => panic!("expected VoidNotStorable, got {other:?}"),
     }
 }
