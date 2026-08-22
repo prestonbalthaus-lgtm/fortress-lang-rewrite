@@ -102,6 +102,23 @@ impl Elem {
     }
 }
 
+/// The type names this compiler knows WITHOUT a declaration, and the one list
+/// that says so.
+///
+/// THERE WERE FOUR OF THESE AND THEY DISAGREED. `mono.rs` listed all eight,
+/// `closure.rs` listed the first six, `Registry::resolve` special-cases
+/// `Array` and reads the trait table for the two roots, and each was written
+/// for its own pass. The disagreement was invisible until `Object` and `Any`
+/// became real types: `x: Object` resolved, and `f: ZZ32 -> Object` did not.
+///
+/// `Array` is here because `Array[\T\]` is written like a declared generic
+/// and resolved like a builtin. `Any` and `Object` are here because
+/// `Checker::new` seeds them as root traits; they come out together on the day
+/// import resolution can supply them from `LibraryBuiltin/AnyType.fss`.
+pub(crate) const BUILTIN_TYPE_NAMES: [&str; 8] = [
+    "ZZ32", "ZZ64", "RR64", "Boolean", "String", "Array", "Any", "Object",
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Type {
     ZZ32,

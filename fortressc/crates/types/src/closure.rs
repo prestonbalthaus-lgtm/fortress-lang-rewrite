@@ -40,6 +40,7 @@ use fortress_ast::{
 };
 
 use crate::error::TypeError;
+use crate::types::BUILTIN_TYPE_NAMES;
 
 /// The trait a `A -> B` parameter becomes, and the method every generated
 /// object implements. `$` cannot be lexed, so neither name can collide with
@@ -55,7 +56,7 @@ pub(crate) fn lower(component: &Component) -> Result<Component, TypeError> {
         functions: BTreeMap::new(),
         traits: BTreeMap::new(),
         objects: BTreeMap::new(),
-        known: BUILTIN_TYPES.iter().map(|s| (*s).to_owned()).collect(),
+        known: BUILTIN_TYPE_NAMES.iter().map(|s| (*s).to_owned()).collect(),
         lambdas: 0,
     };
     for decl in &component.decls {
@@ -84,14 +85,6 @@ pub(crate) fn lower(component: &Component) -> Result<Component, TypeError> {
 /// same type are the same key because `TypeRef::written` is canonical for the
 /// ground types this pass can see.
 type ArrowKey = (String, String);
-
-/// The scalar type names the checker knows without a declaration, plus the
-/// array constructor. A minted trait must not name anything else that the
-/// component does not declare: an abstract trait member's parameter types are
-/// resolved by nothing today, so an unknown name inside one would be accepted
-/// in silence -- and on master the same source was refused, because the arrow
-/// itself was.
-const BUILTIN_TYPES: [&str; 6] = ["ZZ32", "ZZ64", "RR64", "Boolean", "String", "Array"];
 
 struct Pass {
     /// Every top-level function, by name. A name may have several declarations:

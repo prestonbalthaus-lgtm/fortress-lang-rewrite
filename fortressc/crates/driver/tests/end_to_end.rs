@@ -2313,10 +2313,17 @@ fn a_postfix_operator_declaration_parses() {
 /// walking it, exactly as it already did for a generic method, so the chain
 /// never starts. See `Component::cuts`.
 ///
-/// The root now reaches :654, and the wall there has a KNOWN OWNER: `Any` as a
-/// root trait is seeded on `semantics/phase2` (d0e264c81) and is not on master.
-/// This test pins the wall so that merging that branch is what moves it, and
-/// nothing else moves it silently.
+/// THE WALL AT :654 HAS MOVED TWICE AND THIS TEST IS WHY EITHER MOVE WAS SEEN.
+/// It was `unknown type Any` -- the root trait, unseeded, which is what merging
+/// `semantics/phase2` answered. Merging it ALONE did not move this line: the
+/// arrow-lifting pass kept a SECOND list of the names the compiler knows
+/// without a declaration, and `Generator[\Any\]` at :1992 substitutes `Any`
+/// into `filter`'s arrow here. One shared `BUILTIN_TYPE_NAMES` answered that.
+///
+/// The wall is now `unknown type Char`, and it is a REAL missing feature rather
+/// than a plumbing disagreement: `trait String extends ZeroIndexed[\Char\]` at
+/// :2286 puts the character type into the same arrow, and character literals
+/// are out of the M1 subset -- 61 corpus files first-block on them.
 #[test]
 fn the_bootstrap_root_parses_in_full() {
     let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
@@ -2337,8 +2344,12 @@ fn the_bootstrap_root_parses_in_full() {
          a growing member is filed, not walked: {message}"
     );
     assert!(
-        message.contains("unknown type `Any`"),
-        "the remaining blocker should be the unseeded root trait: {message}"
+        !message.contains("unknown type `Any`") && !message.contains("unknown type `Object`"),
+        "the root traits are seeded and reach every pass; neither may be the wall: {message}"
+    );
+    assert!(
+        message.contains("unknown type `Char`"),
+        "the remaining blocker should be the character type: {message}"
     );
 }
 
@@ -3212,8 +3223,8 @@ fn the_executable_api_in_this_tree_takes_no_arguments() {
 }
 
 /// `Object` and `Any` are 1.0's root traits, seeded in `Checker::new` because
-/// nothing can import them yet. Measured +8 corpus files on the full sweep and
-/// +7 on `triage --real`; the recorded +7 predated a lot of tree movement.
+/// nothing can import them yet. Measured on the merged tree: 334 -> 346 corpus
+/// objects, zero lost, and no previously-compiling module's IR body moved.
 #[test]
 fn object_and_any_are_seeded_root_traits() {
     let binary = compile_fixture("objectany.fss", "objectany");
@@ -3243,4 +3254,45 @@ fn a_program_may_still_declare_any_itself() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+/// THE ROOT TRAITS IN ARROW POSITION, which is the one place they did not
+/// resolve. `x: Object` was fine and `f: Object -> ZZ32` was `unknown type
+/// Object`, because `closure.rs` kept its OWN list of the names the compiler
+/// knows without a declaration -- six, where `mono.rs` had eight.
+/// `Library/FortressLibrary.fsi:654` is the file that found it: `Generator[\Any\]`
+/// is written at :1992, so expansion substitutes `Any` into `filter`'s arrow
+/// and the arrow-lifting pass reported it as undeclared, at the member's span.
+#[test]
+fn a_root_trait_resolves_inside_an_arrow() {
+    let binary = compile_fixture("arrowroot.fss", "arrowroot");
+    let out = run(&binary);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "7\n9\n7\n");
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// One list, asked from both sides. The two passes cannot share a lookup --
+/// `mono` runs before `Checker::new` builds a registry and `closure` runs after
+/// -- so what they share is the NAMES, and this is the assertion that they do.
+#[test]
+fn the_builtin_type_names_agree_across_the_passes() {
+    let src = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../types/src/types.rs"),
+    )
+    .expect("types.rs");
+    assert!(
+        src.contains("pub(crate) const BUILTIN_TYPE_NAMES: [&str; 8]"),
+        "the shared list is what stops a fourth one being written"
+    );
+    for other in ["closure.rs", "mono.rs"] {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../types/src")
+            .join(other);
+        let body = std::fs::read_to_string(&path).expect("source");
+        assert!(
+            body.contains("BUILTIN_TYPE_NAMES"),
+            "{other} must read the shared list, not keep its own"
+        );
+    }
 }

@@ -171,7 +171,7 @@ compile() {
     printf '== compile ==\n'
     local name
     for name in dispatch specificity dottedmethod genericowner functionalmethod \
-                genericmethod prunedstamp; do
+                genericmethod prunedstamp arrowroot; do
         if "$fortressc" "$repo/fortressc/tests/$name.fss" -o "$build/$name" 2>"$build/$name.err"; then
             ok "$name.fss compiles and links"
         else
@@ -202,6 +202,26 @@ matrix() {
     else
         bad 'every cell reaches its own declaration' \
             "want: $(printf '%s' "$want" | tr '\n' ' ') | got: $(printf '%s' "$out" | tr '\n' ' ')"
+    fi
+}
+
+# THE TWO ROOT TRAITS. `Object` and `Any` are seeded rather than declared, and
+# nothing else in this gate would notice if the seeding stopped: every fixture
+# here declares its own hierarchy. Three positions, because the seed reaches
+# them by three different routes -- a plain parameter through `Registry::resolve`,
+# an object with NO `extends` clause through the object loop rather than the
+# trait closure, and an ARROW through `closure.rs`, which kept its own list of
+# builtin names until `BUILTIN_TYPE_NAMES` was shared.
+root_traits() {
+    printf '== the seeded root traits ==\n'
+    have "$build/arrowroot" 'a root trait resolves in three positions' || return
+    local out
+    out=$("$build/arrowroot" 2>&1)
+    if [[ $out == $'7\n9\n7' ]]; then
+        ok 'Object and Any resolve as a parameter, inside an arrow, and for a bare object'
+    else
+        bad 'Object and Any resolve in three positions' \
+            "want: 7 9 7 | got: $(printf '%s' "$out" | tr '\n' ' ')"
     fi
 }
 
@@ -434,6 +454,12 @@ MUTATIONS=(
   'crates/types/src/lib.rs|self.method_slots.insert((owner, index), slot);|self.method_slots.insert((owner, m.span.start), slot);|file a method slot under its span, which two instantiations share'
   'crates/types/src/lib.rs|concrete: m.body.is_some(),|concrete: true,|let a bodiless functional declaration be a dispatch target'
   'crates/types/src/mono.rs|if !self.generic_methods.contains(&name) {|if true {|stamp no generic method anywhere'
+  # THE TWO ROOT TRAITS, one row per route into them. The first keeps the array
+  # length at eight so the mutated compiler still builds -- a row that only made
+  # it fail to compile would be reported as a refusal for the wrong reason.
+  'crates/types/src/types.rs|"ZZ32", "ZZ64", "RR64", "Boolean", "String", "Array", "Any", "Object",|"ZZ32", "ZZ64", "RR64", "Boolean", "String", "Array", "ZZ32", "ZZ64",|take Object and Any out of the shared builtin name list'
+  'crates/types/src/lib.rs|supertraits.insert(intern("Object"));|supertraits.insert(intern("Any"));|stop putting an object with no extends clause under Object'
+  'crates/types/src/lib.rs|info.supertraits.insert(root_object);|info.supertraits.insert(root_any);|stop putting a user trait under Object'
   # RE-TARGETED at the consolidation. The row named the loop that built a
   # method stamp's substitution inline; D7 replaced it with `bind_static`, which
   # is the same binding for both stamp paths and is where the property lives
@@ -500,7 +526,7 @@ PY
             rm -rf "$build"; mkdir -p "$build"
             passed=0; failed=0
             compile >/dev/null 2>&1
-            matrix; runtime_type_wins; ambiguity; shape; methods; m3j
+            matrix; root_traits; runtime_type_wins; ambiguity; shape; methods; m3j
             if [[ $failed -gt 0 ]]; then
                 printf 'REFUSED  %d check(s) failed, which is the point\n' "$failed"
                 if [[ $label == drop* ]]; then
@@ -551,6 +577,7 @@ case "${1:-}" in
         preflight
         compile
         matrix
+        root_traits
         runtime_type_wins
         ambiguity
         shape

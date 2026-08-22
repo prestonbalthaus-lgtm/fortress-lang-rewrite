@@ -22,6 +22,7 @@ use fortress_ast::{
 };
 
 use crate::error::TypeError;
+use crate::types::BUILTIN_TYPE_NAMES;
 
 /// The total ceiling, per component. Depth and type-size limits are both
 /// insufficient on their own: an *acyclic* call graph of k+1 declarations, each
@@ -1494,12 +1495,7 @@ fn decl_name(decl: &Decl) -> &str {
 /// day import resolution can supply them from `LibraryBuiltin/AnyType.fss` and
 /// `CompilerBuiltin.fsi` and the seed is deleted with them.
 fn declared_type_names(component: &Component) -> BTreeSet<String> {
-    let mut names: BTreeSet<String> = [
-        "ZZ32", "ZZ64", "RR64", "Boolean", "String", "Array", "Any", "Object",
-    ]
-    .iter()
-    .map(|s| (*s).to_owned())
-    .collect();
+    let mut names: BTreeSet<String> = BUILTIN_TYPE_NAMES.iter().map(|s| (*s).to_owned()).collect();
     for decl in &component.decls {
         names.insert(decl_name(decl).to_owned());
     }

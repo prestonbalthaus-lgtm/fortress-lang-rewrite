@@ -1,0 +1,31 @@
+component arrowroot
+
+export Executable
+
+(* AN ARROW OVER THE TWO SEEDED ROOT TRAITS, which is the one position they did
+   not resolve in. `x: Object` was fine and `f: Object -> ZZ32` was `unknown
+   type Object`, because closure.rs kept its own six-name list of the types the
+   compiler knows without a declaration while mono.rs kept a different eight.
+   `Library/FortressLibrary.fsi:654` is the file that found it: `Generator[\Any\]`
+   is written at :1992, so expansion substitutes `Any` into `filter`'s arrow and
+   the pass that lifts arrows reported it as undeclared. *)
+
+trait Shape extends Object end
+object Dot extends {Shape} end
+
+(* NO `extends` CLAUSE, which is the case the trait closure cannot reach: it
+   walks `extends` edges and this object writes none. It is still an `Object`. *)
+object Bare end
+
+size(x: Object): ZZ32 = 7
+tag(x: Any): ZZ32 = 9
+
+measure(f: Object -> ZZ32, x: Object): ZZ32 = f(x)
+name(f: Any -> ZZ32, x: Any): ZZ32 = f(x)
+
+run(): () = do
+    println(measure(size, Dot))
+    println(name(tag, Dot))
+    println(measure(size, Bare))
+end
+end
