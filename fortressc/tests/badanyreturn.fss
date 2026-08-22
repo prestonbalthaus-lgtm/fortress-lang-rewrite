@@ -1,0 +1,22 @@
+component badanyreturn
+
+export Executable
+
+(* THE RESULT DIRECTION, and it is the silent one. A cell winner's return only
+   has to be a SUBTYPE of the static winner's, which `Any` as a top type makes
+   true of everything -- so the trait declares `Any`, the object leaves the
+   return to inference, and the caller reads a `String` pointer as a tagged
+   object. A `ZZ32` return is exit 70 because LLVM will not `ret i32` from a
+   `ptr` function; a `String` return COMPILED AND RAN and handed dispatch a tag
+   load out of the first four characters of the text. *)
+trait A
+    m(self): Any
+end
+object O extends A
+    m(self) = "hello"
+end
+
+g(x: A): Any = m(x)
+
+run(): () = println(1)
+end

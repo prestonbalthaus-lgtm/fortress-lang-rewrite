@@ -44,7 +44,7 @@ const REPOSITORY_PATH: [&str; 3] = [
 /// `CompilerBuiltin` is the one this compiler's own bootstrap needs -- it is
 /// what declares `RR32`, `RR64` and the numeric traits `FortressLibrary.fsi`
 /// stops on at :362 without ever writing an import for them.
-const IMPLICITLY_IMPORTED: &str = "CompilerBuiltin";
+const IMPLICITLY_IMPORTED: [&str; 2] = ["CompilerBuiltin", "FortressLibrary"];
 
 /// THE api HALF ONLY, AND THE COMPONENT HALF IS ARCHITECTURALLY OUT.
 /// Merged declarations land in `component.decls`: a merged OBJECT takes a
@@ -74,19 +74,30 @@ fn implicit_import(component: &Component, queue: &mut Vec<ImportDecl>) {
     if !component.is_api {
         return;
     }
-    if component.name == IMPLICITLY_IMPORTED {
-        return;
+    for name in IMPLICITLY_IMPORTED {
+        // `break` AND NOT `continue`, AND THAT ONE WORD IS THE LAYERING. The
+        // core apis are ordered here, and a core api implicitly imports the
+        // ones BELOW it and no more: `CompilerBuiltin` is the root and takes
+        // nothing, `FortressLibrary` takes the builtin (which is how `RR32`
+        // resolves in it without a written import), and every other file takes
+        // both. `continue` would hand the builtin an implicit import of
+        // `FortressLibrary` -- the REVERSE EDGE the api-first design exists to
+        // keep out, and apply-gate's "the builtin does not implicitly import
+        // itself" row caught it the first time it was written that way.
+        if component.name == name {
+            break;
+        }
+        queue.insert(
+            0,
+            ImportDecl {
+                api_name: name.to_owned(),
+                is_api: true,
+                items: ImportItems::OnDemand,
+                except: Vec::new(),
+                span: Span::new(0, 0),
+            },
+        );
     }
-    queue.insert(
-        0,
-        ImportDecl {
-            api_name: IMPLICITLY_IMPORTED.to_owned(),
-            is_api: true,
-            items: ImportItems::OnDemand,
-            except: Vec::new(),
-            span: Span::new(0, 0),
-        },
-    );
 }
 
 /// Loads the api a component EXPORTS. Imports and exports read the same source

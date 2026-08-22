@@ -1,0 +1,25 @@
+component anyreturn
+
+export Executable
+
+(* AND THE NEGATIVE. A genuine trait-typed result still travels through the
+   dispatch table -- two implementors, so the tree does not collapse to a
+   direct call and a real leaf function returns the pointer. *)
+trait A
+    m(self): A
+end
+object O extends A
+    m(self): A = self
+end
+object P extends A
+    m(self): A = self
+end
+
+g(x: A): A = m(x)
+
+run(): () = do
+    q = g(O)
+    r = g(P)
+    println(7)
+end
+end

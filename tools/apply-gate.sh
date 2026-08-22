@@ -297,8 +297,15 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # API_FLOOR MOVES TO 80 AND THE OBJECT FLOOR STILL DOES NOT MOVE, for the
 # reason two entries above: no accepted must-fail is inside the api count, and
 # all 38 of them are inside the object one.
+#
+# THE IMPLICIT CORE-api IMPORT, 2026-08-23: 388 objects and 114 apis.
+# `basic/components/source-code.tex:305` -- "Every component implicitly imports
+# the Fortress core APIs". THIRTY-FOUR apis and no objects, which is what an
+# api-side milestone looks like, and twenty-two of them are `Library/` files
+# that were waiting on `ZeroIndexed`, `LexicographicOrder` and
+# `MonoidReduction`. Nothing lost.
 OBJECT_FLOOR=321
-API_FLOOR=80
+API_FLOOR=114
 
 passed=0
 failed=0
@@ -380,6 +387,7 @@ juxtnullary|42|`answer ()` is the zero-argument call
 chainmixed|YES|a chain mixes equivalence with one ordering sense
 rr64literal|1.75|an integer literal in RR64 position is a float constant
 varvalue|15\n101\n7|a `var` top-level value is storage and an assignment target
+anyreturn|7|a trait-typed result still travels through the dispatch table
 CASES
 }
 
@@ -437,6 +445,8 @@ badlocalvarnoinit.fss|is declared with no initializer
 badvarnotype.fss|a mutable top-level value must write its type
 badanyscalar.fss|has no representation in one
 baddeclonlyoverload.fss|`g` is ambiguous for (Both)
+badanyreturn.fss|a result of a wider type
+badvoidarg.fss|`()` has no value, so it cannot be stored in a parameter of a wider type
 CASES
 
     # `badvaluebinding.fss` LEFT THIS LIST when component-level values landed,
@@ -528,6 +538,15 @@ implicit_builtin_import() {
     printf '== the implicit builtin import ==\n'
     local err status out
 
+    err=$("$fortressc" "$repo/fortressc/tests/implicitcore.fsi" \
+            --emit-obj -o /dev/null 2>&1 >/dev/null)
+    status=$?
+    if [[ $status -eq 0 ]]; then
+        ok 'an api names `Maybe` and `RR32` with no import written'
+    else
+        bad 'an api names `Maybe` and `RR32` with no import written' "status $status: $err"
+    fi
+
     err=$("$fortressc" "$repo/fortressc/tests/implicitbuiltin.fsi" \
             --emit-obj -o /dev/null 2>&1 >/dev/null)
     status=$?
@@ -610,6 +629,13 @@ implicit_builtin_import() {
 }
 
 MUTATIONS=(
+  # THE IMPLICIT CORE-api IMPORT, two axes. The layering is one WORD.
+  'crates/driver/src/resolve.rs|const IMPLICITLY_IMPORTED: [&str; 2] = ["CompilerBuiltin", "FortressLibrary"];|const IMPLICITLY_IMPORTED: [&str; 1] = ["CompilerBuiltin"];|implicitly import the builtin and NOT the library above it'
+  'crates/driver/src/resolve.rs|const IMPLICITLY_IMPORTED: [&str; 2] = ["CompilerBuiltin", "FortressLibrary"];|const IMPLICITLY_IMPORTED: [&str; 2] = ["FortressLibrary", "CompilerBuiltin"];|order the core apis the other way, so the builtin takes the library'
+  # THE RESULT DIRECTION. Its own line because the parameter guard on the line
+  # above it does NOT speak for it -- a cell winner returning a `String` where
+  # the caller reads `Any` compiled AND RAN.
+  'crates/types/src/lib.rs|self.result_fits_its_slot(winner.returns, returns, span)?;|let _unguarded = returns;|let a result with no representation out of a dispatch cell'
   # `Any` AS A TOP TYPE, three axes. The first two are the two halves of one
   # decision -- the TYPE says yes and the STORAGE says no -- and inverting
   # either alone must go red.
@@ -627,7 +653,10 @@ MUTATIONS=(
   # exposed are two more. Every target line is bar-free on purpose.
   'crates/driver/src/resolve.rs|if !component.is_api {|if true {|never implicitly import the builtins'
   'crates/driver/src/resolve.rs|if !component.is_api {|if false {|implicitly import the builtins into COMPONENTS too'
-  'crates/driver/src/resolve.rs|if component.name == IMPLICITLY_IMPORTED {|if false {|let the builtin implicitly import itself'
+  # RETARGETED 2026-08-23: the guard is per-name now, and it is a `break` --
+  # a core api takes the ones BELOW it and no more. Dropping it lets the
+  # builtin implicitly import itself AND the layer above it.
+  'crates/driver/src/resolve.rs|if component.name == name {|if false {|let a core api implicitly import itself and the layer above it'
   'crates/driver/src/resolve.rs|let key = (name.clone(), import.items.clone());|let key = (name.clone(), ImportItems::OnDemand);|key the resolver on the api name alone again'
   'crates/types/src/comprises.rs|if r.is_own_static(sub) {|if false {|read a static parameter in a comprises clause as a type name'
   'crates/types/src/comprises.rs|if !r.clause_is_ours() {|if false {|report a merged comprises clause against the importing file'

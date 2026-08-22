@@ -5084,6 +5084,7 @@ impl Checker {
                     required: returns,
                 });
             }
+            self.result_fits_its_slot(winner.returns, returns, span)?;
             table.push((tuple, winner.symbol.clone()));
         }
 
@@ -6353,14 +6354,54 @@ impl Checker {
         span: Span,
     ) -> Checked<()> {
         for (index, (found, want)) in statics.iter().zip(params).enumerate() {
+            let at = spans.get(index).copied().unwrap_or(span);
+            // `()` HAS THE SAME HOLE AND IT PREDATES `Any`-as-top. `require`
+            // has carried `void_needs_a_representation` since the `()`
+            // milestone, and `require` only sees an argument when `agreed`
+            // hands the position a hint -- so `f(x: Any)` ALONE refused
+            // `f(())` and `f(x: Any)` beside `f(x: O)` exited 70 on it, on the
+            // binary before this one too.
+            if self.void_needs_a_representation(*found, *want) {
+                return Err(TypeError::VoidNotStorable {
+                    span: at,
+                    position: "a parameter of a wider type",
+                });
+            }
             if !self.needs_a_trait_representation(*found, *want) {
                 continue;
             }
             return Err(TypeError::NoTraitRepresentation {
-                span: spans.get(index).copied().unwrap_or(span),
+                span: at,
                 found: *found,
                 required: *want,
                 position: "a parameter of a wider type",
+            });
+        }
+        Ok(())
+    }
+
+    /// THE RESULT DIRECTION, and it is not symmetric with the argument one.
+    /// A cell winner's return only has to be a SUBTYPE of the static winner's,
+    /// which `Any` now makes true of everything -- so a method the trait
+    /// declares `Any` and the object leaves to inference returns a `String`, or
+    /// a `ZZ32`, or a `Thread` handle, and the caller reads it as a tagged
+    /// pointer. Every face of that was measured: a `ZZ32` return is exit 70
+    /// (LLVM rejects `ret i32` from a `ptr` function), a `String` return
+    /// COMPILES AND RUNS and hands dispatch a tag load out of the first four
+    /// characters, and a `Thread` return reads the C control block.
+    fn result_fits_its_slot(&self, found: Type, want: Type, span: Span) -> Checked<()> {
+        if self.void_needs_a_representation(found, want) {
+            return Err(TypeError::VoidNotStorable {
+                span,
+                position: "a result of a wider type",
+            });
+        }
+        if self.needs_a_trait_representation(found, want) {
+            return Err(TypeError::NoTraitRepresentation {
+                span,
+                found,
+                required: want,
+                position: "a result of a wider type",
             });
         }
         Ok(())

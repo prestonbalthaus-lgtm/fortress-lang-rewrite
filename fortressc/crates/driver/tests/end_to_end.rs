@@ -2920,6 +2920,49 @@ fn an_any_parameter_still_takes_an_object_and_does_not_win_from_a_scalar() {
     assert_eq!(String::from_utf8_lossy(&out.stdout), "1\n2\n4\n3\n");
 }
 
+/// THE RESULT DIRECTION, and it is the one that ran. A cell winner's return
+/// only has to be a SUBTYPE of the static winner's, which `Any` as a top type
+/// makes true of everything: the trait declares `Any`, the object leaves the
+/// return to inference, and the caller reads a `String` pointer as a tagged
+/// object. A `ZZ32` return is exit 70 -- LLVM will not `ret i32` from a `ptr`
+/// function -- and a `String` return COMPILED, RAN and printed a number that
+/// was the first four characters of the text read as a tag.
+///
+/// FOUND BY AN ADVERSARIAL PROBE AND BY NOTHING ELSE: the corpus sweep was
+/// +5/-0 with zero crashes, and all four probe lenses hit this one.
+#[test]
+fn a_result_with_no_trait_representation_is_refused() {
+    let message = refusal("badanyreturn.fss");
+    assert!(
+        message.contains("a result of a wider type"),
+        "the RESULT direction is guarded separately from the parameter one: \
+         {message}"
+    );
+    assert!(message.contains("String is a subtype of Any"), "{message}");
+}
+
+/// AND THE NEGATIVE for that one too: a genuine trait-typed result still
+/// travels through the dispatch table. Two implementors, so the tree does not
+/// collapse to a direct call and a real leaf returns the pointer.
+#[test]
+fn a_trait_typed_result_still_travels_through_the_dispatch_table() {
+    let binary = compile_fixture("anyreturn.fss", "anyreturn");
+    let out = run(&binary);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "7\n");
+}
+
+/// `()` HAD THE SAME ARGUMENT-SIDE HOLE AND IT PREDATED `Any`-as-top.
+/// `require` has carried the `()` guard since the `()` milestone and `require`
+/// only sees an argument where `agreed` hands the position its parameter type
+/// -- so `f(x: Any)` ALONE refused `f(())`, and with a second candidate that
+/// disagrees this exited 70 on the binary before this one.
+#[test]
+fn void_in_a_parameter_of_a_wider_type_is_refused_after_dispatch_resolves() {
+    let message = refusal("badvoidarg.fss");
+    assert!(message.contains("`()` has no value"), "{message}");
+    assert!(message.contains("a parameter of a wider type"), "{message}");
+}
+
 /// `()` KEEPS ITS OWN DIAGNOSTIC. It has no value at all whatever the slot is,
 /// where a scalar has one of the wrong shape, and `VoidNotStorable` says so in
 /// the reader's words. The general rule excludes `Void` for exactly this.
@@ -2930,6 +2973,55 @@ fn void_in_a_wider_slot_still_says_it_has_no_value() {
         message.contains("`()` has no value"),
         "the void diagnostic may not be swallowed by the general \
          representation rule: {message}"
+    );
+}
+
+// -------------------------------------------- the implicit core-api import
+//
+// `basic/components/source-code.tex:305` -- "Every component implicitly imports
+// the Fortress core APIs; every fortress has at least one component
+// implementing all of these APIs."
+
+/// An api names `Maybe`, `ZeroIndexed` and `TotalComparison` -- all
+/// `FortressLibrary`'s -- and `RR32`, which is the builtin's, and writes no
+/// import at all.
+#[test]
+fn an_api_gets_the_core_apis_with_no_import_written() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(fixture("implicitcore.fsi"))
+        .arg("--emit-obj")
+        .arg("-o")
+        .arg("/dev/null")
+        .output()
+        .expect("could not run fortressc");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// AND THE CORE IS LAYERED, which is one word in `implicit_import`: `break`
+/// rather than `continue`. `CompilerBuiltin` is the root and takes nothing --
+/// handing it an implicit `FortressLibrary` is the REVERSE EDGE the api-first
+/// design exists to keep out. Asserted on the file itself, because the count of
+/// apis it resolves is the tell.
+#[test]
+fn the_builtin_does_not_implicitly_import_the_library_above_it() {
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(corpus("ProjectFortress/LibraryBuiltin/CompilerBuiltin.fsi"))
+        .arg("--emit-obj")
+        .arg("-o")
+        .arg("/dev/null")
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{message}");
+    assert!(
+        message.contains("resolved 2 api(s)"),
+        "the builtin resolves the two apis IT writes and nothing more; a third \
+         means the layer above was injected into it: {message}"
     );
 }
 
@@ -4324,11 +4416,25 @@ fn the_source_path_order_decides_which_of_a_duplicated_api_is_meant() {
         Some(0),
         "the LibraryBuiltin api checks clean:\n{message}"
     );
-    // `Library/System.fsi` names `ImmutableArray`, which nothing declares.
+    // THE TELL USED TO BE `ImmutableArray`, which `Library/System.fsi` names
+    // and nothing declared. `FortressLibrary` declares it and is implicitly
+    // imported now, so that file CHECKS and the name proves nothing any more.
+    // What still separates the two is what they declare: the builtin's `System`
+    // is `getProperty` alone, the library's adds `args`, `programName`,
+    // `getEnvironment` and `toDirectoryName`.
     let other = resolve_output("Library/System.fsi");
-    assert!(
-        String::from_utf8_lossy(&other.stderr).contains("ImmutableArray"),
-        "and the Library one is a different file"
+    let others = String::from_utf8_lossy(&other.stderr).into_owned();
+    assert_eq!(other.status.code(), Some(0), "{others}");
+    let count = |text: &str| {
+        text.split_once(": ")
+            .and_then(|(_, rest)| rest.split_once(" declaration(s)"))
+            .and_then(|(head, _)| head.rsplit(' ').next().map(str::to_owned))
+    };
+    assert_ne!(
+        count(&message),
+        count(&others),
+        "the two `System` apis are different files and must declare different \
+         things:\n{message}\n{others}"
     );
 }
 

@@ -1,0 +1,17 @@
+component badvoidarg
+
+export Executable
+
+(* `()` HAD THE SAME HOLE ON THE ARGUMENT SIDE AND IT PREDATES `Any`-as-top.
+   `require` has carried the `()` guard since the `()` milestone, and `require`
+   only sees an argument where `agreed` hands the position a hint -- so
+   `f(x: Any)` ALONE refused `f(())` and this file, with a second candidate
+   that disagrees, exited 70 on the binary before this one. *)
+trait T end
+object O extends T end
+
+f(x: Any): ZZ32 = 1
+f(x: O): ZZ32 = 2
+
+run(): () = println(f(()))
+end
