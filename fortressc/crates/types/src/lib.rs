@@ -5913,6 +5913,29 @@ impl Checker {
                 }
                 BlockItem::TupleBinding(b) => typed.push(self.tuple_binding(b)?),
                 BlockItem::Assign(a) => typed.push(self.assign(a)?),
+                // A TUPLE IN STATEMENT POSITION IS ITS ELEMENTS, EVALUATED.
+                // Its value is discarded by definition -- it is not the block's
+                // last item -- so there is nothing to represent, and
+                // `ProjectFortress/tests/atomicExpr.fss:18` writes exactly this
+                // for the effects alone:
+                //   (atomic do x+=1; y+=1; end, atomic do z:=x+y end)
+                //
+                // LEFT TO RIGHT, SEQUENTIALLY. 1.0 makes a tuple's elements
+                // implicit threads, and `parallelism.tex:88-90` lets an
+                // implementation serialise any group of them -- the same
+                // licence `also do` already runs on here. atomicExpr accepts
+                // BOTH orderings (`z` may be 0 or 2 and it refuses 1), so the
+                // choice is not observable to it.
+                //
+                // ONLY IN STATEMENT POSITION. A tuple whose value is USED needs
+                // a representation and stays refused by name.
+                BlockItem::Expr(Expr::Tuple { items, .. }) if index != last => {
+                    for item in items {
+                        refuse_field_assignment(item)?;
+                        let value = self.expr(item, None)?;
+                        typed.push(TypedBlockItem::Expr(value));
+                    }
+                }
                 BlockItem::Expr(e) => {
                     // Only the final expression is in value position.
                     let want = if index == last { expected } else { None };

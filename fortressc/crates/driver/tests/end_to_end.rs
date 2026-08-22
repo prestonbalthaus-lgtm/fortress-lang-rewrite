@@ -2477,6 +2477,57 @@ fn the_corpus_destructuring_program_computes_the_right_answer() {
     let _ = std::fs::remove_file(&exe);
 }
 
+/// A TUPLE IN STATEMENT POSITION IS ITS ELEMENTS, EVALUATED, and the corpus
+/// file that wants it wants exactly that: `atomicExpr.fss:18` writes
+/// `(atomic do x+=1; y+=1; end, atomic do z:=x+y end)` for the EFFECTS and
+/// discards the value.
+///
+/// It self-checks, and it accepts BOTH orderings -- `z` may be 0 or 2 and it
+/// refuses 1 -- so this pins that both elements run, not which ran first.
+#[test]
+fn a_tuple_in_statement_position_evaluates_both_elements() {
+    let exe = output_path("atomicexpr");
+    let built = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(corpus("ProjectFortress/tests/atomicExpr.fss"))
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .expect("could not run fortressc");
+    assert!(
+        built.status.success(),
+        "{}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let ran = Command::new(&exe).output().expect("could not run");
+    assert_eq!(String::from_utf8_lossy(&ran.stdout), "PASS\n");
+    let _ = std::fs::remove_file(&exe);
+}
+
+/// AND ONLY IN STATEMENT POSITION. A tuple whose value is USED needs a
+/// representation and stays refused by name -- without this the test above
+/// would pass just as well if tuples had quietly become values everywhere.
+#[test]
+fn a_tuple_whose_value_is_used_is_still_refused() {
+    let src = output_path("tupleval").with_extension("fss");
+    std::fs::write(
+        &src,
+        "component tupleval\n         export Executable\n         run():()=do\n           x = (1,2)\n           println(1)\n         end\n         end\n",
+    )
+    .expect("could not write fixture");
+    let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))
+        .arg(&src)
+        .arg("-o")
+        .arg(output_path("tupleval-out"))
+        .output()
+        .expect("could not run fortressc");
+    let message = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        message.contains("a tuple expression is not implemented in this subset"),
+        "{message}"
+    );
+    let _ = std::fs::remove_file(&src);
+}
+
 /// THE SELF-POSITION PAIR, ISOLATED, because the library reaches it through an
 /// import and an imported span is rendered against the WRONG FILE (see the
 /// wall test above, which reports :19:20 -- a comment). Ten lines that need no
