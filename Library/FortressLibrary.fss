@@ -419,7 +419,21 @@ trait Number
     round(self): ZZ = round(asFloat(self))
 end
 
-trait RR64 extends Number comprises { Float, FloatLiteral, RR32, QQ }
+(* v1 SOURCE CORRECTION: `FloatLiteral` and `RR32` removed from `RR64`'s comprises clause.
+   `traits.tex:232-235`: the listed traits "are exactly the traits that
+   immediately extend T and they must explicitly extend T".
+   `CompilerBuiltin.fsi:447`  trait FloatLiteral excludes {RR32, RR64}
+   `CompilerBuiltin.fsi:443`  trait RR32 extends { Number, Equality[\RR32\] } excludes { ZZ64, ZZ32, RR64 }
+   THE TWO SHIPPED FILES CONTRADICT EACH OTHER, and the builtin is the one the
+   specification agrees with: `conversions-coercions.tex:850-866` writes
+   `trait RR64 coerce(x:RR32) widens`, so widening a numeric is a COERCION and
+   not inheritance -- every numeric trait in the builtin extends `Number` and
+   EXCLUDES its neighbours. Removing an entry RETRACTS a claim rather than
+   asserting a new one, which is the same shape as the `QQ` correction below.
+   `Float`, `Int` and `UnsignedLong` are left alone: they are declared NOWHERE,
+   so the clause says nothing checkable about them and nothing is being fixed
+   by guessing. *)
+trait RR64 extends Number comprises { Float, QQ }
     (** returns true if the value is an IEEE NaN **)
     getter isNaN(): Boolean = false
     (** returns true if the value is an IEEE infinity **)
@@ -639,7 +653,20 @@ trait Integral[\I extends Integral[\I\]\] extends { StandardTotalOrder[\I\], Any
     round(self): I = self
 end
 
-trait ZZ32 extends { ZZ64, Integral[\ZZ32\] } comprises { Int, IntLiteral }
+(* v1 SOURCE CORRECTION: `IntLiteral` removed from `ZZ32`'s comprises clause.
+   `traits.tex:232-235`: the listed traits "are exactly the traits that
+   immediately extend T and they must explicitly extend T".
+   `CompilerBuiltin.fsi:369`  trait IntLiteral ... excludes {ZZ32, ZZ64, NN32, RR64, RR32, ...}
+   THE TWO SHIPPED FILES CONTRADICT EACH OTHER, and the builtin is the one the
+   specification agrees with: `conversions-coercions.tex:850-866` writes
+   `trait RR64 coerce(x:RR32) widens`, so widening a numeric is a COERCION and
+   not inheritance -- every numeric trait in the builtin extends `Number` and
+   EXCLUDES its neighbours. Removing an entry RETRACTS a claim rather than
+   asserting a new one, which is the same shape as the `QQ` correction below.
+   `Float`, `Int` and `UnsignedLong` are left alone: they are declared NOWHERE,
+   so the clause says nothing checkable about them and nothing is being fixed
+   by guessing. *)
+trait ZZ32 extends { ZZ64, Integral[\ZZ32\] } comprises { Int }
     getter zero(): ZZ32 = 0
     getter one(): ZZ32 = 1
     getter minimum(): ZZ32 = -2147483647 - 1
@@ -767,7 +794,20 @@ trait ZZ64 extends { ZZ, Integral[\ZZ64\] } comprises { Long, ZZ32 }
         builtinPrimitive("com.sun.fortress.interpreter.glue.prim.Long$ToBigNum")
 end
 
-trait NN64 extends { ZZ, Integral[\NN64\] } comprises { UnsignedLong, NN32 }
+(* v1 SOURCE CORRECTION: `NN32` removed from `NN64`'s comprises clause.
+   `traits.tex:232-235`: the listed traits "are exactly the traits that
+   immediately extend T and they must explicitly extend T".
+   `CompilerBuiltin.fsi:313`  trait NN64 ... excludes { ZZ32, ZZ64, RR32, RR64, NN32, ZZ, IntLiteral }
+   THE TWO SHIPPED FILES CONTRADICT EACH OTHER, and the builtin is the one the
+   specification agrees with: `conversions-coercions.tex:850-866` writes
+   `trait RR64 coerce(x:RR32) widens`, so widening a numeric is a COERCION and
+   not inheritance -- every numeric trait in the builtin extends `Number` and
+   EXCLUDES its neighbours. Removing an entry RETRACTS a claim rather than
+   asserting a new one, which is the same shape as the `QQ` correction below.
+   `Float`, `Int` and `UnsignedLong` are left alone: they are declared NOWHERE,
+   so the clause says nothing checkable about them and nothing is being fixed
+   by guessing. *)
+trait NN64 extends { ZZ, Integral[\NN64\] } comprises { UnsignedLong }
     opr |self| : NN64 = self
     opr =(self, b:NN64):Boolean =
         builtinPrimitive("com.sun.fortress.interpreter.glue.prim.UnsignedLong$Eq")

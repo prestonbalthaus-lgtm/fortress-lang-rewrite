@@ -2387,28 +2387,44 @@ fn the_bootstrap_root_parses_in_full() {
         "two BODILESS declarations of one signature are one declaration; that \
          wall may not come back: {message}"
     );
-    // REPINNED A FOURTH TIME, AND THE WALL IS NOW THE LIBRARY CONTRADICTING
-    // ITSELF. The builtins ARE importable since the implicit import landed, so
-    // `RR32` resolves -- and `FortressLibrary.fsi:335` writes
-    // `trait RR64 ... comprises { Float, FloatLiteral, RR32, QQ }` while
-    // `CompilerBuiltin.fsi:447` writes `trait FloatLiteral excludes {RR32,
-    // RR64}`. One file says `FloatLiteral` is one of the traits immediately
-    // below `RR64`; the other says the two types cannot share a value.
-    // `traits.tex:232-235` makes the first an error unless `FloatLiteral`
-    // explicitly extends `RR64`, and it does not.
+    // REPINNED A FIFTH TIME, AND THE FILE IS NOW PAST EVERY TOPOLOGICAL WALL.
+    // The builtins are importable, so `RR32` resolves; the four `comprises`
+    // contradictions with the builtin are CORRECTED IN THE LIBRARY SOURCE, as
+    // are the eight Boolean operators it declared on top of the builtin's own
+    // methods and the two `String` methods it declared twice. All fourteen are
+    // marked `v1 SOURCE CORRECTION` at the site, and each was named by the
+    // COMPILER rather than by reading -- one run per removal.
     //
-    // THAT IS NOT A LANGUAGE FEATURE AND IT IS NOT OURS TO FIX. It is the same
-    // class as the `__cond` uniformity violation DEV-15 answers: the SHIPPED
-    // library is not conformant with the SHIPPED specification.
+    // WHAT IS LEFT IS NOT THE LIBRARY'S FAULT. `Library/String.fsi:43` writes
+    // `var maxLeafSize: ZZ32`, which this parser cannot read yet -- the
+    // `expected an expression, found KwVar` class, 58 first-blockers and the
+    // largest single one in the corpus -- so the resolver skips that api as
+    // unreadable and `StringStats` never arrives. That source is CORRECT
+    // Fortress and is deliberately not "corrected".
+    //
+    // AND ONE MORE WALL IS MEASURED BEHIND IT, not guessed: neutralise that one
+    // line and `String.fsi` checks clean (60 declarations) and this file walks
+    // from :2423 to :878, `opr SQCAP(self, o: Maybe[\T\])` being ambiguous for
+    // a pair of `Just` instantiations.
     assert!(
         !message.contains("unknown type `RR32`"),
         "the builtins are importable now; `RR32` may not come back as the wall: \
          {message}"
     );
     assert!(
-        message.contains("`FloatLiteral` is listed in the `comprises` clause of `RR64`"),
-        "the remaining blocker should be the library disagreeing with the \
-         builtin about `FloatLiteral`: {message}"
+        !message.contains("is listed in the `comprises` clause of"),
+        "every topological contradiction is corrected in the source; none may \
+         come back as the wall: {message}"
+    );
+    assert!(
+        !message.contains("is declared twice on the same argument types"),
+        "the fourteen duplicate declarations are corrected in the source: \
+         {message}"
+    );
+    assert!(
+        message.contains("unknown type `StringStats`"),
+        "the remaining blocker should be an api this parser cannot read: \
+         {message}"
     );
 }
 

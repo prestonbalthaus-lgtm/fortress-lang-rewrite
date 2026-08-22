@@ -345,7 +345,21 @@ trait Number
     truncate(self):ZZ64
 end
 
-trait RR64 extends Number comprises { Float, FloatLiteral, RR32, QQ }
+(* v1 SOURCE CORRECTION: `FloatLiteral` and `RR32` removed from `RR64`'s comprises clause.
+   `traits.tex:232-235`: the listed traits "are exactly the traits that
+   immediately extend T and they must explicitly extend T".
+   `CompilerBuiltin.fsi:447`  trait FloatLiteral excludes {RR32, RR64}
+   `CompilerBuiltin.fsi:443`  trait RR32 extends { Number, Equality[\RR32\] } excludes { ZZ64, ZZ32, RR64 }
+   THE TWO SHIPPED FILES CONTRADICT EACH OTHER, and the builtin is the one the
+   specification agrees with: `conversions-coercions.tex:850-866` writes
+   `trait RR64 coerce(x:RR32) widens`, so widening a numeric is a COERCION and
+   not inheritance -- every numeric trait in the builtin extends `Number` and
+   EXCLUDES its neighbours. Removing an entry RETRACTS a claim rather than
+   asserting a new one, which is the same shape as the `QQ` correction below.
+   `Float`, `Int` and `UnsignedLong` are left alone: they are declared NOWHERE,
+   so the clause says nothing checkable about them and nothing is being fixed
+   by guessing. *)
+trait RR64 extends Number comprises { Float, QQ }
     (** returns true if the value is an IEEE NaN **)
     getter isNaN(): Boolean
     (** returns true if the value is an IEEE infinity **)
@@ -444,7 +458,20 @@ trait Integral[\I extends Integral[\I\]\] extends { StandardTotalOrder[\I\], Any
     unsigned(self):NN64
 end
 
-trait NN64 extends { ZZ, Integral[\NN64\] } comprises { UnsignedLong, NN32 }
+(* v1 SOURCE CORRECTION: `NN32` removed from `NN64`'s comprises clause.
+   `traits.tex:232-235`: the listed traits "are exactly the traits that
+   immediately extend T and they must explicitly extend T".
+   `CompilerBuiltin.fsi:313`  trait NN64 ... excludes { ZZ32, ZZ64, RR32, RR64, NN32, ZZ, IntLiteral }
+   THE TWO SHIPPED FILES CONTRADICT EACH OTHER, and the builtin is the one the
+   specification agrees with: `conversions-coercions.tex:850-866` writes
+   `trait RR64 coerce(x:RR32) widens`, so widening a numeric is a COERCION and
+   not inheritance -- every numeric trait in the builtin extends `Number` and
+   EXCLUDES its neighbours. Removing an entry RETRACTS a claim rather than
+   asserting a new one, which is the same shape as the `QQ` correction below.
+   `Float`, `Int` and `UnsignedLong` are left alone: they are declared NOWHERE,
+   so the clause says nothing checkable about them and nothing is being fixed
+   by guessing. *)
+trait NN64 extends { ZZ, Integral[\NN64\] } comprises { UnsignedLong }
     opr |self| : NN64
     opr =(self, b:NN64):Boolean
     opr <(self, b:NN64):Boolean
@@ -471,7 +498,20 @@ trait NN64 extends { ZZ, Integral[\NN64\] } comprises { UnsignedLong, NN32 }
     signed(self):NN64
 end
 
-trait ZZ32 extends { ZZ64, Integral[\ZZ32\] } comprises { Int, IntLiteral }
+(* v1 SOURCE CORRECTION: `IntLiteral` removed from `ZZ32`'s comprises clause.
+   `traits.tex:232-235`: the listed traits "are exactly the traits that
+   immediately extend T and they must explicitly extend T".
+   `CompilerBuiltin.fsi:369`  trait IntLiteral ... excludes {ZZ32, ZZ64, NN32, RR64, RR32, ...}
+   THE TWO SHIPPED FILES CONTRADICT EACH OTHER, and the builtin is the one the
+   specification agrees with: `conversions-coercions.tex:850-866` writes
+   `trait RR64 coerce(x:RR32) widens`, so widening a numeric is a COERCION and
+   not inheritance -- every numeric trait in the builtin extends `Number` and
+   EXCLUDES its neighbours. Removing an entry RETRACTS a claim rather than
+   asserting a new one, which is the same shape as the `QQ` correction below.
+   `Float`, `Int` and `UnsignedLong` are left alone: they are declared NOWHERE,
+   so the clause says nothing checkable about them and nothing is being fixed
+   by guessing. *)
+trait ZZ32 extends { ZZ64, Integral[\ZZ32\] } comprises { Int }
     getter zero(): ZZ32
     getter one(): ZZ32
     getter minimum(): ZZ32
@@ -2296,8 +2336,14 @@ trait String extends { StandardTotalOrder[\String\], ZeroIndexed[\Char\] }
     allButLast(): String
     allButFirst(): String
 
-    abstract splitWithOffsets(): Generator[\(ZZ32, String)\]
-    abstract split(): Generator[\String\]
+(* v1 SOURCE CORRECTION: this trait declares `splitWithOffsets` and `split`
+   TWICE, once here as `abstract` and again below with the doc comment that
+   describes them. One trait, one signature, two declarations --
+   `basic/overloading.tex` makes that an error, and in an api the `abstract`
+   modifier changes nothing (M3c decides abstractness from the absent body).
+   The DOCUMENTED pair below is kept. *)
+(*)     abstract splitWithOffsets(): Generator[\(ZZ32, String)\]
+(*)     abstract split(): Generator[\String\]
 
 
     rangeContains(r: Range[\ZZ32\], c: Char) : Boolean
@@ -2457,15 +2503,32 @@ throwError(a:String):()
 
 opr SEQV(a:Any, b:Any):Boolean
 
-opr XOR(a:Boolean, b:Boolean):Boolean
-opr  OR(a:Boolean, b:Boolean):Boolean
-opr AND(a:Boolean, b:Boolean):Boolean
-opr  OR(a:Boolean, b:()->Boolean):Boolean
-opr AND(a:Boolean, b:()->Boolean):Boolean
-opr NOT(a:Boolean):Boolean
-opr ->(a: Boolean, b:Boolean):Boolean
+(* v1 SOURCE CORRECTION: eight of these operators are commented out because
+   `ProjectFortress/LibraryBuiltin/CompilerBuiltin.fsi:458-470` ALREADY DECLARES
+   THEM, as functional methods on `trait Boolean`:
+     opr NOT(self):Boolean          opr AND(self, other:Boolean):Boolean
+     opr OR(self, other:Boolean)    opr AND(self, other:()->Boolean):Boolean
+     opr OR(self, other:()->Boolean)  opr XOR(self, other:Boolean):Boolean
+     opr <->(self, other:Boolean)   opr ->(self, other:Boolean):Boolean
+   `traits.tex:484-494` says a functional method "can be viewed as TOP-LEVEL
+   FUNCTION DECLARATIONS", so `opr NOT(self):Boolean` on `Boolean` and
+   `opr NOT(a:Boolean):Boolean` here are ONE declaration written twice, and
+   `basic/overloading.tex` makes that an error. THIS FILE DOES NOT DECLARE
+   `trait Boolean` AT ALL -- it takes the builtin's -- so the two are in scope
+   together by `default_repository/configuration:44`, which puts LibraryBuiltin
+   and Library on ONE source path.
+   MEASURED, NOT READ: the compiler was run once per removal and named each
+   collision itself. `opr ->(a: Boolean, b:()->Boolean)` is LEFT IN, because the
+   builtin declares no `->(self, other:()->Boolean)` and nothing collides. *)
+(*) opr XOR(a:Boolean, b:Boolean):Boolean
+(*) opr  OR(a:Boolean, b:Boolean):Boolean
+(*) opr AND(a:Boolean, b:Boolean):Boolean
+(*) opr  OR(a:Boolean, b:()->Boolean):Boolean
+(*) opr AND(a:Boolean, b:()->Boolean):Boolean
+(*) opr NOT(a:Boolean):Boolean
+(*) opr ->(a: Boolean, b:Boolean):Boolean
 opr ->(a: Boolean, b:()->Boolean):Boolean
-opr <->(a: Boolean, b:Boolean):Boolean
+(*) opr <->(a: Boolean, b:Boolean):Boolean
 
 true : Boolean
 false : Boolean
