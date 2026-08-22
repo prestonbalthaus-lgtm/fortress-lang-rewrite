@@ -168,8 +168,26 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # inferred-return fixpoint, so a getter with an omitted return type returned
 # the Void placeholder at exit 0. The count read 397 either way. A compile-count
 # check would have called this milestone clean.
+# THE SI LIBRARY PATCH: 334 objects, 64 apis. The gain is
+# `Library/incomplete/basic/Fortress.SIUnits.fsi`, an API, so OBJECT_FLOOR does
+# not move and API_FLOOR does. THE API FLOOR HAS NO SLACK -- an api emits no
+# object, so none of the 37 accepted must-fails is inside this count.
+# Three defects in the SHIPPED 1.0 library, found by the dimension rule rather
+# than by reading, and each is a different KIND:
+#   `Current`  is declared NOWHERE in the file; the dimension is
+#              `ElectricCurrent`. Five sites.
+#   `Second`   is a UNIT of `Time`, not a dimension. Two sites.
+#   `kilogram` is `gram` under an SI prefix, and prefixes are not generated;
+#              stubbed as a real unit of Mass rather than generating prefixes.
+# `Voltage` was NOT one of them and reads like one: it is used at :35 and :38
+# and declared at :67, and the checker is not order-sensitive, so the forward
+# reference resolves. Renaming it broke its own alias into
+# `dim ElectricPotential = ElectricPotential`.
+# The `.fss` half does NOT gain, and its wall is real rather than a typo:
+# `unit degreeOfAngle degrees: Angle = (180/pi) radian` -- `pi` is a numeric
+# CONSTANT and the conversion evaluator knows only units.
 OBJECT_FLOOR=296
-API_FLOOR=63
+API_FLOOR=64
 
 passed=0
 failed=0

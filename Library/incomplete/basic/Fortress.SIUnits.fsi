@@ -15,6 +15,7 @@
 
 dim Length  SI_unit meter meters m_
 dim Mass default kilogram; SI_unit gram grams g_: Mass
+unit kilogram kilograms kg_: Mass = 1000 gram
 dim Time  SI_unit second seconds s_
 dim ElectricCurrent  SI_unit ampere amperes A_
 dim Temperature  SI_unit kelvin kelvins K_
@@ -31,13 +32,13 @@ dim Pressure = Force / Area  SI_unit pascal pascals Pa_
 dim Energy = Length Force  SI_unit joule joules J_
 dim Power = Energy / Time  SI_unit watt watts W_
 dim ElectricCharge = ElectricCurrent Time  SI_unit coulomb coulombs C_
-dim ElectricPotential = Power / Current  SI_unit volt volts V_
+dim ElectricPotential = Power / ElectricCurrent  SI_unit volt volts V_
 dim Capacitance = ElectricCharge / Voltage  SI_unit farad farads F_
-dim Resistance = ElectricPotential / Current  SI_unit ohm ohms OMEGA_
+dim Resistance = ElectricPotential / ElectricCurrent  SI_unit ohm ohms OMEGA_
 dim Conductance = 1 / Resistance  SI_unit siemens S_
 dim MagneticFlux = Voltage Time  SI_unit weber webers Wb_
 dim MagneticFluxDensity = MagneticFlux / Area  SI_unit tesla teslas T_
-dim Inductance = MagneticFlux / Current  SI_unit henry henries H_
+dim Inductance = MagneticFlux / ElectricCurrent  SI_unit henry henries H_
 dim LuminousFlux = LuminousIntensity SolidAngle  SI_unit lumen lumens lm_
 dim Illuminance = LuminousFlux / Area  SI_unit lux lx_
 dim RadionuclideActivity = 1 / Time  SI_unit becquerel becquerels Bq_
@@ -52,12 +53,12 @@ dim Velocity = Length / Time
 dim Speed = Velocity
 dim Acceleration = Velocity / Time
 dim Momentum = Mass Velocity
-dim AngularVelocity = Angle / Second
-dim AngularAcceleration = Angle / Second^2
+dim AngularVelocity = Angle / Time
+dim AngularAcceleration = Angle / Time^2
 dim WaveNumber = 1 / Length
 dim MassDensity = Mass / Volume
-dim CurrentDensity = Current / Area
-dim MagneticFieldStrength = Current / Length
+dim CurrentDensity = ElectricCurrent / Area
+dim MagneticFieldStrength = ElectricCurrent / Length
 dim Luminance = LuminousIntensity / Area
 dim Work = Energy
 dim Action = Energy Time
