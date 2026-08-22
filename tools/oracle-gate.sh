@@ -173,11 +173,21 @@ if [[ ${1:-} == --mutate ]]; then
     fi
 
     # 5. Read exit 0 as a refusal. Every must-fail program would then pass.
+    # THE ASSERTION IS THE MECHANISM AND NOT THE NUMBER, for the same reason
+    # row 6 below carries that note. This row carried `39` and ESCAPED the day
+    # the list went to 37 -- and it went to 37 because the gate itself had
+    # reported two entries as newly refused and its own header says a refused
+    # file comes out in the same commit. So a row asserting the list's SIZE is
+    # a row that breaks every time the ratchet does its job. What the row is
+    # for is that EVERY listed file stops being refused at once, so that is
+    # what it says, against a count the gate computes rather than one written
+    # here.
     apply tools/oracle-gate.sh 's/^        if code == 1:$/        if code in (0, 1):/' || exit 2
-    got=$(gate | field 'len(d["nowRefused"])')
+    got=$(gate | field 'str(len(d["nowRefused"])) + "/" + str(d["knownAccepted"])')
     restore tools/oracle-gate.sh
-    report 'exit 0 read as a clean refusal' "$got" 39 \
-        'all 39 listed files reported as no longer refused'
+    want=$(gate | field 'str(d["knownAccepted"]) + "/" + str(d["knownAccepted"])')
+    report 'exit 0 read as a clean refusal' "$got" "$want" \
+        'every listed file reported as no longer refused'
 
     # 6. Break the Properties continuation so a wrapped `tests=` truncates.
     # THE ASSERTION IS THE MECHANISM AND NOT THE NUMBER. This row carried
@@ -758,6 +768,7 @@ if opt.get('json'):
         'sha': SHA, 'compiler': CCID, 'cases': len(CS), 'outcomes': dict(buckets),
         'passFloor': PASS_FLOOR,
         'mustFail': len(must_fail), 'accepted': len(accepted),
+        'knownAccepted': len(known_accept),
         'staleDivergences': stale_diverge,
         'newAcceptances': new_accept, 'nowRefused': now_refused,
         'ranBinaries': ran, 'badExits': signal_rows, 'newSignals': new_signal,
