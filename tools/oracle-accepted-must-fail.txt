@@ -122,3 +122,34 @@ ProjectFortress/parser_tests/XXXPreparser.c.fss
 #                Re-opens if exclusion ever becomes open-world; it will not.
 # ---------------------------------------------------------------------------
 ProjectFortress/compiler_tests/Compiled5.j.fss
+# ---------------------------------------------------------------------------
+# NAMED HERE AS A COMMENT AND NOT AS A LINE, 2026-08-22, AND THAT IS FORCED.
+#
+# The ruling was "add XXXOprMethod.fss to this list with a written reason".
+# A LINE WOULD NOT SURVIVE. `rewrite_list` above regenerates this file from
+# `accepted`, which is built from cases whose `.test` records
+# `compile_err_equals`/`compile_err_contains`. XXXOprMethod.fss has NO `.test`
+# at all, so it can never be in `wanted`, and the first `--refresh-lists` after
+# the line went in would DROP it -- silently, because dropping is what that
+# function is for. A comment is never dropped, so this is the durable form of
+# the same record. The reason, which is the point of the ruling:
+#
+#   ProjectFortress/parser_tests/XXXOprMethod.fss
+#                We ACCEPT it and the XXX convention says the legacy REFUSED
+#                it. It declares `opr IN(c:Char): Boolean` and `opr [i:ZZ32]`
+#                as object members. It was refused HERE until 2026-08-22 for a
+#                reason that had nothing to do with operator methods: `Char`
+#                was not a type. SPIKE-OPEXPR records operator declarations and
+#                NOTHING READS THEM, so what it compiles to is a program whose
+#                two declarations do nothing and whose `run()` returns ().
+#                WE DO NOT KNOW 1.0's SPECIFIC GROUND FOR REFUSING IT AND ARE
+#                NOT INVENTING ONE. A blind refusal rule keyed on "an object
+#                declares an `opr` member" would be a guess, and it would also
+#                refuse the subscript-operator work that M3c's dispatch will
+#                need. So the acceptance is tolerated and written down instead.
+#                THE RATCHET THAT ACTUALLY HOLDS IT is apply-gate's slack, not
+#                this file: tools/apply-gate.sh:261-269 counts it, with
+#                XXXequalityTesting.fss, into the slack of 40 behind
+#                OBJECT_FLOOR=321. Re-opens the day operator declarations are
+#                READ, which is SPIKE-OPEXPR's own milestone.
+# ---------------------------------------------------------------------------
