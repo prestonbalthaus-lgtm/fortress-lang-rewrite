@@ -3787,11 +3787,19 @@ impl<'t, 'a> Parser<'t, 'a> {
     /// level above them is its own dimension.
     const fn dimension_of(level: usize) -> usize {
         match level {
-            0 => 1,
-            1 => 0,
+            0 if Self::SWAP_LOWEST_TWO => 1,
+            1 if Self::SWAP_LOWEST_TWO => 0,
             other => other,
         }
     }
+
+    /// NAMED SO THAT A MUTATION CAN TURN IT OFF IN ONE LINE, and the mutation
+    /// it enables is the one that matters: with this false the two lowest
+    /// levels map to themselves, which is a BIJECTION -- a transposed array of
+    /// the same shape. On a square literal every extent still checks out and
+    /// only the VALUE differs, so `aggregate.tex:150`'s "A(1,0) evaluates to 4"
+    /// is the single assertion that can see it.
+    const SWAP_LOWEST_TWO: bool = true;
 
     /// The extent at each level from `level` down to zero, highest first.
     fn shape(

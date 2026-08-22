@@ -288,7 +288,7 @@ MUTATIONS=(
   # THE AGGREGATE, at each of the three places its shape can be wrong: which
   # dimension a separator steps, whether a line break is one at all, and whether
   # the groups have to be the same size.
-  'crates/parser/src/lib.rs|            1 => 0,|            1 => 1,|make a semicolon step the same dimension whitespace does'
+  'crates/parser/src/lib.rs|const SWAP_LOWEST_TWO: bool = true;|const SWAP_LOWEST_TWO: bool = false;|transpose the aggregate: whitespace steps dimension 0 and a semicolon dimension 1'
   'crates/parser/src/lib.rs|            usize::from(line_break)|            0|stop reading a bare line break as a row separator'
   'crates/parser/src/lib.rs|Some(first) if *first == sub => {}|Some(_) => {}|accept a ragged aggregate'
 )
