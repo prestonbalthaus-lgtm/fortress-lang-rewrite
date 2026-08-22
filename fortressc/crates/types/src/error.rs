@@ -495,6 +495,14 @@ pub enum TypeError {
         name: String,
         cells: usize,
     },
+    /// Top-level values whose initializers depend on each other in a ring.
+    /// `variables.tex:122-123` lets an initializer refer to a value declared
+    /// LATER, so declaration order is not evaluation order -- but a cycle has
+    /// no order at all.
+    CyclicValueInitialization {
+        span: Span,
+        names: String,
+    },
     /// `(a, a) = (1, 2)`. Two parts of one binder claiming the same name.
     DuplicateBinderName {
         span: Span,
@@ -808,6 +816,7 @@ impl TypeError {
             | Self::ApiDeclarationHasBody { span, .. }
             | Self::MissingBody { span, .. }
             | Self::TraitCycle { span, .. }
+            | Self::CyclicValueInitialization { span, .. }
             | Self::DuplicateBinderName { span, .. }
             | Self::TupleArityMismatch { span, .. }
             | Self::TupleNotStorable { span, .. }
@@ -1403,6 +1412,11 @@ impl core::fmt::Display for TypeError {
             Self::ParallelFormUnsupported { form, .. } => write!(
                 f,
                 "{form} is parsed but not implemented in parallel loops"
+            ),
+            Self::CyclicValueInitialization { names, .. } => write!(
+                f,
+                "the top-level values {names} initialize in a cycle, so there \
+                 is no order that evaluates each before it is read"
             ),
             Self::DuplicateBinderName { name, .. } => {
                 write!(f, "`{name}` is bound twice by one tuple binding")

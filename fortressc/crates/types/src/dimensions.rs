@@ -116,6 +116,9 @@ pub fn check(component: &Component) -> Result<(), TypeError> {
             Decl::Trait(t) => &t.name,
             Decl::Object(o) => &o.name,
             Decl::Function(f) => &f.name,
+            // A value's name occupies the same namespace as a function's, so a
+            // `dim` of that name is the same collision.
+            Decl::Value(v) => &v.name,
         };
         declared.entry(name).or_insert_with(|| span_of(decl));
     }
@@ -232,5 +235,6 @@ fn span_of(decl: &Decl) -> Span {
         Decl::Trait(t) => t.span,
         Decl::Object(o) => o.span,
         Decl::Function(f) => f.span,
+        Decl::Value(v) => v.span,
     }
 }

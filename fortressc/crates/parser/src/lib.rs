@@ -1113,7 +1113,7 @@ impl<'t, 'a> Parser<'t, 'a> {
                     Some(Kind::Colon | Kind::Eq | Kind::ColonEq)
                 ) =>
             {
-                Ok(Decl::Function(self.value_decl(modifiers)?))
+                Ok(Decl::Value(self.value_decl(modifiers)?))
             }
             _ => Ok(Decl::Function(self.fn_decl(modifiers, signature_only)?)),
         }
@@ -1122,7 +1122,7 @@ impl<'t, 'a> Parser<'t, 'a> {
     /// A component-level value declaration, carried as a nullary `FnDecl`
     /// because the AST has no declaration node for a value yet. Deliberate
     /// approximation: this is a parse-only spike, and mutability is dropped.
-    fn value_decl(&mut self, modifiers: Modifiers) -> Parsed<FnDecl> {
+    fn value_decl(&mut self, modifiers: Modifiers) -> Parsed<fortress_ast::ValueDecl> {
         let (name, name_span) = self.identifier("a value name")?;
         let ty = if self.at(&Kind::Colon) {
             self.pos += 1;
@@ -1136,7 +1136,12 @@ impl<'t, 'a> Parser<'t, 'a> {
         // `x := 0` to be confused with.
         let save = self.pos;
         self.skip_newlines();
-        let body = if self.definition_equals_at(self.pos) || self.at(&Kind::ColonEq) {
+        // `:=` IS CARRIED AND NOT DROPPED. The parse-only spike this replaces
+        // threw it away, and three corpus files write a mutable value at
+        // component level -- `Compiled5.k.fss:15` is `x := 0`. Dropping the
+        // flag makes those silently immutable.
+        let mutable = self.at(&Kind::ColonEq);
+        let init = if self.definition_equals_at(self.pos) || self.at(&Kind::ColonEq) {
             self.pos += 1;
             self.skip_newlines();
             Some(self.expr()?)
@@ -1144,17 +1149,15 @@ impl<'t, 'a> Parser<'t, 'a> {
             self.pos = save;
             None
         };
-        let end = body
+        let end = init
             .as_ref()
             .map_or_else(|| ty.as_ref().map_or(name_span, TypeRef::span), Expr::span);
-        Ok(FnDecl {
+        Ok(fortress_ast::ValueDecl {
             modifiers,
             name,
-            static_params: Vec::new(),
-            params: Vec::new(),
-            return_type: ty,
-            body,
-            value_binding: true,
+            ty,
+            init,
+            mutable,
             span: Span::new(name_span.start, end.end),
         })
     }
@@ -1693,7 +1696,6 @@ impl<'t, 'a> Parser<'t, 'a> {
             params,
             return_type,
             body,
-            value_binding: false,
             span,
         })
     }
@@ -1723,7 +1725,6 @@ impl<'t, 'a> Parser<'t, 'a> {
             params: sig.params,
             return_type: sig.return_type,
             body,
-            value_binding: false,
             span: Span::new(start.start, end.end),
         })
     }

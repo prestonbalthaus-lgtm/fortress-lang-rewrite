@@ -46,6 +46,9 @@ pub fn check(own: &[Decl], merged: &[Decl], fallback: Span) -> Result<(), TypeEr
             Decl::Function(f) => {
                 (f.name == CONVERTER && returns_carrier(f.return_type.as_ref())).then_some(f.span)
             }
+            // The carrier is a TRAIT and the converter a FUNCTION; a value can
+            // be neither, so it can never be the deviation this looks for.
+            Decl::Value(_) => None,
         };
         if let Some(span) = hit {
             return Err(TypeError::NatReflectRuntimeArgument {

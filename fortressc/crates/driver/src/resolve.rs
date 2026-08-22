@@ -155,7 +155,8 @@ fn references(decl: &Decl, out: &mut Vec<String>) {
     let topology = match decl {
         Decl::Trait(t) => &t.extends,
         Decl::Object(o) => &o.extends,
-        Decl::Function(_) => return,
+        // Neither declares a supertype, so there is no topology to walk.
+        Decl::Function(_) | Decl::Value(_) => return,
     };
     for t in topology {
         walk(t, out);
@@ -189,6 +190,7 @@ fn decl_name(decl: &Decl) -> &str {
         Decl::Function(f) => &f.name,
         Decl::Trait(t) => &t.name,
         Decl::Object(o) => &o.name,
+        Decl::Value(v) => &v.name,
     }
 }
 
@@ -268,14 +270,22 @@ pub fn resolve(component: &Component, source: &Path) -> Resolution {
                 names.iter().map(|n| n.name.clone()).collect(),
             )),
         };
-        // ONLY THE TYPES. An api's FUNCTION declarations are signatures the
-        // importing component must SATISFY -- `source-code.tex:313-320` makes
-        // that the component's obligation and it is step 5, not this step --
-        // and merging them into a `.fss` makes the checker demand a body for
-        // every one. Its TRAITS and OBJECTS are what a use site refers to by
-        // name, and they are what `unknown type` is asking for.
+        // ONLY THE TYPES. An api's FUNCTION and VALUE declarations are
+        // signatures the importing component must SATISFY --
+        // `source-code.tex:313-320` makes that the component's obligation and
+        // it is step 5, not this step -- and merging them into a `.fss` makes
+        // the checker demand a body for every one. Its TRAITS and OBJECTS are
+        // what a use site refers to by name, and they are what `unknown type`
+        // is asking for.
+        //
+        // A VALUE IS ON THIS LIST BECAUSE IT USED TO BE A FUNCTION. It was
+        // parsed as a nullary `FnDecl` and skipped by that arm; the moment it
+        // became `Decl::Value` it started being merged, and
+        // `Library/CompilerSystem.fsi:15` -- `args : StringVector`, with no
+        // `StringVector` anywhere -- took SEVEN importing components down with
+        // it, each reporting a name it never wrote.
         for decl in api.decls {
-            if matches!(decl, Decl::Function(_)) {
+            if matches!(decl, Decl::Function(_) | Decl::Value(_)) {
                 continue;
             }
             if let Some(wanted) = wanted.as_ref() {

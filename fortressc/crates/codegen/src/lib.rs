@@ -104,6 +104,7 @@ fn build_module<'ctx>(
         functions: HashMap::new(),
         objects: HashMap::new(),
         singletons: HashMap::new(),
+        values: HashMap::new(),
         scopes: Vec::new(),
         reductions: HashSet::new(),
         labels: Vec::new(),
@@ -148,6 +149,9 @@ struct Lowering<'ctx> {
     /// keeps the tag load at offset 0 the only thing dispatch has to know.
     objects: HashMap<&'static str, StructType<'ctx>>,
     singletons: HashMap<&'static str, GlobalValue<'ctx>>,
+    /// One LLVM global per top-level value. Every function body reads them
+    /// through the bottom scope frame, which `define_function` seeds.
+    values: HashMap<String, (GlobalValue<'ctx>, BasicTypeEnum<'ctx>)>,
     scopes: Vec<HashMap<String, Slot<'ctx>>>,
     /// The reduction variables of the loop body being emitted. Read only by
     /// the `atomic` lowering, which drops the lock around a block that does
@@ -540,6 +544,23 @@ impl<'ctx> Lowering<'ctx> {
                 global.set_initializer(&self.ptr_type().const_null());
                 self.singletons.insert(o.name, global);
             }
+        }
+        // TOP-LEVEL VALUES, one global each, zeroed. They are FILLED in `main`
+        // and not here: an initializer is arbitrary code and a global's static
+        // initializer is a constant.
+        for v in &component.values {
+            let Some(ty) = self.basic_type(v.ty) else {
+                return Err(CodegenError::internal(format!(
+                    "top-level value `{}` has no storage type",
+                    v.name
+                )));
+            };
+            let global = self
+                .module
+                .add_global(ty, None, &format!("{}$value", v.name));
+            global.set_linkage(Linkage::Internal);
+            global.set_initializer(&ty.const_zero());
+            self.values.insert(v.name.clone(), (global, ty));
         }
         Ok(())
     }
@@ -949,6 +970,32 @@ impl<'ctx> Lowering<'ctx> {
                 .map_err(CodegenError::from_builder)?;
         }
 
+        // TOP-LEVEL VALUE INITIALIZERS, IN DEPENDENCY ORDER, and here rather
+        // than in `@llvm.global_ctors` for one reason: a ctor runs BEFORE
+        // `main`, and `fortress_runtime_init` -- `GC_INIT` -- is deliberately
+        // main's first instruction. An initializer that allocates a String
+        // would run before the collector existed.
+        //
+        // The checker already sorted them, so a value is always filled before
+        // anything that reads it.
+        if !component.values.is_empty() {
+            self.scopes.push(HashMap::new());
+            for v in &component.values {
+                let Some(init) = &v.init else { continue };
+                let Some((global, _)) = self.values.get(&v.name).copied() else {
+                    return Err(CodegenError::internal(format!(
+                        "top-level value `{}` was never declared",
+                        v.name
+                    )));
+                };
+                let value = self.operand(init)?;
+                self.builder
+                    .build_store(global.as_pointer_value(), value)
+                    .map_err(CodegenError::from_builder)?;
+            }
+            self.scopes.pop();
+        }
+
         if let Some(run) = self.functions.get(ENTRY) {
             self.builder
                 .build_call(*run, &[], "run")
@@ -962,8 +1009,20 @@ impl<'ctx> Lowering<'ctx> {
 
     // ------------------------------------------------------------- values
 
+    /// A TOP-LEVEL VALUE IS THE BOTTOM FRAME, and it is a fallback rather than
+    /// a real frame so that a LOCAL of the same name still wins -- which is
+    /// what the checker's own scope stack does.
     fn lookup(&self, name: &str) -> Option<Slot<'ctx>> {
-        self.scopes.iter().rev().find_map(|s| s.get(name).copied())
+        self.scopes
+            .iter()
+            .rev()
+            .find_map(|s| s.get(name).copied())
+            .or_else(|| {
+                self.values.get(name).map(|(global, ty)| Slot::Cell {
+                    pointer: global.as_pointer_value(),
+                    ty: *ty,
+                })
+            })
     }
 
     fn read(&self, name: &str) -> Result<BasicValueEnum<'ctx>, CodegenError> {
@@ -1964,10 +2023,7 @@ impl<'ctx> Lowering<'ctx> {
 
     fn load_name(&mut self, name: &str) -> Result<BasicValueEnum<'ctx>, CodegenError> {
         let slot = self
-            .scopes
-            .iter()
-            .rev()
-            .find_map(|s| s.get(name).copied())
+            .lookup(name)
             .ok_or_else(|| CodegenError::internal(format!("no binding `{name}` to capture")))?;
         match slot {
             Slot::Value(value) => Ok(value),

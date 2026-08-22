@@ -644,6 +644,11 @@ pub struct TypedComponent {
     /// signatures and signatures have no code. The driver stops before codegen
     /// on this flag rather than on the file extension.
     pub is_api: bool,
+    /// Top-level values, ALREADY IN INITIALIZATION ORDER. Codegen emits one
+    /// global each and runs the initializers in this order inside `main`,
+    /// after `fortress_runtime_init` and before `run` -- exactly where
+    /// singletons already go.
+    pub values: Vec<TypedValue>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -904,6 +909,17 @@ pub enum TypedBlockItem {
         parts: Vec<TypedBinding>,
         span: Span,
     },
+}
+
+/// A top-level value, and the initializer that fills it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypedValue {
+    pub name: String,
+    pub ty: Type,
+    /// `None` inside an `api`, where a value declaration is a signature.
+    pub init: Option<TypedExpr>,
+    pub mutable: bool,
+    pub span: Span,
 }
 
 /// One name of a destructured tuple, and the element that fills it.

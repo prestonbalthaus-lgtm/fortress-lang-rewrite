@@ -8,7 +8,7 @@ pub use nodes::{
     DimDecl, DimExpr, Expr, ExtentForm, ExtentRange, FieldDecl, Fixity, FnDecl, ImportDecl,
     ImportItems, ImportedName, Member, MethodDecl, Modifiers, ObjectDecl, Param, ShapeSpelling,
     StaticExpr, StaticKind, StaticOp, StaticParam, TraitDecl, TupleBinding, TypeCaseArm, TypeRef,
-    UnOp, UnitDecl,
+    UnOp, UnitDecl, ValueDecl,
 };
 
 /// Byte offsets into the source. Line and column are derived on demand by the

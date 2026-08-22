@@ -27,10 +27,10 @@ pub use types::{
     intern, intern_type, intern_types, ArithOp, AssignTarget, CompareOp, DispatchFn, DispatchNode,
     Elem, MpiOp, Target, ThreadOp, Type, TypedBinding, TypedBlockItem, TypedCapture,
     TypedComponent, TypedExpr, TypedExprKind, TypedField, TypedFn, TypedObject, TypedParam,
-    TypedReduction, TypedTypeCaseArm, ARRAY_ALLOC, ARRAY_ALLOC_N, ARRAY_LENGTH, ARRAY_SLOT,
-    ARRAY_SLOT_N, ASSERT_FAILED, ATOMIC_ENTER, ATOMIC_LEAVE, CASE_FAILED, DISPATCH_FAILED,
-    ENV_ALLOC, FIRST_TAG, OBJECT_ALLOC, PARALLEL_FOR, REDUCTION_ALLOC, REDUCTION_WORKERS, SPAWN,
-    THREAD_READY, THREAD_STOP, THREAD_VAL, THREAD_WAIT,
+    TypedReduction, TypedTypeCaseArm, TypedValue, ARRAY_ALLOC, ARRAY_ALLOC_N, ARRAY_LENGTH,
+    ARRAY_SLOT, ARRAY_SLOT_N, ASSERT_FAILED, ATOMIC_ENTER, ATOMIC_LEAVE, CASE_FAILED,
+    DISPATCH_FAILED, ENV_ALLOC, FIRST_TAG, OBJECT_ALLOC, PARALLEL_FOR, REDUCTION_ALLOC,
+    REDUCTION_WORKERS, SPAWN, THREAD_READY, THREAD_STOP, THREAD_VAL, THREAD_WAIT,
 };
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -359,7 +359,7 @@ fn members_of(decl: &Decl) -> &[Member] {
     match decl {
         Decl::Trait(t) => &t.members,
         Decl::Object(o) => &o.members,
-        Decl::Function(_) => &[],
+        Decl::Function(_) | Decl::Value(_) => &[],
     }
 }
 
@@ -593,7 +593,11 @@ impl Checker {
             let (name, span) = match decl {
                 Decl::Trait(t) => (intern(&t.name), t.span),
                 Decl::Object(o) => (intern(&o.name), o.span),
-                Decl::Function(_) => continue,
+                // This map is the TYPE namespace -- it is what makes
+                // `trait A` beside `object A` a duplicate. A value declares no
+                // type, so it belongs to the value namespace and is checked
+                // there, beside the functions.
+                Decl::Function(_) | Decl::Value(_) => continue,
             };
             if declared.insert(name, span).is_some() {
                 return Err(TypeError::DuplicateDefinition {
@@ -602,6 +606,7 @@ impl Checker {
                 });
             }
             match decl {
+                Decl::Value(_) => {}
                 Decl::Trait(_) => {
                     registry.traits.insert(
                         name,
@@ -841,7 +846,8 @@ impl Checker {
             let (owner, members) = match decl {
                 Decl::Trait(t) => (t.name.as_str(), &t.members),
                 Decl::Object(o) => (o.name.as_str(), &o.members),
-                Decl::Function(_) => continue,
+                // A value has no members to walk.
+                Decl::Function(_) | Decl::Value(_) => continue,
             };
             for member in members {
                 let Member::Method(m) = member else { continue };
@@ -864,7 +870,8 @@ impl Checker {
             let (owner, members) = match decl {
                 Decl::Trait(t) => (intern(&t.name), &t.members),
                 Decl::Object(o) => (intern(&o.name), &o.members),
-                Decl::Function(_) => continue,
+                // A value has no members to walk.
+                Decl::Function(_) | Decl::Value(_) => continue,
             };
             let receiver = if self.registry.is_object(owner) {
                 Type::Object(owner)
@@ -961,7 +968,8 @@ impl Checker {
             let owner = match decl {
                 Decl::Trait(t) => intern(&t.name),
                 Decl::Object(o) => intern(&o.name),
-                Decl::Function(_) => continue,
+                // A value has no members to walk.
+                Decl::Function(_) | Decl::Value(_) => continue,
             };
             for (index, member) in members_of(decl).iter().enumerate() {
                 let Member::Method(m) = member else { continue };
@@ -1051,6 +1059,19 @@ impl Checker {
                             name: m.name.clone(),
                         });
                     }
+                    // THE SECOND DECLARATION GETS NO `functional_slots` ENTRY,
+                    // and that is right today and worth naming. Nothing lowers
+                    // an api, so there is no slot to want. The day a `.fss`
+                    // pair of ABSTRACT declarations reaches this rule, the
+                    // missing slot is where the surprise will be: the member
+                    // exists in the overload set and has no lowering identity.
+                    //
+                    // THE METHOD-TABLE TWIN BELOW DOES NOT HAVE THIS RULE, on
+                    // purpose. It is the DOTTED path, and no corpus file
+                    // reaches it with a bodiless duplicate -- after this change
+                    // exactly three files remain on the message and all three
+                    // are `.fss` declarations WITH BODIES. Widening it needs a
+                    // file that wants it.
                     continue;
                 }
                 let symbol = functional_symbol(
@@ -1150,12 +1171,6 @@ impl Checker {
         }
         for decl in &component.decls {
             let Decl::Function(f) = decl else { continue };
-            if f.value_binding {
-                return Err(TypeError::ValueBindingUnsupported {
-                    span: f.span,
-                    name: f.name.clone(),
-                });
-            }
             if f.name == "run" && !f.params.is_empty() {
                 return Err(TypeError::EntryPointTakesArguments {
                     span: f.span,
@@ -1168,6 +1183,10 @@ impl Checker {
         // Before ANY body is checked, including an object initializer's: the
         // signatures a caller reads have to be finished first.
         self.resolve_inferred_returns(component);
+
+        // TOP-LEVEL VALUES BEFORE EVERY BODY, because every body can name one.
+        // They go in the BOTTOM scope frame and are never popped.
+        let values = self.component_values(component)?;
 
         let mut objects = Vec::new();
         for decl in &component.decls {
@@ -1191,7 +1210,8 @@ impl Checker {
             let (owner, members) = match decl {
                 Decl::Trait(t) => (intern(&t.name), &t.members),
                 Decl::Object(o) => (intern(&o.name), &o.members),
-                Decl::Function(_) => continue,
+                // A value has no members to walk.
+                Decl::Function(_) | Decl::Value(_) => continue,
             };
             for (index, member) in members.iter().enumerate() {
                 let Member::Method(m) = member else { continue };
@@ -1222,7 +1242,8 @@ impl Checker {
             let owner = match decl {
                 Decl::Trait(t) => intern(&t.name),
                 Decl::Object(o) => intern(&o.name),
-                Decl::Function(_) => continue,
+                // A value has no members to walk.
+                Decl::Function(_) | Decl::Value(_) => continue,
             };
             for (index, member) in members_of(decl).iter().enumerate() {
                 let Member::Method(m) = member else { continue };
@@ -1244,7 +1265,160 @@ impl Checker {
             dispatches: self.dispatches.into_values().collect(),
             uses_mpi: self.uses_mpi,
             is_api: false,
+            values,
         })
+    }
+
+    /// Top-level values, returned IN INITIALIZATION ORDER.
+    ///
+    /// ORDER IS A DEPENDENCY ORDER AND NOT DECLARATION ORDER, because
+    /// `variables.tex:122-123` says so outright: "the initializer expressions
+    /// of top-level variable declarations can refer to variables declared
+    /// LATER in textual order". `XXXimmutableTopLevel.fss` writes exactly that
+    /// -- `a=x` above `x:ZZ32=1` -- and is an XXX must-fail for a different
+    /// reason: it also writes `e=w`, `w=e+g`, `g=e`, which is a RING. A cycle
+    /// has no order at all and is refused by name.
+    ///
+    /// EVERY NAME IS IN SCOPE BEFORE ANY INITIALIZER IS CHECKED, so a forward
+    /// reference resolves; the dependency order is what makes the VALUE
+    /// available by the time it is read at run time.
+    fn component_values(&mut self, component: &Component) -> Checked<Vec<TypedValue>> {
+        let declared: Vec<&fortress_ast::ValueDecl> = component
+            .decls
+            .iter()
+            .filter_map(|d| match d {
+                Decl::Value(v) => Some(v),
+                _ => None,
+            })
+            .collect();
+        if declared.is_empty() {
+            return Ok(Vec::new());
+        }
+        let names: BTreeSet<String> = declared.iter().map(|v| v.name.clone()).collect();
+
+        // Edges: value -> the values its initializer reads. Only names this
+        // component declares as values; anything else is a function, an object
+        // or an error, and none of those order these.
+        let mut depends: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+        for v in &declared {
+            let mut free = BTreeSet::new();
+            if let Some(init) = &v.init {
+                let mut bound = Vec::new();
+                crate::closure::free_names(init, &mut bound, &mut free);
+            }
+            free.retain(|n| names.contains(n) && n != &v.name);
+            depends.insert(v.name.as_str(), free);
+        }
+
+        // Depth-first, emitting a node after its dependencies. `on_stack` is
+        // what turns a ring into a diagnostic instead of a hang.
+        let mut order: Vec<&str> = Vec::new();
+        let mut done: BTreeSet<&str> = BTreeSet::new();
+        let mut on_stack: Vec<&str> = Vec::new();
+        for v in &declared {
+            Self::order_values(
+                v.name.as_str(),
+                &depends,
+                &mut done,
+                &mut on_stack,
+                &mut order,
+            )
+            .map_err(|ring| TypeError::CyclicValueInitialization {
+                span: v.span,
+                names: ring,
+            })?;
+        }
+
+        // A SELF-REFERENCE IS ALSO A CYCLE and the edge set above drops it
+        // (`n != &v.name`), so it is caught here instead: `x = x + 1` reads a
+        // value that does not exist yet.
+        for v in &declared {
+            let mut free = BTreeSet::new();
+            if let Some(init) = &v.init {
+                let mut bound = Vec::new();
+                crate::closure::free_names(init, &mut bound, &mut free);
+            }
+            if free.contains(&v.name) {
+                return Err(TypeError::CyclicValueInitialization {
+                    span: v.span,
+                    names: format!("`{}`", v.name),
+                });
+            }
+        }
+
+        let by_name: BTreeMap<&str, &fortress_ast::ValueDecl> =
+            declared.iter().map(|v| (v.name.as_str(), *v)).collect();
+        self.scopes.push(HashMap::new());
+        let mut out = Vec::with_capacity(order.len());
+        for name in order {
+            let Some(v) = by_name.get(name).copied() else {
+                continue;
+            };
+            let want = match &v.ty {
+                Some(t) => Some(self.storable(t, "a value")?),
+                None => None,
+            };
+            let Some(init) = &v.init else {
+                return Err(TypeError::ValueBindingUnsupported {
+                    span: v.span,
+                    name: v.name.clone(),
+                });
+            };
+            let checked = self.expr(init, want)?;
+            let ty = want.unwrap_or(checked.ty);
+            if ty == Type::Void {
+                return Err(TypeError::VoidNotStorable {
+                    span: v.span,
+                    position: "a value",
+                });
+            }
+            self.declare(v.name.clone(), ty, v.mutable);
+            out.push(TypedValue {
+                name: v.name.clone(),
+                ty,
+                init: Some(checked),
+                mutable: v.mutable,
+                span: v.span,
+            });
+        }
+        Ok(out)
+    }
+
+    fn order_values<'n>(
+        name: &'n str,
+        depends: &BTreeMap<&'n str, BTreeSet<String>>,
+        done: &mut BTreeSet<&'n str>,
+        on_stack: &mut Vec<&'n str>,
+        order: &mut Vec<&'n str>,
+    ) -> Result<(), String> {
+        if done.contains(name) {
+            return Ok(());
+        }
+        if on_stack.contains(&name) {
+            let start = on_stack.iter().position(|n| *n == name).unwrap_or(0);
+            let ring: Vec<String> = on_stack
+                .get(start..)
+                .unwrap_or_default()
+                .iter()
+                .map(|n| format!("`{n}`"))
+                .collect();
+            return Err(ring.join(", "));
+        }
+        on_stack.push(name);
+        if let Some(edges) = depends.get(name) {
+            for next in edges {
+                let key = depends
+                    .keys()
+                    .find(|k| **k == next.as_str())
+                    .copied()
+                    .unwrap_or(name);
+                Self::order_values(key, depends, done, on_stack, order)?;
+            }
+        }
+        on_stack.pop();
+        done.insert(name);
+        order.push(name);
+        Ok(())
     }
 
     /// SIGNATURES ONLY -- `SPIKE-API-CHECK-MODE`.
@@ -1275,6 +1449,27 @@ impl Checker {
         // declaration with a body is a definition. The old diagnostic said this
         // about the whole file; it belongs on the one declaration that broke it.
         for decl in &component.decls {
+            if let Decl::Value(v) = decl {
+                // AN api'S VALUE IS A SIGNATURE, so it must NOT carry an
+                // initializer -- the same rule a function's body breaks.
+                if v.init.is_some() {
+                    return Err(TypeError::ApiDeclarationHasBody {
+                        span: v.span,
+                        name: v.name.clone(),
+                    });
+                }
+                // AND ITS TYPE MUST RESOLVE. Nothing else looks at it, and for
+                // one build nothing did: `Library/CompilerSystem.fsi:15`
+                // declares `args : StringVector` with no `StringVector`
+                // anywhere, and the api COMPILED. Seven components that import
+                // it then failed at the import site on a name they never
+                // wrote. Before values had their own node this was checked by
+                // accident, as a nullary function's return type.
+                if let Some(t) = &v.ty {
+                    self.storable(t, "a value")?;
+                }
+                continue;
+            }
             let Decl::Function(f) = decl else { continue };
             if f.body.is_some() {
                 return Err(TypeError::ApiDeclarationHasBody {
@@ -1287,7 +1482,8 @@ impl Checker {
             let (owner, members) = match decl {
                 Decl::Trait(t) => (&t.name, &t.members),
                 Decl::Object(o) => (&o.name, &o.members),
-                Decl::Function(_) => continue,
+                // A value has no members to walk.
+                Decl::Function(_) | Decl::Value(_) => continue,
             };
             for member in members {
                 let Member::Method(m) = member else { continue };
@@ -1312,6 +1508,11 @@ impl Checker {
             dispatches: Vec::new(),
             uses_mpi: false,
             is_api: true,
+            // AN API DECLARES VALUES AND INITIALIZES NONE.
+            // `Library/FlatString.fsi:14` writes `lineSeparator: String` with
+            // no initializer -- a signature, like every other declaration in
+            // an api, and there is nothing to emit or order.
+            values: Vec::new(),
         })
     }
 
@@ -1585,7 +1786,7 @@ impl Checker {
         let mut index = 0usize;
         for decl in &component.decls {
             if let Decl::Function(f) = decl {
-                if f.return_type.is_none() && f.body.is_some() && !f.value_binding {
+                if f.return_type.is_none() && f.body.is_some() {
                     out.push(InferredBody::Function { decl: f, index });
                 }
                 index += 1;
@@ -1596,7 +1797,8 @@ impl Checker {
             let owner = match decl {
                 Decl::Trait(t) => intern(&t.name),
                 Decl::Object(o) => intern(&o.name),
-                Decl::Function(_) => continue,
+                // A value has no members to walk.
+                Decl::Function(_) | Decl::Value(_) => continue,
             };
             for (index, member) in members_of(decl).iter().enumerate() {
                 let Member::Method(m) = member else { continue };

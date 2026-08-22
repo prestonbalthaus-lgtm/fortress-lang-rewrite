@@ -72,6 +72,10 @@ pub(crate) fn lower(component: &Component) -> Result<Component, TypeError> {
                 .entry(f.name.clone())
                 .or_default()
                 .push(f.clone()),
+            // A value declares no callable name, so the arrow-lift's function
+            // table does not want it. Its TYPE and INITIALIZER are rewritten
+            // below, where the other declarations' are.
+            Decl::Value(_) => {}
             Decl::Trait(t) => {
                 pass.known.insert(t.name.clone());
             }
@@ -169,6 +173,14 @@ impl Pass {
                         self.rewrite_type(t)?;
                     }
                 }
+                // A value's declared type may name an arrow, and the lift
+                // rewrites one into the minted trait exactly as it does in a
+                // parameter position.
+                Decl::Value(v) => {
+                    if let Some(t) = &mut v.ty {
+                        self.rewrite_type(t)?;
+                    }
+                }
                 Decl::Trait(t) => {
                     for m in &mut t.members {
                         self.rewrite_member_types(m)?;
@@ -213,6 +225,18 @@ impl Pass {
                     let returns = f.return_type.clone();
                     if let Some(body) = &mut f.body {
                         self.rewrite_slotted(body, returns.as_ref(), &mut scope)?;
+                    }
+                }
+                // A value's INITIALIZER is a body, and it is slotted against
+                // the declared type for the same reason a function's is: a
+                // named function written where an arrow is wanted becomes a
+                // construction of the minted object. The scope is empty --
+                // a top-level initializer has no parameters.
+                Decl::Value(v) => {
+                    let declared = v.ty.clone();
+                    if let Some(init) = &mut v.init {
+                        let mut scope = Scope::default();
+                        self.rewrite_slotted(init, declared.as_ref(), &mut scope)?;
                     }
                 }
                 Decl::Trait(t) => {
@@ -1115,7 +1139,7 @@ impl Pass {
 ///
 /// Conservative on purpose: a name that is only a callee (`f(x)`) is collected
 /// too, and the caller drops it when the scope does not hold it.
-fn free_names(e: &Expr, bound: &mut Vec<BTreeSet<String>>, out: &mut BTreeSet<String>) {
+pub(crate) fn free_names(e: &Expr, bound: &mut Vec<BTreeSet<String>>, out: &mut BTreeSet<String>) {
     let is_bound = |bound: &Vec<BTreeSet<String>>, n: &str| bound.iter().any(|f| f.contains(n));
     match e {
         Expr::Var { name, .. } => {

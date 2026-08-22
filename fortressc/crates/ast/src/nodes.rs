@@ -176,6 +176,36 @@ pub enum Decl {
     Function(FnDecl),
     Trait(TraitDecl),
     Object(ObjectDecl),
+    /// `pi = 3.14` at the top level of a component.
+    ///
+    /// A VARIANT AND NOT A FLAG ON [`FnDecl`], which is what it was: the parser
+    /// carried one as a nullary function with `value_binding: true` and the
+    /// checker refused it before anything downstream could see one. The moment
+    /// it stops refusing, every `Decl::Function` site would meet a value --
+    /// `build_signatures` would register `pi` as a nullary FUNCTION -- and most
+    /// of those sites are `let Decl::Function(f) = decl else { continue }`,
+    /// which would swallow it in silence. A variant makes the exhaustive
+    /// matches say so.
+    Value(ValueDecl),
+}
+
+/// A top-level value. `1.0` calls these top-level VARIABLE declarations and
+/// they may be mutable: `variables.tex:18`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValueDecl {
+    pub modifiers: Modifiers,
+    pub name: String,
+    pub ty: Option<TypeRef>,
+    /// `None` only inside an `api`, where a value declaration is a signature --
+    /// `Library/FlatString.fsi:14` writes `lineSeparator: String`.
+    pub init: Option<Expr>,
+    /// `:=` rather than `=`. CARRIED, not dropped: the parse-only spike this
+    /// replaces threw it away, and three corpus files write `x := 0` at
+    /// component level -- `Compiled5.k.fss`, `overloadTest7.fss` and
+    /// `OverloadWithSuperExcludes.fss`. Dropping it makes those silently
+    /// immutable.
+    pub mutable: bool,
+    pub span: Span,
 }
 /// The declaration modifiers this parser ingests. They are RECORDED AND NOT
 /// READ: M6's spike is the grammar, and the semantics of value types, native
@@ -210,13 +240,6 @@ pub struct FnDecl {
     pub return_type: Option<TypeRef>,
     /// `None` only inside an `api`, where a declaration is a signature.
     pub body: Option<Expr>,
-    /// True when the source wrote a component-level value binding (`pi: RR64 =
-    /// 3.14`) rather than a function. Both parse into this node because there
-    /// is no value declaration node yet, and the checker refuses the binding: a
-    /// value's initializer runs at component initialization, while a nullary
-    /// function's body runs when it is called -- which, for a name nothing can
-    /// reference, is never.
-    pub value_binding: bool,
     pub span: Span,
 }
 

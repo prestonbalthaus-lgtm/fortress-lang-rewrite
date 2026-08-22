@@ -797,19 +797,32 @@ fn a_chain_does_not_hoist_literals() {
 
 // ------------------------------------------------------------------- M3h
 
-/// A component-level value binding parses into a nullary `FnDecl` carrying the
-/// marker. The marker is the whole point: without it the checker cannot tell a
-/// value from a function, and a value carried as a nullary function compiles a
-/// program whose initializer never runs.
+/// A component-level value parses into its OWN declaration node. It was a
+/// nullary `FnDecl` with a marker flag; the node replaced the flag when values
+/// gained semantics, so that every exhaustive walk over `Decl` has to say what
+/// a value means rather than swallowing one as a function.
 #[test]
-fn a_component_level_value_declaration_is_marked_as_one() {
+fn a_component_level_value_declaration_is_its_own_node() {
     for src in ["pi: ZZ32 = 3", "v = 1", "x := 0"] {
         match &component(src).decls[..] {
-            [Decl::Function(f)] => {
-                assert!(f.value_binding, "`{src}` is a value binding");
-                assert!(f.params.is_empty(), "`{src}` takes no parameters");
+            [Decl::Value(v)] => {
+                assert!(v.init.is_some(), "`{src}` has an initializer");
             }
-            other => panic!("expected one function declaration from `{src}`, got {other:?}"),
+            other => panic!("expected one value declaration from `{src}`, got {other:?}"),
+        }
+    }
+}
+
+/// `:=` IS CARRIED. The parse-only spike dropped it, and three corpus files
+/// write a mutable value at component level -- `Compiled5.k.fss:15` is
+/// `x := 0`. Dropping the flag makes those silently immutable, which is a
+/// program that runs and quietly refuses an assignment it should allow.
+#[test]
+fn a_component_level_value_keeps_its_mutability() {
+    for (src, want) in [("v = 1", false), ("x := 0", true), ("y: ZZ32 := 2", true)] {
+        match &component(src).decls[..] {
+            [Decl::Value(v)] => assert_eq!(v.mutable, want, "`{src}`"),
+            other => panic!("expected one value declaration from `{src}`, got {other:?}"),
         }
     }
 }
@@ -822,7 +835,7 @@ fn a_value_declaration_does_not_steal_a_function() {
     for src in ["f(x: ZZ32): ZZ32 = x", "id[\\T\\](x: T): T = x"] {
         match &component(src).decls[..] {
             [Decl::Function(f)] => {
-                assert!(!f.value_binding, "`{src}` is a function, not a value");
+                assert!(f.body.is_some(), "`{src}` is a function, not a value");
             }
             other => panic!("expected one function declaration from `{src}`, got {other:?}"),
         }
@@ -929,6 +942,7 @@ fn opr_names(src: &str) -> Vec<String> {
     for decl in &c.decls {
         match decl {
             Decl::Function(f) => names.push(f.name.clone()),
+            Decl::Value(v) => names.push(v.name.clone()),
             Decl::Trait(t) => names.extend(method_names(&t.members)),
             Decl::Object(o) => names.extend(method_names(&o.members)),
         }
@@ -1066,6 +1080,7 @@ fn declaration_modifiers_are_recorded_on_the_declaration() {
             Decl::Trait(t) => t.modifiers,
             Decl::Object(o) => o.modifiers,
             Decl::Function(f) => f.modifiers,
+            Decl::Value(v) => v.modifiers,
         })
         .collect();
     let at = |i: usize| *mods.get(i).expect("three declarations");

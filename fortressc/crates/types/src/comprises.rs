@@ -56,6 +56,8 @@ fn head(ty: &TypeRef) -> Option<&str> {
 
 fn row(decl: &Decl, own: bool) -> Option<(&str, Row<'_>)> {
     match decl {
+        // A value has no `extends` and no `comprises`; there is no row.
+        Decl::Value(_) => None,
         Decl::Trait(t) => Some((
             t.name.as_str(),
             Row {

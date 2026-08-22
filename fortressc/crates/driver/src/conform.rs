@@ -138,37 +138,81 @@ fn describe(params: &[Param]) -> String {
 ///
 /// A tuple on the left is the parameter list: `f: (ZZ32, String) -> ()` is two
 /// parameters, not one tuple, because this subset has no tuple values.
-fn as_signature(decl: &fortress_ast::FnDecl) -> Option<(Vec<TypeRef>, Option<TypeRef>)> {
-    if !decl.value_binding {
-        return Some((
-            decl.params.iter().map(|p| p.ty.clone()).collect(),
-            decl.return_type.clone(),
-        ));
-    }
-    match decl.return_type.as_ref()? {
-        TypeRef::Arrow { from, to, .. } => {
-            let params = match from.as_ref() {
-                TypeRef::Tuple { elems, .. } => elems.clone(),
-                TypeRef::Unit { .. } => Vec::new(),
-                other => vec![other.clone()],
-            };
-            Some((params, Some(to.as_ref().clone())))
+/// ONE DECLARATION, EITHER SPELLING. A component writes `f(a:A):B` and an api
+/// may write the same obligation as `f: A -> B` -- a VALUE whose type is an
+/// arrow. Both reach conformance as the same (parameters, result), which is
+/// what `value_binding` used to say before values became their own node.
+enum Shape<'d> {
+    Fn(&'d fortress_ast::FnDecl),
+    Value(&'d fortress_ast::ValueDecl),
+}
+
+impl Shape<'_> {
+    fn name(&self) -> &str {
+        match self {
+            Self::Fn(f) => &f.name,
+            Self::Value(v) => &v.name,
         }
-        // A genuine value declaration, not a function in disguise.
-        _ => None,
+    }
+
+    fn participates(&self) -> bool {
+        match self {
+            Self::Fn(f) => participates(f.modifiers),
+            Self::Value(v) => participates(v.modifiers),
+        }
+    }
+
+    /// `None` for a genuine value -- one whose type is not an arrow -- because
+    /// it declares no parameter list to compare.
+    fn signature(&self) -> Option<(Vec<TypeRef>, Option<TypeRef>)> {
+        match self {
+            Self::Fn(f) => Some((
+                f.params.iter().map(|p| p.ty.clone()).collect(),
+                f.return_type.clone(),
+            )),
+            Self::Value(v) => match v.ty.as_ref()? {
+                TypeRef::Arrow { from, to, .. } => {
+                    let params = match from.as_ref() {
+                        TypeRef::Tuple { elems, .. } => elems.clone(),
+                        TypeRef::Unit { .. } => Vec::new(),
+                        other => vec![other.clone()],
+                    };
+                    Some((params, Some(to.as_ref().clone())))
+                }
+                _ => None,
+            },
+        }
+    }
+
+    fn written_params(&self) -> Option<&[fortress_ast::Param]> {
+        match self {
+            Self::Fn(f) => Some(&f.params),
+            Self::Value(_) => None,
+        }
     }
 }
 
-fn same_shape(have: &fortress_ast::FnDecl, want: &fortress_ast::FnDecl) -> bool {
-    let (Some((hp, hr)), Some((wp, wr))) = (as_signature(have), as_signature(want)) else {
+fn shape_of(decl: &Decl) -> Option<Shape<'_>> {
+    match decl {
+        Decl::Function(f) => Some(Shape::Fn(f)),
+        Decl::Value(v) => Some(Shape::Value(v)),
+        Decl::Trait(_) | Decl::Object(_) => None,
+    }
+}
+
+fn same_shape(have: &Shape<'_>, want: &Shape<'_>) -> bool {
+    let (Some((hp, hr)), Some((wp, wr))) = (have.signature(), want.signature()) else {
         return false;
     };
     hp.len() == wp.len()
         && hp.iter().zip(&wp).all(|(x, y)| same_type(x, y))
         && same_return(hr.as_ref(), wr.as_ref())
-        // The varargs flag is only ever set on a written parameter list, so it
-        // is compared where both sides have one.
-        && (have.value_binding || want.value_binding || same_params(&have.params, &want.params))
+        // The varargs flag is only ever set on a WRITTEN parameter list, so it
+        // is compared only where both sides have one.
+        && match (have.written_params(), want.written_params()) {
+            (Some(h), Some(w)) => same_params(h, w),
+            _ => true,
+        }
 }
 
 /// `private` declarations do not participate (`source-code.tex:313-320`).
@@ -186,31 +230,41 @@ pub fn violations(component: &Component, api: &Component, api_name: &str) -> Vec
 
     for decl in &api.decls {
         match decl {
-            Decl::Function(want) => {
-                if !participates(want.modifiers) {
+            // A VALUE AND A FUNCTION TAKE THE SAME PATH, because an api may
+            // write one obligation either way: `f(a:A):B` or `f: A -> B`.
+            Decl::Function(_) | Decl::Value(_) => {
+                let Some(want) = shape_of(decl) else { continue };
+                if !want.participates() {
                     continue;
                 }
-                let found: Vec<&_> = component
+                let found: Vec<Shape<'_>> = component
                     .decls
                     .iter()
-                    .filter_map(|d| match d {
-                        Decl::Function(f) if f.name == want.name => Some(f),
-                        _ => None,
-                    })
+                    .filter_map(shape_of)
+                    .filter(|s| s.name() == want.name())
                     .collect();
                 if found.is_empty() {
-                    out.push(say(format!("`{}`, which is not declared", want.name)));
+                    out.push(say(format!("`{}`, which is not declared", want.name())));
+                    continue;
+                }
+                // A GENUINE VALUE -- one whose type is not an arrow -- declares
+                // no parameter list, so there is no shape to compare and the
+                // name being declared is the whole obligation.
+                if want.signature().is_none() {
                     continue;
                 }
                 // An overload set satisfies the api if ONE of its members has
                 // the declared shape. `overloading.tex` lets a component
                 // declare more than the api asks for.
-                if !found.iter().any(|f| same_shape(f, want)) {
+                if !found.iter().any(|f| same_shape(f, &want)) {
                     out.push(say(format!(
                         "`{}{}`, and no declaration of that name has those parameters",
-                        want.name,
-                        as_signature(want).map_or_else(
-                            || describe(&want.params),
+                        want.name(),
+                        want.signature().map_or_else(
+                            || match decl {
+                                Decl::Function(f) => describe(&f.params),
+                                _ => String::new(),
+                            },
                             |(params, _)| format!("/{}", params.len())
                         )
                     )));
@@ -291,6 +345,7 @@ pub fn shared_definitions(component: &Component, apis: &[(&String, Component)]) 
             Decl::Function(f) => f.name == name && participates(f.modifiers),
             Decl::Trait(t) => t.name == name,
             Decl::Object(o) => o.name == name,
+            Decl::Value(v) => v.name == name,
         })
     };
     for (index, (first, api)) in apis.iter().enumerate() {
@@ -299,6 +354,7 @@ pub fn shared_definitions(component: &Component, apis: &[(&String, Component)]) 
                 Decl::Function(f) if participates(f.modifiers) => &f.name,
                 Decl::Trait(t) => &t.name,
                 Decl::Object(o) => &o.name,
+                Decl::Value(v) => &v.name,
                 Decl::Function(_) => continue,
             };
             if !declared(component, name) {

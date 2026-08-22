@@ -449,7 +449,8 @@ impl<'a> Expander<'a> {
                 match &mut decl {
                     Decl::Trait(t) => t.members.extend(extra),
                     Decl::Object(o) => o.members.extend(extra),
-                    Decl::Function(_) => {}
+                    // Neither has members to extend.
+                    Decl::Function(_) | Decl::Value(_) => {}
                 }
             }
             decls.push(decl);
@@ -671,6 +672,22 @@ impl<'a> Expander<'a> {
         rename: Option<&str>,
     ) -> Result<Decl, TypeError> {
         Ok(match decl {
+            // Substitution walks a value's TYPE and INITIALIZER: a static
+            // parameter mentioned in either has to be replaced like any other.
+            Decl::Value(v) => Decl::Value(fortress_ast::ValueDecl {
+                modifiers: v.modifiers,
+                name: rename.unwrap_or(&v.name).to_owned(),
+                ty: match &v.ty {
+                    Some(t) => Some(self.ty(t, subst)?),
+                    None => None,
+                },
+                init: match &v.init {
+                    Some(e) => Some(self.expr(e, subst)?),
+                    None => None,
+                },
+                mutable: v.mutable,
+                span: v.span,
+            }),
             Decl::Function(f) => Decl::Function(FnDecl {
                 modifiers: f.modifiers,
                 name: rename.unwrap_or(&f.name).to_owned(),
@@ -684,7 +701,6 @@ impl<'a> Expander<'a> {
                     Some(b) => Some(self.expr(b, subst)?),
                     None => None,
                 },
-                value_binding: f.value_binding,
                 span: f.span,
             }),
             Decl::Trait(t) => Decl::Trait(TraitDecl {
@@ -1458,6 +1474,10 @@ fn check_uniformity(component: &Component) -> Result<(), TypeError> {
             Decl::Function(f) => (&f.name, f.static_params.as_slice(), f.span),
             Decl::Trait(t) => (&t.name, t.static_params.as_slice(), t.span),
             Decl::Object(o) => (&o.name, o.static_params.as_slice(), o.span),
+            // A value takes no static parameters, so its shape is the empty
+            // vector and it participates in the uniformity comparison like any
+            // other ground declaration of that name.
+            Decl::Value(v) => (&v.name, &[][..], v.span),
         };
         match seen.get(f_name.as_str()) {
             None => {
@@ -1493,7 +1513,7 @@ fn members_of(decl: &Decl) -> &[Member] {
     match decl {
         Decl::Trait(t) => &t.members,
         Decl::Object(o) => &o.members,
-        Decl::Function(_) => &[],
+        Decl::Function(_) | Decl::Value(_) => &[],
     }
 }
 
@@ -1502,6 +1522,8 @@ fn static_params(decl: &Decl) -> &[StaticParam] {
         Decl::Function(f) => &f.static_params,
         Decl::Trait(t) => &t.static_params,
         Decl::Object(o) => &o.static_params,
+        // A value takes none. `pi[\T\] = ...` has no spelling.
+        Decl::Value(_) => &[],
     }
 }
 
@@ -1510,6 +1532,7 @@ fn decl_span(decl: &Decl) -> Span {
         Decl::Function(f) => f.span,
         Decl::Trait(t) => t.span,
         Decl::Object(o) => o.span,
+        Decl::Value(v) => v.span,
     }
 }
 
@@ -1518,6 +1541,7 @@ fn decl_name(decl: &Decl) -> &str {
         Decl::Function(f) => &f.name,
         Decl::Trait(t) => &t.name,
         Decl::Object(o) => &o.name,
+        Decl::Value(v) => &v.name,
     }
 }
 
@@ -1620,6 +1644,14 @@ fn check_template_headers(component: &Component) -> Result<(), TypeError> {
                 }
                 for p in o.params.iter().flatten() {
                     check_header_type(&p.ty, &known, &params)?;
+                }
+            }
+            // A value's DECLARED type is a header type and is checked here for
+            // the same reason a parameter's is: `pi: Nonesuch = 3.0` must name
+            // the missing type rather than reach the registry.
+            Decl::Value(v) => {
+                if let Some(t) = &v.ty {
+                    check_header_type(t, &known, &params)?;
                 }
             }
             Decl::Function(f) => {
