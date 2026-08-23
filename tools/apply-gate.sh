@@ -392,6 +392,13 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # comprehension is a SET or MAP one or ranges over a collection. Route 4 was
 # ordered with that ceiling already reported, twice. The assertion is
 # `listcomp` and its five mutation rows, not the count.
+# ARITY FLATTENING, 2026-08-23: 432 objects and 126 apis. +6, nothing lost, and
+# ALL 426 PRE-EXISTING OBJECTS EMIT BYTE-IDENTICAL IR -- measured file by file
+# with two binaries, the instrument self-tested both ways first. `overloading
+# .tex:125` makes `f(x:(A,B))` and `f(a:A,b:B)` one declaration, so the honest
+# way to have the first is to lower it into the second: a tuple-typed name
+# becomes SEVERAL names and no tuple is ever built. The RESULT direction stays
+# refused -- that needs the callee to hand back several values.
 OBJECT_FLOOR=321
 API_FLOOR=126
 
@@ -490,6 +497,7 @@ varfield|7\n11\n2\n108\n4|a `var` value parameter and a `:=` field are BOTH assi
 meetrule|3|a bodiless meet makes a declaration SET valid, and a bodied one runs
 concatbeside|Ux\n5|concatenation survives an unrelated declaration of its name
 listcomp|5\n10\n16\n4\n7\n6\n32\n5\n36\nq\n40\n40|a list comprehension builds a real monomorphized `List` and it GROWS
+tupleflat|7\n30\nHello World!\n7\n7|a tuple parameter, a tuple value and a written tuple are FLATTENED
 CASES
 }
 
@@ -571,6 +579,10 @@ badsetcomp.fss|only the list form
 badcompelement.fss|element type is not written anywhere
 badcompgenerator.fss|a generator over a collection rather than a range
 badcomplisttaken.fss|mints its own `List`, and this component already has one
+badtupleresult.fss|it cannot be the result of a function with a body
+badtuplevalue.fss|is a tuple and tuples are FLATTENED here
+badtuplemutable.fss|a mutable tuple binding is not flattened
+badtupleoverload.fss|`g` is declared twice on the same argument types (ZZ32, ZZ32)
 CASES
 
     # `badvaluebinding.fss` LEFT THIS LIST when component-level values landed,
@@ -956,6 +968,14 @@ MUTATIONS=(
   'crates/types/src/comprehension.rs|        self.demanded = true;|        self.demanded = false;|lower a comprehension without minting the List it names'
   'crates/types/src/comprehension.rs|            infix_le(var(&counter, span), hi, span)|            infix_lt(var(&counter, span), hi, span)|read an inclusive range as exclusive'
   'crates/types/src/List.fss|if count >= length(store) then reserve() end|if false then reserve() end|stop the minted List growing its storage'
+  # ARITY FLATTENING, four axes. `overloading.tex:125` makes `f(x:(A,B))` and
+  # `f(a:A,b:B)` ONE declaration, so the two halves are: flatten the parameter
+  # list, and spread the argument -- and spread it ONLY where a declaration of
+  # that arity exists, or `println(t)` reports an arity nobody wrote.
+  'crates/types/src/tuple.rs|self.flatten_params(&mut f.params)?;|let _unflattened = &f.params;|stop flattening a function parameter list'
+  'crates/types/src/tuple.rs|                            spread = true;|                            spread = false;|stop spreading a whole tuple in argument position'
+  'crates/types/src/tuple.rs|        seen.contains(&arity)|        true|spread a tuple across a callee that has no declaration of that arity'
+  'crates/types/src/tuple.rs|            Some(TypeRef::Tuple { elems, .. }) => Some(elems.clone()),|            Some(TypeRef::Tuple { elems: _, .. }) => None,|stop splitting a binding written with a tuple type'
 )
 
 # FORTRESSC AND --mutate DO NOT MIX, and the failure is silent. Every mutation

@@ -1,0 +1,12 @@
+component badtuplevalue
+export Executable
+
+object O(s: String)
+  nom(): String = s
+end
+
+run(): () = do
+  t = (O("a"), O("b"))
+  println(t.nom())
+end
+end

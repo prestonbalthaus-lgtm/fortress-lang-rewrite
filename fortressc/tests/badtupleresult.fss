@@ -1,0 +1,5 @@
+component badtupleresult
+export Executable
+f(x: ZZ32): (ZZ32, ZZ32) = (x, x)
+run(): () = println(1)
+end

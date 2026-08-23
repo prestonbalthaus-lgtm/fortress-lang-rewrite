@@ -1,0 +1,11 @@
+component badtupleoverload
+export Executable
+
+(* `overloading.tex:125` -- a functional has a SINGLE parameter, which may be a
+   tuple. So these are ONE declaration, and flattening is what makes the
+   compiler say so. *)
+g(x: (ZZ32, ZZ32)): ZZ32 = 1
+g(a: ZZ32, b: ZZ32): ZZ32 = 2
+
+run(): () = println(g(1, 2))
+end

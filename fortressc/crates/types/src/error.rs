@@ -683,6 +683,33 @@ pub enum TypeError {
         span: Span,
         name: String,
     },
+    /// An object's value parameter or a field written with a tuple type. Those
+    /// decide a LAYOUT and a constructor arity, so flattening one would change
+    /// what dispatch has already been told.
+    TupleFieldNotFlattened {
+        span: Span,
+    },
+    /// A tuple inside a tuple. Flattening it would make an arity depend on a
+    /// type's shape two levels down; measured at zero corpus files.
+    TupleNested {
+        span: Span,
+    },
+    /// A flattened name used as anything but a whole argument or the right-hand
+    /// side of a destructuring.
+    TupleNameNotWhole {
+        span: Span,
+        name: String,
+    },
+    /// `var t: (A,B) := ...`. Splitting the binding would have to split every
+    /// assignment to it, and `t := f()` cannot split at all.
+    TupleLocalMutable {
+        span: Span,
+    },
+    /// A tuple-typed binding whose initialiser is neither written as a tuple
+    /// nor another flattened name.
+    TupleLocalUnsplittable {
+        span: Span,
+    },
     /// A list comprehension in a position that writes neither its own `[\T\]`
     /// nor a `List[\T\]` slot for it to land in.
     ComprehensionElementUnwritten {
@@ -954,6 +981,11 @@ impl TypeError {
             | Self::LambdaUnsupported { span, .. }
             | Self::LambdaCaptureUntyped { span, .. }
             | Self::CaptureIsMutable { span, .. }
+            | Self::TupleFieldNotFlattened { span }
+            | Self::TupleNested { span }
+            | Self::TupleNameNotWhole { span, .. }
+            | Self::TupleLocalMutable { span }
+            | Self::TupleLocalUnsplittable { span }
             | Self::ComprehensionElementUnwritten { span }
             | Self::ComprehensionGeneratorUnsupported { span, .. }
             | Self::ComprehensionListTaken { span }
@@ -1474,6 +1506,33 @@ impl core::fmt::Display for TypeError {
                 "`{name}` has no written type, so a `fn` closing over it has \
                  nothing to declare its constructor parameter with. Annotate \
                  it -- `{name}: T = ...`"
+            ),
+            Self::TupleFieldNotFlattened { .. } => write!(
+                f,
+                "a tuple is not flattened here: an object's value parameters \
+                 and its fields decide a layout, and a tuple has no \
+                 representation to give one"
+            ),
+            Self::TupleNested { .. } => write!(
+                f,
+                "a tuple inside a tuple is not flattened; arity flattening goes \
+                 one level and no corpus file writes two"
+            ),
+            Self::TupleNameNotWhole { name, .. } => write!(
+                f,
+                "`{name}` is a tuple and tuples are FLATTENED here, so it has \
+                 no value of its own. Pass it whole to a call, or destructure \
+                 it with `(a, b) = {name}`"
+            ),
+            Self::TupleLocalMutable { .. } => write!(
+                f,
+                "a mutable tuple binding is not flattened: every assignment to \
+                 it would have to split, and one whose value is a call cannot"
+            ),
+            Self::TupleLocalUnsplittable { .. } => write!(
+                f,
+                "this tuple binding's initializer is neither written as a tuple \
+                 nor another tuple name, so there is nothing to flatten it into"
             ),
             Self::ComprehensionElementUnwritten { .. } => write!(
                 f,

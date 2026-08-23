@@ -271,6 +271,34 @@ none onto the compile list, because every corpus comprehension is a set or map
 one or ranges over a collection. Set, map and array comprehensions, and a
 generator over a collection, are refused by name.
 
+**ARITY FLATTENING AND THE NON-MATERIALISING CALLING CONVENTION, LANDED
+2026-08-23.** `overloading.tex:125` -- "Recall that a functional has a single
+parameter, which may be a tuple". So `f(x: (A,B))` and `f(a: A, b: B)` ARE ONE
+DECLARATION, and the honest way to have the first is to lower it into the
+second. A tuple-typed name becomes SEVERAL names, `x$0` and `x$1`, and a tuple
+is never built, stored or passed: there is nothing to box because nothing is
+ever whole. An AST-to-AST pass ahead of expansion, because it changes ARITIES
+and every signature the registry is built from has to be the flattened one.
+
+Parameters, component-level values, local bindings, `(a,b) = x`, `f(t)` and
+`f((p,q))` all flatten. A whole tuple is spread into a call ONLY where a
+declaration of that arity exists; otherwise it is written back out as a tuple
+and the checker refuses it for what it is -- spreading unconditionally reported
+`o takes 1 argument(s), found 4` on `o(x: Any)`, an arity nobody wrote, and
+`println(t)` the same.
+
+432 objects and 126 apis, +6 and nothing lost. Oracle 350 -> 356. ALL 426
+PRE-EXISTING OBJECTS EMIT BYTE-IDENTICAL IR, measured file by file with two
+binaries and the instrument self-tested both ways first.
+
+REFUSED BY NAME, each because it needs the half this milestone does not build:
+a tuple RESULT (the callee would have to hand back several values -- an
+aggregate return, and `(left, right) = split()` is its two corpus witnesses); a
+MUTABLE tuple local; a tuple binding whose initialiser is neither a written
+tuple nor another flattened name; a NESTED tuple type; an object's tuple-typed
+value parameter or field, because those decide a layout; and a flattened name
+used as anything but a whole argument or a destructuring's right-hand side.
+
 **EXCEPTIONS, PARKED 2026-08-23.** `throw` is built -- an uncaught throw halts,
 naming the exception, with no unwinding and no cost on the path that does not
 throw -- and `try`/`catch`/`forbid`/`finally` PARSE and are refused by name. The

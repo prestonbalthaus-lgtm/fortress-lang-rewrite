@@ -1383,11 +1383,13 @@ fn a_unit_binding_is_refused() {
     }
 }
 
+/// A TUPLE BINDING IS FLATTENED as of 2026-08-23 -- `x = (1, 2)` is two
+/// bindings and no tuple is built -- so what is left to refuse is the USE.
 #[test]
-fn a_tuple_expression_is_refused_with_a_diagnostic() {
-    match body_error("f(): ZZ32 = do\n  x = (1, 2)\n  0\nend") {
-        TypeError::TypeNotImplemented { form, .. } => assert_eq!(form, "a tuple expression"),
-        other => panic!("expected TypeNotImplemented, got {other:?}"),
+fn a_tuple_name_has_no_value_of_its_own() {
+    match body_error("f(): ZZ32 = do\n  x = (1, 2)\n  x\nend") {
+        TypeError::TupleNameNotWhole { name, .. } => assert_eq!(name, "x"),
+        other => panic!("expected TupleNameNotWhole, got {other:?}"),
     }
 }
 
@@ -1569,14 +1571,19 @@ fn a_tuple_is_neither_an_array_element_nor_a_reference() {
     assert!(!t.is_numeric());
 }
 
-/// AND THE VARIANT IS STILL UNCONSTRUCTABLE FROM SOURCE. `registry.rs`'s
-/// `resolve` is the single gate and it still refuses -- that is what makes the
-/// twenty non-exhaustive sites safe today rather than merely unexercised.
+/// A TUPLE PARAMETER IS FLATTENED as of 2026-08-23 -- `overloading.tex:125`
+/// makes `f(x:(A,B))` and `f(a:A,b:B)` ONE declaration, so the honest way to
+/// have the first is to lower it into the second, and the two spellings now
+/// collide as duplicates the way that sentence says they should. THE RESULT
+/// DIRECTION IS NOT flattened; `a_tuple_result_on_a_function_with_a_body_is_refused`
+/// above still holds, and it is what keeps `Type::Tuple` off the lowering path.
 #[test]
-fn a_tuple_parameter_on_a_function_with_a_body_is_refused() {
-    match body_error("f(x: (ZZ32, ZZ32)): () = ()") {
-        TypeError::TupleNotStorable { position, .. } => assert_eq!(position, "a parameter"),
-        other => panic!("expected TupleNotStorable, got {other:?}"),
+fn a_tuple_parameter_and_its_spelled_out_twin_are_one_declaration() {
+    match type_error(
+        "component t\ng(x: (ZZ32, ZZ32)): ZZ32 = 1\ng(a: ZZ32, b: ZZ32): ZZ32 = 2\nend\n",
+    ) {
+        TypeError::DuplicateOverload { name, .. } => assert_eq!(name, "g"),
+        other => panic!("expected DuplicateOverload, got {other:?}"),
     }
 }
 

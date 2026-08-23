@@ -1,0 +1,7 @@
+component badtuplemutable
+export Executable
+run(): () = do
+  var t: (ZZ32, String) := (4, "hello")
+  println(1)
+end
+end

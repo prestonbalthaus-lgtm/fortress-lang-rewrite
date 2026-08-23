@@ -1,0 +1,36 @@
+component tupleflat
+export Executable
+
+trait Nameable
+  nom(): String
+end
+object O(s: String) extends Nameable
+  nom(): String = s
+end
+
+(* A tuple PARAMETER, flattened, and the body destructures it. *)
+plu(x: (ZZ32, ZZ32)): ZZ32 = do
+  (y, z) = x
+  y + z
+end
+
+(* THE SAME UNDER A STATIC PARAMETER: `(U,U)` flattens before substitution. *)
+join[\U extends Nameable\](x: (U, U), y: Boolean): String = do
+  (a, b) = x
+  a.nom() " " b.nom()
+end
+
+(* A component-level tuple value, split into one value per part. *)
+tu: (O, O) = (O("Hello"), O("World!"))
+
+run(): () = do
+  t = (3, 4)
+  println(plu(t))
+  println(plu((10, 20)))
+  println(join[\O\](tu, true))
+  inner: (ZZ32, ZZ32) = t
+  println(plu(inner))
+  copied = inner
+  println(plu(copied))
+end
+end

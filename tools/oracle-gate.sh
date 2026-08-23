@@ -325,7 +325,8 @@ RUN_TIMEOUT     = 20
 # ANONYMOUS OBJECTS, 2026-08-23: 348. `object ... end` in expression position,
 # and the three are `Compiled5.bf`, `Compiled5.bfs` and `Compiled6.ai`.
 # `var` VALUE PARAMETERS AND `:=` FIELD INITIALIZERS, 2026-08-23: 350.
-PASS_FLOOR = 350
+# ARITY FLATTENING, 2026-08-23: 356.
+PASS_FLOOR = 356
 
 args, opt = sys.argv[1:], {}
 i = 0

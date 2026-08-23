@@ -2585,15 +2585,19 @@ fn a_tuple_in_statement_position_evaluates_both_elements() {
     let _ = std::fs::remove_file(&exe);
 }
 
-/// AND ONLY IN STATEMENT POSITION. A tuple whose value is USED needs a
-/// representation and stays refused by name -- without this the test above
-/// would pass just as well if tuples had quietly become values everywhere.
+/// AND A TUPLE NAME STILL HAS NO VALUE. `x = (1,2)` is FLATTENED as of
+/// 2026-08-23 -- two bindings, no tuple built -- so the binding itself is fine
+/// and it is the USE that is refused. Passing `x` to `println`, which has no
+/// two-argument declaration, WRITES THE TUPLE BACK OUT and the checker refuses
+/// it for what it is. This test asserted the binding until then; without the
+/// second half, arity flattening would pass just as well if tuples had quietly
+/// become values everywhere.
 #[test]
 fn a_tuple_whose_value_is_used_is_still_refused() {
     let src = output_path("tupleval").with_extension("fss");
     std::fs::write(
         &src,
-        "component tupleval\n         export Executable\n         run():()=do\n           x = (1,2)\n           println(1)\n         end\n         end\n",
+        "component tupleval\n         export Executable\n         run():()=do\n           x = (1,2)\n           println(x)\n         end\n         end\n",
     )
     .expect("could not write fixture");
     let out = Command::new(env!("CARGO_BIN_EXE_fortressc"))

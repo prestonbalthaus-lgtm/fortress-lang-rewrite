@@ -19,6 +19,7 @@ pub mod dimensions;
 mod error;
 mod mono;
 mod registry;
+mod tuple;
 mod types;
 
 pub use mono::{expand, mangle_static, MAX_INSTANTIATIONS};
@@ -64,6 +65,11 @@ pub fn check(component: &Component) -> Checked<TypedComponent> {
     // element type is WRITTEN by then -- either on the comprehension or on the
     // slot it initialises -- so nothing here needs a type it has not been told.
     let component = &comprehension::lower(component)?;
+    // AND BEFORE EXPANSION TOO, because it changes ARITIES. Every signature the
+    // registry and the dispatch tables are built from has to be the flattened
+    // one, and `overloading.tex:125` says the two spellings were one
+    // declaration all along.
+    let component = &tuple::lower(component)?;
     let ground = mono::expand(component)?;
     // Closure lowering sits BETWEEN the two for the same reason expansion sits
     // before the checker: it appends object declarations, and tags freeze in
