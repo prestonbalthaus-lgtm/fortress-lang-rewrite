@@ -689,6 +689,14 @@ pub enum TypeError {
     TupleFieldNotFlattened {
         span: Span,
     },
+    /// `if x <- g then ... end`. It PARSES -- `DelimitedExpr.rats:37,39,40,216`
+    /// makes the condition a `GeneratorClause` -- and the lowering is not
+    /// built: yielding IS the truth, and asking a value whether it yields is
+    /// the generator protocol.
+    BindingConditionUnsupported {
+        span: Span,
+        keyword: &'static str,
+    },
     /// A tuple inside a tuple. Flattening it would make an arity depend on a
     /// type's shape two levels down; measured at zero corpus files.
     TupleNested {
@@ -982,6 +990,7 @@ impl TypeError {
             | Self::LambdaCaptureUntyped { span, .. }
             | Self::CaptureIsMutable { span, .. }
             | Self::TupleFieldNotFlattened { span }
+            | Self::BindingConditionUnsupported { span, .. }
             | Self::TupleNested { span }
             | Self::TupleNameNotWhole { span, .. }
             | Self::TupleLocalMutable { span }
@@ -1512,6 +1521,12 @@ impl core::fmt::Display for TypeError {
                 "a tuple is not flattened here: an object's value parameters \
                  and its fields decide a layout, and a tuple has no \
                  representation to give one"
+            ),
+            Self::BindingConditionUnsupported { keyword, .. } => write!(
+                f,
+                "`{keyword} x <- g` parses and its lowering is not implemented: \
+                 the generator yields zero or one value and YIELDING IS THE \
+                 TRUTH, which needs the generator protocol"
             ),
             Self::TupleNested { .. } => write!(
                 f,

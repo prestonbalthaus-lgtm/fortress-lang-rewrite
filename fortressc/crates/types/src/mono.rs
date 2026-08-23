@@ -1054,6 +1054,24 @@ impl<'a> Expander<'a> {
                 body: Box::new(self.expr(body, subst)?),
                 span: *span,
             },
+            Expr::BindingCondition {
+                binders,
+                source,
+                body,
+                loops,
+                otherwise,
+                span,
+            } => Expr::BindingCondition {
+                binders: binders.clone(),
+                source: Box::new(self.expr(source, subst)?),
+                body: Box::new(self.expr(body, subst)?),
+                loops: *loops,
+                otherwise: match otherwise {
+                    Some(o) => Some(Box::new(self.expr(o, subst)?)),
+                    None => None,
+                },
+                span: *span,
+            },
             Expr::For {
                 binder,
                 lo,

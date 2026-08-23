@@ -1,0 +1,15 @@
+component badbindingif
+export Executable
+
+maybe(): ZZ32 = 3
+
+run(): () = do
+  n: ZZ32 = 5
+  (* AN ORDINARY COMPARISON, and it must stay one: `<` and `-` are not glued,
+     so this is not a generator arrow. *)
+  if n < -3 then println(1) else println(2) end
+  (* And `then` on the line below, which nine corpus files write. *)
+  if x <- maybe()
+    then println(x) else println(0) end
+end
+end

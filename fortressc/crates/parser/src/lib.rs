@@ -4300,6 +4300,21 @@ impl<'t, 'a> Parser<'t, 'a> {
     fn while_expr(&mut self) -> Parsed<Expr> {
         let start = self.expect(&Kind::KwWhile, "`while`")?.span;
         self.skip_newlines();
+        if let Some(binders) = self.binding_condition_here(&Kind::KwDo) {
+            let source = self.generator_source(&binders)?;
+            self.skip_newlines();
+            self.expect(&Kind::KwDo, "`do`")?;
+            let body = self.block_body(&[Kind::KwEnd])?;
+            let end = self.expect(&Kind::KwEnd, "`end`")?.span;
+            return Ok(Expr::BindingCondition {
+                binders,
+                source: Box::new(source),
+                body: Box::new(body),
+                loops: true,
+                otherwise: None,
+                span: Span::new(start.start, end.end),
+            });
+        }
         let cond = self.expr()?;
         self.skip_newlines();
         self.expect(&Kind::KwDo, "`do`")?;
@@ -4315,6 +4330,34 @@ impl<'t, 'a> Parser<'t, 'a> {
     fn if_expr(&mut self) -> Parsed<Expr> {
         let start = self.expect(&Kind::KwIf, "`if`")?.span;
         self.skip_newlines();
+        if let Some(binders) = self.binding_condition_here(&Kind::KwThen) {
+            let source = self.generator_source(&binders)?;
+            // `then` IS OPTIONAL after a generator clause -- 1.0's grammar
+            // says so at `DelimitedExpr.rats:39` -- AND A NEWLINE MAY PRECEDE
+            // IT. `Pairs.fss:24` writes the whole `then v else ... end` on the
+            // line below, and nine corpus files do; without the skip the body
+            // starts at `then` and reports `expected an expression`.
+            self.then_keyword();
+            let body = self.block_body(&[Kind::KwElse, Kind::KwElif, Kind::KwEnd])?;
+            let otherwise = if self.at(&Kind::KwElse) {
+                self.pos += 1;
+                Some(Box::new(self.block_body(&[Kind::KwEnd])?))
+            } else if self.at(&Kind::KwElif) {
+                self.pos += 1;
+                Some(Box::new(self.elif_tail()?))
+            } else {
+                None
+            };
+            let end = self.expect(&Kind::KwEnd, "`end`")?.span;
+            return Ok(Expr::BindingCondition {
+                binders,
+                source: Box::new(source),
+                body: Box::new(body),
+                loops: false,
+                otherwise,
+                span: Span::new(start.start, end.end),
+            });
+        }
         let cond = self.expr()?;
         self.skip_newlines();
         self.expect(&Kind::KwThen, "`then`")?;
@@ -4339,11 +4382,99 @@ impl<'t, 'a> Parser<'t, 'a> {
         })
     }
 
+    /// `if x <- g then` and `while (a,b) <- g do`. 1.0's condition here is a
+    /// `GeneratorClause` (`DelimitedExpr.rats:37,39,40,216`), not an
+    /// expression, so the decision needs LOOKAHEAD: a `<-` at depth zero before
+    /// the closing keyword. Without it `if x <- g` reads `x < -g` and reports
+    /// `expected then, found Lt`, which is what 27 corpus files were doing.
+    ///
+    /// The binder list is CONSUMED only when the whole shape is there.
+    fn binding_condition_here(&mut self, closer: &Kind) -> Option<Vec<String>> {
+        let mut depth = 0i32;
+        let mut found = false;
+        for index in self.pos..self.tokens.len() {
+            match self.tokens.get(index).map(|t| &t.kind) {
+                Some(Kind::LParen | Kind::LBracket | Kind::LGeneric | Kind::LBrace) => depth += 1,
+                Some(Kind::RParen | Kind::RBracket | Kind::RGeneric | Kind::RBrace) => depth -= 1,
+                // `<-` is two tokens joined by adjacency, read the way
+                // `generator_clause` reads it.
+                Some(Kind::Lt) if depth == 0 && self.glued_right(index) => {
+                    if matches!(
+                        self.tokens.get(index + 1).map(|t| &t.kind),
+                        Some(Kind::Minus)
+                    ) {
+                        found = true;
+                        break;
+                    }
+                }
+                Some(Kind::LeftArrow) if depth == 0 => {
+                    found = true;
+                    break;
+                }
+                Some(k) if k == closer && depth == 0 => return None,
+                Some(Kind::Eof) | None => return None,
+                _ => {}
+            }
+        }
+        if !found {
+            return None;
+        }
+        let save = self.pos;
+        let binders = self.comprehension_binders();
+        if binders.is_empty() {
+            self.pos = save;
+            return None;
+        }
+        Some(binders)
+    }
+
+    /// The optional `then` of a binding condition, over a newline. Restored
+    /// when it is absent, so a body on the next line is still a body.
+    fn then_keyword(&mut self) {
+        let save = self.pos;
+        self.skip_newlines();
+        if self.at(&Kind::KwThen) {
+            self.pos += 1;
+        } else {
+            self.pos = save;
+        }
+    }
+
+    /// What a binding condition draws from. The binder list and its `<-` are
+    /// already consumed; this is the expression after the arrow.
+    fn generator_source(&mut self, binders: &[String]) -> Parsed<Expr> {
+        let _ = binders;
+        self.skip_newlines();
+        self.expr()
+    }
+
     /// `elif` is `else if` without its own `end`, so the tail reuses the
     /// enclosing `end`.
     fn elif_tail(&mut self) -> Parsed<Expr> {
         self.skip_newlines();
         let start = self.span_here();
+        if let Some(binders) = self.binding_condition_here(&Kind::KwThen) {
+            let source = self.generator_source(&binders)?;
+            self.then_keyword();
+            let body = self.block_body(&[Kind::KwElse, Kind::KwElif, Kind::KwEnd])?;
+            let otherwise = if self.at(&Kind::KwElse) {
+                self.pos += 1;
+                Some(Box::new(self.block_body(&[Kind::KwEnd])?))
+            } else if self.at(&Kind::KwElif) {
+                self.pos += 1;
+                Some(Box::new(self.elif_tail()?))
+            } else {
+                None
+            };
+            return Ok(Expr::BindingCondition {
+                binders,
+                source: Box::new(source),
+                body: Box::new(body),
+                loops: false,
+                otherwise,
+                span: Span::new(start.start, self.span_here().end),
+            });
+        }
         let cond = self.expr()?;
         self.skip_newlines();
         self.expect(&Kind::KwThen, "`then`")?;

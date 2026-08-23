@@ -3263,6 +3263,12 @@ impl Checker {
                 span: *span,
                 form: "a `fn` in this position",
             }),
+            Expr::BindingCondition { loops, span, .. } => {
+                Err(TypeError::BindingConditionUnsupported {
+                    span: *span,
+                    keyword: if *loops { "while" } else { "if" },
+                })
+            }
             // Unreachable from a lowered component: `closure.rs` hoists an
             // anonymous object into a minted top-level declaration and leaves a
             // construction here. A body the hoist could not walk lands here.
@@ -3848,6 +3854,8 @@ impl Checker {
             // Hoisted by `closure.rs` before this pass, so it never carries a
             // read into a loop body; conservative anyway.
             Expr::ObjectExpr { .. } => false,
+            // Refused by name before anything reaches a loop rule.
+            Expr::BindingCondition { .. } => false,
             Expr::Comprehension { body, gens, .. } => {
                 self.reads_shared(body, floor)
                     || gens.iter().any(|g| {

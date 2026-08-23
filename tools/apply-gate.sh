@@ -399,6 +399,12 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # way to have the first is to lower it into the second: a tuple-typed name
 # becomes SEVERAL names and no tuple is ever built. The RESULT direction stays
 # refused -- that needs the callee to hand back several values.
+# A BINDING CONDITION, 2026-08-23: 432 objects and 126 apis, UNCHANGED, and
+# that is what the triage bucket predicted -- `generator-bindings` had 27 first
+# blockers and an `alone*` ceiling of ZERO. `expected `then`, found Lt` goes
+# from 27 corpus files to NONE and exactly ONE lands on the lowering: the other
+# 26 walk on to a later wall. This is a wall-unstacking milestone, and the
+# assertions are `badbindingif`, `badbindingwhile` and three mutation rows.
 OBJECT_FLOOR=321
 API_FLOOR=126
 
@@ -584,6 +590,8 @@ badtuplevalue.fss|is a tuple and tuples are FLATTENED here
 badtuplemutable.fss|a mutable tuple binding is not flattened
 badtupleoverload.fss|`g` is declared twice on the same argument types (ZZ32, ZZ32)
 badtuplewhole.fss|a tuple expression is not implemented in this subset
+badbindingif.fss|`if x <- g` parses and its lowering is not implemented
+badbindingwhile.fss|`while x <- g` parses and its lowering is not implemented
 CASES
 
     # `badvaluebinding.fss` LEFT THIS LIST when component-level values landed,
@@ -977,6 +985,13 @@ MUTATIONS=(
   'crates/types/src/tuple.rs|                            spread = true;|                            spread = false;|stop spreading a whole tuple in argument position'
   'crates/types/src/tuple.rs|        seen.contains(&arity)|        true|spread a tuple across a callee that has no declaration of that arity'
   'crates/types/src/tuple.rs|            Some(TypeRef::Tuple { elems, .. }) => Some(elems.clone()),|            Some(TypeRef::Tuple { elems: _, .. }) => None,|stop splitting a binding written with a tuple type'
+  # A BINDING CONDITION, three axes. `DelimitedExpr.rats:37,39,40,216` makes the
+  # condition a GeneratorClause, so the decision needs lookahead for a `<-`
+  # before the closing keyword; `then` is optional AND may sit on the next line;
+  # and the two keywords differ in nothing but whether the body repeats.
+  'crates/parser/src/lib.rs|if let Some(binders) = self.binding_condition_here(&Kind::KwDo) {|if let Some(binders) = Option::<Vec<String>>::None {|refuse a `while` binding condition at the parser again'
+  'crates/parser/src/lib.rs|        if self.at(&Kind::KwThen) {|        if false {|stop taking a `then` that sits on the next line'
+  'crates/parser/src/lib.rs|                loops: true,|                loops: false,|read a `while` binding condition as an `if`'
 )
 
 # FORTRESSC AND --mutate DO NOT MIX, and the failure is silent. Every mutation

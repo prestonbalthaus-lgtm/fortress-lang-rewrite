@@ -1,0 +1,9 @@
+component badbindingwhile
+export Executable
+
+maybe(): ZZ32 = 3
+
+run(): () = do
+  while x <- maybe() do println(x) end
+end
+end

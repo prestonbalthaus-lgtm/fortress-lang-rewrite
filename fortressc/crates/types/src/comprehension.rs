@@ -230,6 +230,18 @@ impl Pass {
                 self.expr(cond, None)?;
                 self.expr(body, None)?;
             }
+            Expr::BindingCondition {
+                source,
+                body,
+                otherwise,
+                ..
+            } => {
+                self.expr(source, None)?;
+                self.expr(body, None)?;
+                if let Some(o) = otherwise {
+                    self.expr(o, None)?;
+                }
+            }
             Expr::Block { items, .. } => {
                 for item in items {
                     match item {

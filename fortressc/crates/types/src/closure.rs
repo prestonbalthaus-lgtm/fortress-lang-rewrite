@@ -1142,6 +1142,26 @@ impl Pass {
             // `i` inside a member resolves to the field `i` exactly as it
             // resolved to the enclosing local before.
             Expr::ObjectExpr { .. } => self.object_expr(e, scope),
+            Expr::BindingCondition {
+                binders,
+                source,
+                body,
+                otherwise,
+                ..
+            } => {
+                self.rewrite_expr(source, scope)?;
+                scope.push();
+                for b in binders.iter() {
+                    scope.declare_opaque(b);
+                }
+                let walked = self.rewrite_expr(body, scope);
+                scope.pop();
+                walked?;
+                match otherwise {
+                    Some(o) => self.rewrite_expr(o, scope),
+                    None => Ok(()),
+                }
+            }
             Expr::Comprehension { body, gens, .. } => {
                 for g in gens.iter_mut() {
                     self.rewrite_expr(&mut g.init, scope)?;
@@ -1501,6 +1521,21 @@ pub(crate) fn free_names(e: &Expr, bound: &mut Vec<BTreeSet<String>>, out: &mut 
         }
         Expr::Field { base, .. } => free_names(base, bound, out),
         Expr::Throw { value, .. } => free_names(value, bound, out),
+        Expr::BindingCondition {
+            binders,
+            source,
+            body,
+            otherwise,
+            ..
+        } => {
+            free_names(source, bound, out);
+            bound.push(binders.iter().cloned().collect());
+            free_names(body, bound, out);
+            bound.pop();
+            if let Some(o) = otherwise {
+                free_names(o, bound, out);
+            }
+        }
         Expr::ObjectExpr { members, .. } => {
             for member in members {
                 match member {

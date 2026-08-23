@@ -635,6 +635,25 @@ impl Pass {
                 self.expr(cond)?;
                 self.expr(body)?;
             }
+            Expr::BindingCondition {
+                binders,
+                source,
+                body,
+                otherwise,
+                ..
+            } => {
+                self.expr(source)?;
+                self.push();
+                for b in binders.iter() {
+                    self.clear(b);
+                }
+                let walked = self.expr(body);
+                self.pop();
+                walked?;
+                if let Some(o) = otherwise {
+                    self.expr(o)?;
+                }
+            }
             Expr::ObjectExpr { members, .. } => {
                 for member in members {
                     self.member(member)?;

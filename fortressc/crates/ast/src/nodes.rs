@@ -929,6 +929,20 @@ pub enum Expr {
         gens: Vec<GeneratorClause>,
         span: Span,
     },
+    /// `if x <- g then B else C end` and `while (a,b) <- g do B end`.
+    /// `DelimitedExpr.rats:37,39,40,216` -- 1.0's condition is a
+    /// `GeneratorClause`, not an expression: the generator yields zero or one
+    /// value, and yielding IS the truth. One node for both keywords because
+    /// they differ in nothing but whether the body repeats.
+    BindingCondition {
+        binders: Vec<String>,
+        source: Box<Expr>,
+        body: Box<Expr>,
+        /// `while` rather than `if`. A loop has no `else`.
+        loops: bool,
+        otherwise: Option<Box<Expr>>,
+        span: Span,
+    },
     /// `try B catch x A* forbid T* finally B end`, and every part after the
     /// first is optional -- `DelimitedExpr.rats:141-142` is the production.
     ///
@@ -1214,6 +1228,7 @@ impl Expr {
             | Self::FloatLit { span, .. }
             | Self::ObjectExpr { span, .. }
             | Self::Comprehension { span, .. }
+            | Self::BindingCondition { span, .. }
             | Self::Try { span, .. }
             | Self::Throw { span, .. }
             | Self::StrLit { span, .. }

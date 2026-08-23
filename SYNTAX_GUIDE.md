@@ -3068,7 +3068,7 @@ end
 ```
 *Seen in: Library/RangeInternals.fss:157-158, Library/RangeInternals.fss:131-134*
 
-The same arrow binds in a condition, which reads as "take this branch if the generator produced something" [legacy]. 281 sites in 63 files, so it is a staple and not a corner; `if` itself belongs to the control-flow section.
+The same arrow binds in a condition, which reads as "take this branch if the generator produced something" [legacy]. 281 sites in 63 files, so it is a staple and not a corner; `if` itself belongs to the control-flow section.  ⚠ 2026-08-23: IT PARSES. `if x <- g then ... else ... end`, `while (a,b) <- g do ... end` and the `elif` form, all three -- `DelimitedExpr.rats:37,39,40,216` makes the condition a GeneratorClause and not an expression, so the parser looks ahead for a `<-` at depth zero before the closing keyword; without that `if x <- g` reads `x < -g` and answers `expected then, found Lt`, which is what 27 corpus files were doing. `then` is OPTIONAL and MAY SIT ON THE NEXT LINE, which nine of those 27 write. An ordinary `if n < -3 then` is untouched, because `<` and `-` are not glued there. THE LOWERING IS REFUSED BY NAME -- the generator yields zero or one value and yielding IS the truth, which needs the generator protocol -- and only ONE corpus file is first-blocked on it; the other 26 walk on to a later wall.
 
 ```fortress
 (* header shapes, from three different files *)

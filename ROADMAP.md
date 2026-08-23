@@ -299,6 +299,23 @@ tuple nor another flattened name; a NESTED tuple type; an object's tuple-typed
 value parameter or field, because those decide a layout; and a flattened name
 used as anything but a whole argument or a destructuring's right-hand side.
 
+**A BINDING CONDITION PARSES, 2026-08-23.** `if x <- g then ... end` and
+`while (a,b) <- g do ... end`. `DelimitedExpr.rats:37,39,40,216` makes the
+condition a `GeneratorClause` and NOT an expression, so the decision needs
+LOOKAHEAD -- a `<-` at depth zero before the closing keyword -- and without it
+`if x <- g` reads `x < -g` and reports `expected then, found Lt`, which is what
+27 corpus files were doing. `then` is OPTIONAL and MAY SIT ON THE NEXT LINE;
+nine of the 27 write it there. `elif` takes one too.
+
+THE LOWERING IS REFUSED BY NAME: the generator yields zero or one value and
+YIELDING IS THE TRUTH, which is the generator protocol.
+
+432 objects and 126 apis, UNCHANGED, and the triage bucket predicted exactly
+that -- `generator-bindings` had 27 first blockers and an `alone*` ceiling of
+ZERO. `expected then, found Lt` goes from 27 files to NONE and exactly ONE
+lands on the lowering; the other 26 walk on to a later wall, as far as
+`println does not accept Just$Boolean$e`.
+
 **EXCEPTIONS, PARKED 2026-08-23.** `throw` is built -- an uncaught throw halts,
 naming the exception, with no unwinding and no cost on the path that does not
 throw -- and `try`/`catch`/`forbid`/`finally` PARSE and are refused by name. The
