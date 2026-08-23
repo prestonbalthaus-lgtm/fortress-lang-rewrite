@@ -1,0 +1,7 @@
+component badsetcomp
+export Executable
+run(): () = do
+  s = { x | x <- 1:3 }
+  println(1)
+end
+end

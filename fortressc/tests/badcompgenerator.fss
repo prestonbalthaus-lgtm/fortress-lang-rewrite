@@ -1,0 +1,8 @@
+component badcompgenerator
+export Executable
+run(): () = do
+  a: ZZ64[3] = [1 2 3]
+  l = <|[\ZZ64\] x | x <- a |>
+  println(l.size())
+end
+end

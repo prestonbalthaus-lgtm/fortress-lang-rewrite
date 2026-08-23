@@ -1,0 +1,7 @@
+component badcompelement
+export Executable
+run(): () = do
+  l = <| x | x <- 1:3 |>
+  println(l.size())
+end
+end

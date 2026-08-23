@@ -12,6 +12,7 @@
 //! asks a type question.
 
 mod closure;
+mod comprehension;
 pub mod comprises;
 pub mod deviations;
 pub mod dimensions;
@@ -58,6 +59,11 @@ type Checked<T> = Result<T, TypeError>;
 /// every 32-bit tag freeze in `Checker::new`, so the set of concrete types has
 /// to be closed before that happens.
 pub fn check(component: &Component) -> Checked<TypedComponent> {
+    // FIRST, because it MINTS `List[\T\]` and writes `List[\ZZ64\]` into the
+    // program. Expansion has to see that instantiation like any other, and the
+    // element type is WRITTEN by then -- either on the comprehension or on the
+    // slot it initialises -- so nothing here needs a type it has not been told.
+    let component = &comprehension::lower(component)?;
     let ground = mono::expand(component)?;
     // Closure lowering sits BETWEEN the two for the same reason expansion sits
     // before the checker: it appends object declarations, and tags freeze in

@@ -236,6 +236,41 @@ component could not see it.
 a LATER blocker and `unknown name X` became `no declaration of X applies to
 (T)`, which is the lift becoming visible.
 
+**LIST COMPREHENSIONS AND `List[\T\]`, LANDED 2026-08-23. ROUTE 4.**
+`<|[\T\] e | x <- lo:hi, p |>` lowers onto a REAL MONOMORPHIZED `List[\T\]`.
+
+The collection is written in Fortress -- `crates/types/src/List.fss`, embedded
+with `include_str!` -- and MINTED into the component that used a comprehension,
+the way `closure.rs` mints an arrow trait. Expansion then stamps one `List` per
+element type and nothing in codegen had to learn a collection.
+
+ONE ALLOCATION PATH, BY CONSTRUCTION. Storage is an ordinary `Array[\T\]` and
+growth is `array(2 n + 8)` plus a copy, so every byte still comes from
+`fortress_array_alloc`. No new shim, no second allocator, no two-pass hack and
+no pre-size-and-fill. Amortised because the bound is `length(store)`: the value
+parameter records the capacity the list was BUILT with, so comparing against it
+would grow on every append after the first.
+
+SEQUENTIAL, A NAMED DEVIATION. 1.0 defines a comprehension as a `BIG` reduction,
+parallel unless every generator is `seq`. The lowering emits a `while` rather
+than a `for` for two halves of one reason: a `for` body is OUTLINED and its
+iterations may run on several workers, so appending to one shared list would be
+a data race, and a list comprehension's ORDER is defined by its generator. The
+parallel version needs an associative CONCAT reduction over a list monoid --
+a milestone, not a lowering.
+
+THE ELEMENT TYPE IS WRITTEN, NEVER INFERRED, like every other static argument
+here: on the comprehension (`<|[\ZZ64\] ... |>`, which is 1.0's own spelling at
+`parser_tests/XXXPreparser.ad.fss`), or on the slot it fills -- a binding, a
+field, or a function's return type. Neither, and it is refused by name.
+
+Ranges (`lo:hi` and `lo#n`), guards, several generators, and a generic function
+whose `List[\T\]` is stamped per instantiation all work. 426 objects and 126
+apis, UNCHANGED: nine corpus files moved onto a more specific diagnostic and
+none onto the compile list, because every corpus comprehension is a set or map
+one or ranges over a collection. Set, map and array comprehensions, and a
+generator over a collection, are refused by name.
+
 **EXCEPTIONS, PARKED 2026-08-23.** `throw` is built -- an uncaught throw halts,
 naming the exception, with no unwinding and no cost on the path that does not
 throw -- and `try`/`catch`/`forbid`/`finally` PARSE and are refused by name. The

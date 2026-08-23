@@ -385,6 +385,13 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # stops on `unknown name ===`. The compile metric cannot see any of this, so
 # the assertions are `meetrule`, `concatbeside`, `badnomeet`,
 # `badmergedfunctional` and their four mutation rows.
+# THE LIST COMPREHENSION, 2026-08-23: 426 objects and 126 apis, UNCHANGED, and
+# that is the measured answer. Nine corpus files moved onto a MORE SPECIFIC
+# diagnostic -- a `{_}` bracket, a generator over a collection, an unwritten
+# element type -- and none onto the compile list, because every corpus
+# comprehension is a SET or MAP one or ranges over a collection. Route 4 was
+# ordered with that ceiling already reported, twice. The assertion is
+# `listcomp` and its five mutation rows, not the count.
 OBJECT_FLOOR=321
 API_FLOOR=126
 
@@ -482,6 +489,7 @@ objectexpr|8\n100\n42|an anonymous `object` captures a local and gets a tag of i
 varfield|7\n11\n2\n108\n4|a `var` value parameter and a `:=` field are BOTH assignable
 meetrule|3|a bodiless meet makes a declaration SET valid, and a bodied one runs
 concatbeside|Ux\n5|concatenation survives an unrelated declaration of its name
+listcomp|5\n10\n16\n4\n7\n6\n32\n5\n36\nq\n40\n40|a list comprehension builds a real monomorphized `List` and it GROWS
 CASES
 }
 
@@ -554,11 +562,15 @@ badmergedconstruct.fss|comes from an imported api, which declares it and does no
 badtry.fss|`try` parses and its lowering is not implemented
 badseqv.fss|unknown name `===`
 badbigand.fss|is not one of the reduction operators this lowering reaches
-badcomprehension.fss|comprehension parses and its lowering is not implemented
+badcomprehension.fss|expected ZZ32, found ZZ64
 badmutablecapture.fss|is mutable, and a closure captures it BY VALUE here
 badimmutableparam.fss|field `w` is immutable
 badnomeet.fss|is ambiguous for (O, O)
 badmergedfunctional.fss|where Cup is required
+badsetcomp.fss|only the list form
+badcompelement.fss|element type is not written anywhere
+badcompgenerator.fss|a generator over a collection rather than a range
+badcomplisttaken.fss|mints its own `List`, and this component already has one
 CASES
 
     # `badvaluebinding.fss` LEFT THIS LIST when component-level values landed,
@@ -935,6 +947,15 @@ MUTATIONS=(
   'crates/types/src/lib.rs|            if self.concat_applies_to(&statics) {|            if false {|refuse a non-String pair instead of letting a declaration have it'
   'crates/types/src/lib.rs|let every = self.applicable(&group, &tuple, false);|let every = Vec::new();|stop the meet rule discharging a tie'
   'crates/types/src/lib.rs|            let liftable = members_of(decl);|            let liftable = if merged_decl(decl) { &[][..] } else { members_of(decl) };|put the ban on lifting a merged functional method back'
+  # THE LIST COMPREHENSION, five axes. The bracket pair cannot be written in a
+  # row -- `IFS` splits on the bar it is made of -- so it is a named const, and
+  # `List.fss` is a mutation target because `include_str!` puts it in the
+  # dependency graph.
+  'crates/types/src/comprehension.rs|if bracket != LIST_BRACKET {|if false {|lower a set comprehension as if it were a list'
+  'crates/types/src/comprehension.rs|            (None, Some(slot)) => slot,|            (None, Some(_slot)) => return Err(TypeError::ComprehensionElementUnwritten { span }),|stop taking the element type from the slot it initialises'
+  'crates/types/src/comprehension.rs|        self.demanded = true;|        self.demanded = false;|lower a comprehension without minting the List it names'
+  'crates/types/src/comprehension.rs|            infix_le(var(&counter, span), hi, span)|            infix_lt(var(&counter, span), hi, span)|read an inclusive range as exclusive'
+  'crates/types/src/List.fss|if count >= length(store) then reserve() end|if false then reserve() end|stop the minted List growing its storage'
 )
 
 # FORTRESSC AND --mutate DO NOT MIX, and the failure is silent. Every mutation

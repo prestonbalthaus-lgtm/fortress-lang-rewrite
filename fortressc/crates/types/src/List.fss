@@ -1,0 +1,42 @@
+(* THE COLLECTION A LIST COMPREHENSION BUILDS.
+
+   Written in Fortress and MINTED INTO THE COMPONENT that needs it, the way
+   `closure.rs` mints an arrow trait: `include_str!` puts this file in the
+   dependency graph, expansion stamps one `List[\T\]` per element type, and
+   nothing in codegen had to learn a collection.
+
+   ONE ALLOCATION PATH, by construction. Storage is an ordinary `Array[\T\]`
+   and growth is `array(n)` plus a copy, so every byte still comes from
+   `fortress_array_alloc`. There is no new shim and no second allocator.
+
+   AMORTISED, and `length(store)` is why: the value parameter records the
+   capacity the list was BUILT with and never changes, so comparing against it
+   would grow on every append after the first. *)
+component FortressList
+
+object List[\T\](capacity: ZZ64)
+  var count: ZZ64 := 0
+  var store: Array[\T\] = array(capacity)
+
+  size(): ZZ64 = count
+
+  get(i: ZZ64): T = store[i]
+
+  append(x: T): () = do
+    if count >= length(store) then reserve() end
+    store[count] := x
+    count := count + 1
+  end
+
+  reserve(): () = do
+    bigger: Array[\T\] = array(2 count + 8)
+    i: ZZ64 := 0
+    while i < count do
+      bigger[i] := store[i]
+      i := i + 1
+    end
+    store := bigger
+  end
+end
+
+end

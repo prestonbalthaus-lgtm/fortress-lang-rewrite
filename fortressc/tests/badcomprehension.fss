@@ -1,6 +1,12 @@
+component badcomprehension
 export Executable
 
+(* THE BINDER OF A RANGE GENERATOR IS ZZ64, the same rule a `for` bound
+   already has: the lowering runs the range on a `ZZ64` counter and binds the
+   name to it. So an element type of `ZZ32` over `x` itself does not check.
+   This file asserted the whole lowering was unimplemented until 2026-08-23. *)
 run(): () = do
     xs = <|[\ZZ32\] x | x <- 1:10, x > 3 |>
     println(1)
+end
 end

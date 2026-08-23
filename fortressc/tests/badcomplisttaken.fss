@@ -1,0 +1,10 @@
+component badcomplisttaken
+export Executable
+
+object List(n: ZZ64) end
+
+run(): () = do
+  l = <|[\ZZ64\] x | x <- 1:3 |>
+  println(l.size())
+end
+end

@@ -8,8 +8,10 @@ publish = false
 
 [dependencies]
 fortress-ast.workspace = true
-
-[dev-dependencies]
+# `List.fss` is MINTED SOURCE, not a hand-built AST: a list comprehension needs
+# a real `List[\T\]` object and writing one in Fortress is what keeps it on the
+# single allocation path and reviewable. `include_str!` puts the file in the
+# dependency graph, so a mutation table can reach it.
 fortress-lexer.workspace = true
 fortress-parser.workspace = true
 
