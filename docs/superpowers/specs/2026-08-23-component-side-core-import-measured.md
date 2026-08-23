@@ -33,15 +33,17 @@ ARCHITECTURALLY OUT and the reason is recorded at the site: a merged OBJECT
 takes a 32-bit type tag, which shifts every dispatch table built after it, and a
 merged SINGLETON is CONSTRUCTED in that program's `main`.
 
-Forcing it on today, measured over all 1956 files and reverted:
+Forcing it on today, measured over all 1956 files and reverted. Re-run at the
+tip after `Self`, the constructor work and the `true : Boolean` correction
+landed, because a gate is only ever evidence about the binary it ran:
 
 ```
                   before      after forcing it
   objects            395                     0
-  apis               120                   110
-  total              515                   110
-  exit 70/101/139      0                   220
-  lost                 -                   398
+  apis               125                   118
+  total              520                   118
+  exit 70/101/139      0                   221
+  lost                 -                   402
   gained               -                     0
 ```
 
@@ -76,7 +78,7 @@ Number 12   LexicographicOrder 8   ZeroIndexed 8   Generator 7   Array1 7
 UncheckedException 6   IntLiteral 4   MonoidReduction 3   Equality 3 ...
 ```
 
-**The six apis were a different cause and are now fixed.** Five are under
+**The six apis were a different cause and five of them are now fixed.** Five are under
 `CompilerLibrary/` and were waiting on `CompilerLibrary/FortressLibrary.fsi`
 PARSING -- see `2026-08-23-true-is-a-reserved-word.md`. So the component-side
 import speaks for the 69 `.fss`.
