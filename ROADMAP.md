@@ -4,9 +4,16 @@ Goal: a native Fortress compiler producing ELF binaries that run under Slurm,
 linked against OpenMPI over InfiniBand. Work that serves that ships. Work that
 does not gets cut.
 
-Every phase has one exit criterion. The measure throughout is the ~1950 `.fss`
-and `.fsi` files already in this tree, run against the legacy interpreter for a
-differential baseline.
+Every phase has one exit criterion. The measure throughout is the 1956 `.fss`
+and `.fsi` files already in this tree.
+
+**THE "DIFFERENTIAL BASELINE AGAINST THE LEGACY INTERPRETER" IN PHASE 0 DOES NOT
+EXIST AND NEVER WILL.** The JVM path was cancelled as a side effect of the
+no-JVM decision and this file was never amended. The real oracle needs no JVM:
+it is the 373 `.test` files the legacy implementation shipped, on disk, 266 of
+them carrying the exact compile error 1.0 gave. `tools/oracle-gate.sh` is the
+instrument. Phases 4 and 5 below inherit the dead reference in their exit
+criteria; read "the legacy interpreter" as "the recorded `.test` set".
 
 ## Where the work actually is, 2026-08-19
 
@@ -118,10 +125,12 @@ nine plus this milestone's two were +281.
 
 ## Phases
 
-**0. Baseline.** Get the legacy interpreter building and running. Ant and Java 6
-era code, expect it to be broken.
-*Exit:* legacy interpreter runs `ProjectFortress/tests/` and the pass/fail set is
-recorded in the repo. That recorded set is the target, not the specification.
+**0. Baseline.** ~~Get the legacy interpreter building and running.~~
+**CANCELLED, and the exit was met another way.** Running the JVM implementation
+was dropped with the no-JVM decision. The pass/fail set is already in the repo
+and always was: 373 `.test` files, 266 with the exact legacy compile error.
+*Exit, as met:* `tools/oracle-gate.sh` reads that set, builds and RUNS every
+compiling corpus file, and carries a must-fail ratchet. It needs no JVM.
 
 **1. Lexer.** `logos` based, newline aware (see decision 2).
 *Exit:* tokenizes all 1950 corpus files without panicking, with token counts
@@ -131,7 +140,7 @@ stable across runs.
 `.rats` modules under `ProjectFortress/src/com/sun/fortress/parser/`.
 *Exit:* parses 90% of the corpus to an AST. The remaining 10% is catalogued with
 a reason each.
-*Where it is:* 1780 of 1956 lex (91%), 168 of those parse. Both numbers are
+*Where it is:* 1845 of 1956 lex (94%), 839 of those parse. Both numbers are
 ratchets in the corpus tests rather than commentary, so a regression fails the
 build.
 
@@ -151,30 +160,49 @@ not the old behaviour.
 
 *This line said "Hindley-Milner inference" until 2026-08-21 and that was never
 true of this compiler.* There is no HM engine and no ADT resolution: `unify`,
-`occurs_check`, `TypeVar` and `Substitution` have zero hits across every crate,
-and `Type` (`crates/types/src/types.rs:86-102`) is a `Copy` enum with **no
-variable case**, so there is nowhere for an inference variable to live. What
+`occurs_check` and `TypeVar` have zero hits across every crate and `struct
+Substitution` has none either (the three bare `Substitution` hits in `mono.rs`
+are comment prose about monomorphization),
+and `Type` (`crates/types/src/types.rs:161-227`) is a `Copy` enum with **no
+variable case** -- twelve variants as of 2026-08-22, none of them a variable --
+so there is nowhere for an inference variable to live. What
 exists is bidirectional checking (`expected: Option<Type>`, which pins literals
 and asserts subtyping and never converts anything) over a monomorphizer that
 requires every static argument to be written. **Phase 4 is a build, not an
 extension** -- which is why decision 4 asks for it to be split before it starts.
 See `docs/superpowers/specs/2026-08-21-d6-phase4-split.md`.
-*Exit:* type checks `Library/` and the corpus, disagreements with the legacy
-interpreter documented rather than silently matched.
+*Exit:* type checks `Library/` and the corpus, disagreements with the recorded
+`.test` set documented rather than silently matched.
 
 **5. Codegen, sequential.** LLVM IR via `inkwell`. No parallelism yet.
 *Exit:* hello world plus the single threaded half of the corpus compiles, links
-and produces the same output as the interpreter.
+and produces the output the recorded `.test` set gives.
 
-**6. Runtime and the C ABI.** Memory management (ARC or Boehm), the `extern "C"`
-boundary, OpenMPI linkage.
+**6. Runtime and the C ABI.** Memory management -- **DECIDED: Boehm-Demers-Weiser,
+landed, linked into every binary** (`docs/superpowers/specs/2026-08-18-m3a-memory.md`)
+-- the `extern "C"` boundary, OpenMPI linkage.
 *Exit:* a Fortress program calls `MPI_Init` and `MPI_Comm_size` and returns the
 right rank count on two nodes.
 
-**7. Parallelism.** Parallel `for`, `atomic`, `spawn`, `also`, generators and
-reductions lowered to real threads.
-*Exit:* a parallel reduction over 10^9 elements beats the sequential version on
-one node, and `ZZ64` indexing works past 2^31.
+**EXCEPTIONS, PARKED 2026-08-23.** `throw` is built -- an uncaught throw halts,
+naming the exception, with no unwinding and no cost on the path that does not
+throw -- and `try`/`catch`/`forbid`/`finally` PARSE and are refused by name. The
+Result-style tagged-union LOWERING is parked: with the parse in, the measured
+ceiling is FOUR corpus files, all four exception tests, against a
+throwing-function fixpoint over the call graph, an ABI change on every function
+that can throw, `finally` on both edges and a rule for a throw inside an
+outlined parallel body. The design is written and stays valid --
+`docs/superpowers/specs/2026-08-23-exceptions-design.md`, and the exception
+object's existing 32-bit tag is the discriminator. Unpark it when something
+raises the ceiling.
+
+**7. Parallelism. PASSED.** Parallel `for`, `atomic`, `spawn`, `also`,
+generators and reductions lowered to real threads.
+*Exit, MET and gated by `tools/phase7-gate.sh`:* a parallel reduction over 10^9
+elements beats the sequential version on one node -- 0.80 s at one worker to
+0.09 s at fourteen -- and `ZZ64` indexing works past 2^31: index 2,999,999,999
+of a three-billion-element `Array[\Boolean\]` is written and read. That second
+half is the reason the rewrite exists.
 
 **8. Cluster shipping.** Apptainer image, Slurm batch scripts, AVX-512 tuning
 for the Platinum 8160s.
