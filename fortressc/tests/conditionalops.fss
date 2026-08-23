@@ -1,0 +1,19 @@
+export Executable
+
+(* `basic-lib/booleans.tex:211`: `AND:` is the CONDITIONAL logical and -- it
+   examines its first argument and stops if that settles the answer. This
+   compiler's `AND` and `OR` already short circuit, so the colon form maps onto
+   the same node and gets exactly the semantics the specification asks for.
+   `loud` PROVES the short circuit rather than asserting it: it prints, so an
+   evaluated right operand shows up in the output. *)
+loud(): Boolean = do
+    println("EVALUATED")
+    true
+end
+
+run(): () = do
+    println(false AND: loud())
+    println(true OR: loud())
+    println(true AND: true)
+    println(false OR: false)
+end

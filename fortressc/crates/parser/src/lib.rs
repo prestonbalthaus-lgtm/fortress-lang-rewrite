@@ -2745,7 +2745,11 @@ impl<'t, 'a> Parser<'t, 'a> {
         while self.at_word_op("OR") {
             let span = self.span_here();
             self.require_unmarked(mark, "OR", span)?;
+            let conditional = self.at_conditional_word_op("OR");
             self.pos += 1;
+            if conditional {
+                self.pos += 1;
+            }
             self.skip_newlines();
             let (rhs, rhs_mark) = self.conjunction()?;
             self.require_unmarked(rhs_mark, "OR", span)?;
@@ -2763,7 +2767,11 @@ impl<'t, 'a> Parser<'t, 'a> {
         while self.at_word_op("AND") {
             let span = self.span_here();
             self.require_unmarked(mark, "AND", span)?;
+            let conditional = self.at_conditional_word_op("AND");
             self.pos += 1;
+            if conditional {
+                self.pos += 1;
+            }
             self.skip_newlines();
             let (rhs, rhs_mark) = self.comparison()?;
             self.require_unmarked(rhs_mark, "AND", span)?;
@@ -2782,6 +2790,26 @@ impl<'t, 'a> Parser<'t, 'a> {
     /// left unconsumed, turning a correct program into a parse error.
     fn at_word_op(&self, word: &str) -> bool {
         matches!(self.peek_kind(), Some(Kind::OpWord(name)) if *name == word)
+    }
+
+    /// `AND:` and `OR:`, the CONDITIONAL forms. `basic-lib/booleans.tex:211`:
+    /// "The conditional logical AND operator `AND:` examines its first
+    /// argument" -- it short circuits, where plain `AND` is an ordinary
+    /// operator that evaluates both.
+    ///
+    /// THIS COMPILER'S `AND` AND `OR` ALREADY SHORT CIRCUIT, so the colon form
+    /// maps onto the same node and gets the semantics the specification asks
+    /// for exactly. The over-eager half is the OTHER one -- plain `AND` also
+    /// short circuits here -- and that is pre-existing, recorded, and not made
+    /// worse by this.
+    ///
+    /// The colon must be GLUED. `lexical-structure.tex` makes an operator
+    /// followed immediately by a character part of one token, and a spaced
+    /// `a AND : b` is not this operator.
+    fn at_conditional_word_op(&self, word: &str) -> bool {
+        self.at_word_op(word)
+            && self.glued_right(self.pos)
+            && matches!(self.peek_ahead(1), Some(Kind::Colon))
     }
 
     /// One of the 66 words the lexer keeps out of the identifier namespace,

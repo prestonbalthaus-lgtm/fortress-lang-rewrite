@@ -361,6 +361,10 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # into the importing component, and a merged object is lowered only if its
 # layout is buildable.
 #
+# `AND:` AND `OR:`, 2026-08-23: 416 objects and 126 apis. The conditional
+# logical operators, 206 corpus sites, and the three files gained are
+# `Compiled9.aj`, `InliningTest3a` and `InliningTest9`. The object floor keeps
+# its slack; the api count did not move.
 OBJECT_FLOOR=321
 API_FLOOR=126
 
@@ -453,6 +457,7 @@ setterfires|SETTER RAN\n105\n9\nBOX 7\nBASE 7|a declared setter FIRES and an ord
 mergedaccessor|42|a merged getter name does not capture this file's own method
 seqvoperator|true\nfalse|`===` reaches the overload set and is not a spelling of `=`
 bigoperator|7\n42\n10|`BIG` folds into the operator NAME at the use site too
+conditionalops|false\ntrue\ntrue\nfalse|`AND:` and `OR:` are the conditional forms and SHORT CIRCUIT
 CASES
 }
 
@@ -772,6 +777,10 @@ CASES
 }
 
 MUTATIONS=(
+  # `AND:` AND `OR:` ARE THE CONDITIONAL FORMS. The colon must be GLUED and it
+  # must be CONSUMED -- left behind it is `expected an expression, found Colon`,
+  # which is where 27 corpus files stopped.
+  'crates/parser/src/lib.rs|            && matches!(self.peek_ahead(1), Some(Kind::Colon))|            && matches!(self.peek_ahead(1), Some(Kind::Semi))|stop reading a glued colon as the conditional operator'
   # A COMPREHENSION PARSES. Two axes: the bare-`|` separator, and the static
   # arguments that go INSIDE the opener.
   'crates/parser/src/lib.rs|                if self.comprehension_bar_here() {|                if false {|stop reading the bare bar as a comprehension separator'

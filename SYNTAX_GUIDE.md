@@ -855,6 +855,8 @@ a CMP b      (* three-way compare, returns a Comparison; LEXICO is the lexicogra
 
 `< <= > >= = =/=` are [fortressc]; `CMP`, `LEXICO`, `SEQV`, `NEQV` are [parses].  ⚠ 2026-08-23: `===` LEFT THIS LIST. It used to map to the same AST node as `=`, which read `a === b` as numeric equality; it is an ORDINARY LIBRARY OPERATOR -- `Library/CompilerLibrary.fsi:30` declares `opr ===(a:Any, b:Any):Boolean` and `.fss:63` defines it as reference identity, with a separate `ZZ64` overload that IS `a = b`. So reading it as `=` got the numeric case right by luck and the reference case wrong by construction. It reaches the overload set now: with no declaration in scope `3 === 4` is `` unknown name `===` ``, and a file that declares its own gets its own. Measured before the reclassification -- ZERO corpus files that compile write one, though SEVEN of this compiler's own fixtures did and every one was caught by a gate.
 
+⚠ 2026-08-23: `AND:` AND `OR:` ARE THE CONDITIONAL FORMS and compile [fortressc]. `basic-lib/booleans.tex:211` -- "the conditional logical AND operator `AND:` examines its first argument" -- so they SHORT CIRCUIT, where plain `AND` is an ordinary operator that evaluates both. This compiler's `AND` and `OR` already short circuit, so the colon form maps onto the same node and gets exactly what the specification asks for; the over-eager half is plain `AND`, which is pre-existing. The colon must be GLUED: `a AND : b` is not this operator. 206 corpus sites.
+
 *Seen in: Library/FortressLibrary.fss:98, Library/CompilerLibrary.fss:63, Library/FortressLibrary.fss:224-226*
 
 Comparisons chain, the middle operand is evaluated once, and every link must have the same sense. [fortressc]

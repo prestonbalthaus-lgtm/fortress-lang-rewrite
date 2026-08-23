@@ -267,7 +267,7 @@ commentary:
 |---|---|---|---|
 | corpus files that LEX | 1845 of 1956 | 1845 | `crates/lexer/tests/corpus.rs` |
 | corpus files that PARSE | 839 | 839 | `crates/parser/tests/corpus.rs` |
-| `.fss` that compile and emit an object | 413 | 321 | `tools/apply-gate.sh` |
+| `.fss` that compile and emit an object | 416 | 321 | `tools/apply-gate.sh` |
 | `.fsi` that check | 126 | 126 | `tools/apply-gate.sh` |
 | oracle cases that agree with 1.0 | 345 | 345 | `tools/oracle-gate.sh` |
 
