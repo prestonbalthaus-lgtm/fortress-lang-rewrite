@@ -137,19 +137,25 @@ trait TotalComparison
     opr CMP(self, other:Unordered): Comparison
     opr >=(self, other:Unordered): Boolean
     opr >=(self, other:Comparison): Boolean
-(* v1 SOURCE CORRECTION: the same three disambiguating declarations this file's
+(* v1 SOURCE CORRECTION: the same FOUR disambiguating declarations this file's
    twin `Library/FortressLibrary.fsi` takes, and for the same reason -- this
-   trait inherits `StandardPartialOrder` at TWO instantiations, so `<=`, `>` and
-   `>=` each arrive twice with the self position and the parameter position
-   crossing. `advanced/overloading.tex:396-410` requires the meet declaration
-   from the trait that provides both. See
+   trait inherits `StandardPartialOrder` at TWO instantiations, so `<=`, `>`,
+   `>=` and `=` each arrive twice with the self position and the parameter
+   position crossing. `advanced/overloading.tex:396-410` requires the meet
+   declaration from the trait that provides both. See
    docs/superpowers/specs/2026-08-23-library-overload-ambiguities.md.
-   THIS COPY CANNOT BE CHECKED YET -- it stops at :86 on `Self` -- so the
-   correction is carried for parity with the twin and is not independently
-   compiler-named here. *)
+   `=` WAS ADDED ON 2026-08-23, after the other three; it needs
+   `CompilerAlgebra`'s `Equality` merged before anything can reach it.
+   THIS COPY IS PAST `:86` NOW -- `Self` is an ordinary type variable as of
+   2026-08-23, and `:2550`'s `true : Boolean` was corrected the same day -- and
+   it stops at `:450`, `AnyIntegral extends QQ` against `QQ`'s own open
+   `comprises`, which is the correction the twin already carries at its `:406`.
+   The declarations here are still carried for parity with the twin and are not
+   independently compiler-named. *)
     opr <=(self, other:TotalComparison): Boolean
     opr >=(self, other:TotalComparison): Boolean
     opr >(self, other:TotalComparison): Boolean
+    opr =(self, other:TotalComparison): Boolean
     opr LEXICO(self, other:TotalComparison): TotalComparison
     opr LEXICO(self, other:()->TotalComparison): TotalComparison
     abstract opr INVERSE(self): TotalComparison

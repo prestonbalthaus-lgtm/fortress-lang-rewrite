@@ -124,11 +124,22 @@ trait TotalComparison
     opr CMP(self, other:Unordered): Comparison
     opr >=(self, other:Unordered): Boolean
     opr >=(self, other:Comparison): Boolean
-(* v1 SOURCE CORRECTION: three disambiguating declarations added.
+(* v1 SOURCE CORRECTION: FOUR disambiguating declarations added.
    This trait's own comment says its "method definitions avoid ambiguities
    between these orderings", and for `<` they do -- `LessThan`, `GreaterThan`
-   and `EqualTo` each declare `opr <(self, other:TotalComparison)`. `<=`, `>`
-   and `>=` were missed.
+   and `EqualTo` each declare `opr <(self, other:TotalComparison)`. `<=`, `>`,
+   `>=` and `=` were missed.
+   `=` WAS ADDED ON 2026-08-23, AFTER THE OTHER THREE, and it is the same rule
+   one trait higher: `Comparison` extends `StandardPartialOrder[\Comparison\]`
+   and so reaches `Equality[\Comparison\]`, while `TotalComparison` reaches
+   `Equality[\TotalComparison\]` as well, so `=` arrives at `(EqualTo,
+   GreaterThan)` as `(TotalComparison, Comparison)` -- this trait's own
+   declaration -- against `(Equality[\TotalComparison\], TotalComparison)`. The
+   self positions and the parameter positions cross exactly as they do for the
+   other three. It is LATER than the others because nothing could reach it: it
+   needs `CompilerAlgebra`'s `Equality` merged, which only happens when a file
+   imports both core apis. Verified by simulation, not by the corpus count --
+   see docs/superpowers/specs/2026-08-23-component-side-core-import-measured.md.
    THE HIERARCHY INHERITS ONE GENERIC TRAIT AT TWO INSTANTIATIONS:
      Comparison       extends StandardPartialOrder[\Comparison\]
      TotalComparison  extends { Comparison, StandardTotalOrder[\TotalComparison\] }
@@ -146,6 +157,7 @@ trait TotalComparison
     opr <=(self, other:TotalComparison): Boolean
     opr >=(self, other:TotalComparison): Boolean
     opr >(self, other:TotalComparison): Boolean
+    opr =(self, other:TotalComparison): Boolean
     opr LEXICO(self, other:TotalComparison): TotalComparison
     opr LEXICO(self, other:()->TotalComparison): TotalComparison
     abstract opr INVERSE(self): TotalComparison
