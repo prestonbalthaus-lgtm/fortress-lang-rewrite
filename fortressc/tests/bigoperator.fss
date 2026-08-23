@@ -1,0 +1,16 @@
+export Executable
+
+(* `BIG` is a MODIFIER ON THE OPERATOR NAME on both sides. The declaration folds
+   the two words into one name, and so does the use: `BIG STAR()` is a call of
+   the name `BIG STAR`, which is how `__bigOperatorSugar` is handed a reduction
+   object. `BIG SUM[...]` is the other shape and still folds onto the
+   accumulator. *)
+opr BIG STAR(): ZZ32 = 7
+
+opr BIG PLUS(a: ZZ32): ZZ32 = a + 1
+
+run(): () = do
+    println(BIG STAR())
+    println(BIG PLUS(41))
+    println(BIG SUM[i <- 1:4] i)
+end

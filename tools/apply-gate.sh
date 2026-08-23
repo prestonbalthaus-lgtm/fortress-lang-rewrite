@@ -452,6 +452,7 @@ ctoroverload|107\n7|a constructor and a function of one name are ONE overload se
 setterfires|SETTER RAN\n105\n9\nBOX 7\nBASE 7|a declared setter FIRES and an ordinary method does not
 mergedaccessor|42|a merged getter name does not capture this file's own method
 seqvoperator|true\nfalse|`===` reaches the overload set and is not a spelling of `=`
+bigoperator|7\n42\n10|`BIG` folds into the operator NAME at the use site too
 CASES
 }
 
@@ -523,6 +524,7 @@ badmergedfunction.fss|unknown name `gcd`
 badmergedconstruct.fss|comes from an imported api, which declares it and does not define it
 badtry.fss|`try` parses and its lowering is not implemented
 badseqv.fss|unknown name `===`
+badbigand.fss|is not one of the reduction operators this lowering reaches
 CASES
 
     # `badvaluebinding.fss` LEFT THIS LIST when component-level values landed,
@@ -769,6 +771,10 @@ CASES
 }
 
 MUTATIONS=(
+  # `BIG` FOLDS INTO THE OPERATOR NAME AT THE USE SITE. Without the arm it is
+  # a bare reserved word again and the thirteen files that write one are filed
+  # under the parser instead of under what they actually need.
+  'crates/parser/src/lib.rs|            Kind::Reserved("BIG") => self.big_operator(),|            Kind::Reserved("BIGX") => self.big_operator(),|refuse every other `BIG` as a bare reserved word again'
   # `===` IS NOT `=`. Reading it as `=` gets the numeric case right by luck
   # and the reference case wrong by construction.
   'crates/parser/src/lib.rs|            Kind::EqEqEq => "===",|            Kind::EqEqEq => "==",|send `===` to a different operator name'

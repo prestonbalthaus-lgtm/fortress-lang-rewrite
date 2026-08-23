@@ -3164,20 +3164,64 @@ impl<'t, 'a> Parser<'t, 'a> {
             && self.glued_left(self.pos + offset + 1)
     }
 
-    /// A reduction's operator name. `SUM`, `PROD`, `MAX` and `MIN` all satisfy
-    /// the operator-word rule, so they arrive as `OpWord`; `identifier` refuses
-    /// that kind and would report `expected an expression` at the name itself.
-    fn reduction_operator_name(&mut self) -> Parsed<(String, Span)> {
-        match self.peek() {
-            Some(Token {
-                kind: Kind::Ident(name) | Kind::OpWord(name),
-                span,
-            }) => {
-                self.pos += 1;
-                Ok(((*name).to_owned(), *span))
-            }
-            _ => Err(self.error("a reduction operator")),
+    /// `BIG <op>` in expression position, in both of the shapes the corpus
+    /// writes it.
+    ///
+    /// * `BIG <op>[gens] body` -- a reduction over an ARBITRARY operator.
+    ///   `BIG AND[x <- self] (x IN other)`, `BIG ||[e <- x] e`. Four of them
+    ///   fold onto the accumulator over a range; the rest, and any generator
+    ///   over a collection, are refused BY NAME by `big_reduction`.
+    /// * `BIG <op>(...)` and `BIG <op>[\T\](...)` -- a VALUE. The reduction
+    ///   OBJECT, passed to `__bigOperatorSugar`. `Library/FortressLibrary
+    ///   .fss:130` writes `BIG LEXICO()` and `simpleBig.fss` writes
+    ///   `BIG STAR[\T\]()`, and both are ordinary calls of a declared name.
+    ///
+    /// THE TWO ARE SEPARATED BY A GLUED `[` THAT IS NOT `[\`. A generator
+    /// bracket is glued to the operator and holds a binder; a static-argument
+    /// bracket is its own token. Nothing else can tell them apart, which is the
+    /// same test `big_reduction_here` already makes for the four.
+    fn big_operator(&mut self) -> Parsed<Expr> {
+        let start = self.span_here();
+        let save = self.pos;
+        self.pos += 1; // `BIG`
+        let Some((op, _)) = self.operator_name_here() else {
+            self.pos = save;
+            return Err(ParseError::ReservedWord {
+                span: start,
+                word: "BIG".to_owned(),
+            });
+        };
+        let generator_bracket =
+            matches!(self.peek_kind(), Some(Kind::LBracket)) && self.glued_left(self.pos);
+        if generator_bracket {
+            self.pos = save;
+            return self.big_reduction();
         }
+        Ok(Expr::Var {
+            name: format!("BIG {op}"),
+            span: Span::new(start.start, self.previous_span().end),
+        })
+    }
+
+    /// An operator NAME here, consumed. Every spelling the corpus puts after a
+    /// `BIG`: a word operator, an identifier, `||`, a bar run, and the single
+    /// character operators.
+    fn operator_name_here(&mut self) -> Option<(String, Span)> {
+        let span = self.span_here();
+        let text = match self.peek_kind()? {
+            Kind::Ident(name) | Kind::OpWord(name) | Kind::UniOp(name) | Kind::BarRun(name) => {
+                (*name).to_owned()
+            }
+            Kind::BarBar => "||".to_owned(),
+            Kind::Bar => "|".to_owned(),
+            Kind::LeftBar => "<|".to_owned(),
+            Kind::Plus => "+".to_owned(),
+            Kind::Star => "*".to_owned(),
+            Kind::LBrace => "{".to_owned(),
+            _ => return None,
+        };
+        self.pos += 1;
+        Some((text, span))
     }
 
     /// `SUM[i <- lo:hi] e`, and `PROD` likewise.
@@ -3192,7 +3236,9 @@ impl<'t, 'a> Parser<'t, 'a> {
         if self.at(&Kind::Reserved("BIG")) {
             self.pos += 1;
         }
-        let (name, name_span) = self.reduction_operator_name()?;
+        let (name, name_span) = self
+            .operator_name_here()
+            .ok_or_else(|| self.error("a reduction operator"))?;
         let op = match name.as_str() {
             "SUM" => BinOp::Add,
             "PROD" => BinOp::Mul,
@@ -3635,6 +3681,14 @@ impl<'t, 'a> Parser<'t, 'a> {
             // `BIG SUM[i <- 1:10] e`. `BIG` is a reserved word and optional in
             // the corpus, which writes both spellings.
             Kind::Reserved("BIG") if self.big_reduction_here(1) => self.big_reduction(),
+            // EVERY OTHER `BIG`. It is a MODIFIER ON THE OPERATOR NAME, not a
+            // keyword of its own -- `opr BIG SQCAP` and `opr SQCAP` are two
+            // declarations and the declaration side has folded the two words
+            // into one name since the `opr` spike. This is the use side, and it
+            // folds the same way, so `BIG LEXICO()` is a call of the name
+            // `BIG LEXICO` and `BIG ||[e <- x] e` is a reduction over the
+            // operator `BIG ||`.
+            Kind::Reserved("BIG") => self.big_operator(),
             Kind::Reserved(word) => Err(ParseError::ReservedWord {
                 span,
                 word: (*word).to_owned(),

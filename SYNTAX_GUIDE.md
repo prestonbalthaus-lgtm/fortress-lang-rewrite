@@ -1073,7 +1073,7 @@ opr BIG <|[\T\] g:Generator[\T\]|>:List[\T\] =                  (* generator for
 opr BIG $() :BigReduction[\RR64,RR64\] = BigReduction[\RR64,RR64\](SumRR64Red)
 ```
 
-fortressc refuses the declaration at its first token, "reserved word `opr` is not in the implemented subset". The `BIG` message, "reserved word `BIG` is not in the implemented subset", is what a `BIG SUM [i <- 1:n] i` EXPRESSION gets.  ⚠ 2026-08-23: `opr BIG STAR(): ZZ32 = 1` compiles as a DECLARATION. The `BIG` refusal is still right for the EXPRESSION form.
+fortressc refuses the declaration at its first token, "reserved word `opr` is not in the implemented subset". The `BIG` message, "reserved word `BIG` is not in the implemented subset", is what a `BIG SUM [i <- 1:n] i` EXPRESSION gets.  ⚠ 2026-08-23: `opr BIG STAR(): ZZ32 = 1` compiles as a DECLARATION. The `BIG` refusal is still right for the EXPRESSION form.  ⚠ 2026-08-23 (later): `BIG` IS A MODIFIER ON THE OPERATOR NAME AT THE USE SITE TOO, the same way the declaration side already folded it. `BIG LEXICO()` and `BIG STAR[\T\]()` are CALLS of the names `BIG LEXICO` and `BIG STAR` -- that is how `__bigOperatorSugar` is handed a reduction object -- and `BIG <op>[gens] body` is a reduction over that operator. `SUM`, `PROD`, `MAX` and `MIN` over a RANGE fold onto the accumulator; every other operator, and any generator over a COLLECTION, is refused by name and needs the generator protocol.
 
 *Seen in: Library/Set.fss:115-116, Library/List.fss:177, ProjectFortress/BirdyLib/Bazaar.fss:42*
 
