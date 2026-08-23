@@ -31,18 +31,49 @@ subset of it that grows milestone by milestone, so constructs are tagged:
 Tags are applied per construct, not per line, and a section that is legacy end to end
 says so in its first sentence instead of tagging every block.
 
-The tags are checked, not asserted. `fortressc/crates/lexer/src/token.rs` reserves 90 words
-and acts on 22, `fortressc/crates/parser/src/lib.rs:1335` adds `for`, and 38 of the 61
-programs in `fortressc/tests/` compile (the other 23 are negative tests that are supposed to
-fail). Beyond that, several hundred throwaway programs were compiled and run against the
-release binary while this was written, and where one contradicted a tag the tag lost. The
-compiler behaviour described here is master at `cd2458cc0`.
+The tags were checked against master at `cd2458cc0` (2026-08-19): several hundred throwaway
+programs were compiled and run, and where one contradicted a tag the tag lost.
+
+> ## ⚠ THE TAGS ARE STALE. READ THIS BEFORE TRUSTING ONE.
+>
+> **Audited 2026-08-23 against `faef66205`, 188 commits after the pin.** The corpus half of
+> this guide — the syntax shapes, the frequency counts, the `path:line` citations — is
+> still good. **The compiler half is not.** Roughly thirty-five constructs tagged
+> `[parses]` or `[legacy]` now COMPILE AND RUN, and a further dozen are still refused but
+> with different wording than the message quoted here.
+>
+> The audit SAMPLED, at about 120 probe programs. Every finding it made has been corrected
+> below and marked `⚠ 2026-08-23:`. **What it did not reach has not been re-derived**, so an
+> untouched `[parses]` or `[legacy]` tag on this page means "was true on 2026-08-19", not
+> "is true". Treat one as a question, not an answer, and settle it the way this guide was
+> written in the first place: write the four-line program and run it.
+>
+> Landed since the pin, in bulk: `Self` as a type variable, getters as readable accessors,
+> mutable object fields and field assignment, `Any`/`Object` as real types, `opr`
+> declarations, character literals and radix numerals, most Unicode, multi-dimensional and
+> sized arrays with the matrix aggregate, arrow types and `fn`, tuple destructuring,
+> `nat`/`int`/`bool` static parameters, compound assignment, `value`/`private`/`abstract`/
+> `native`, `atomic`/`also`/`spawn`/`label`/`exit`, reduction variables, an enforced
+> `where` clause, `end`-name validation, a real MODULE SYSTEM with `.fsi` apis, component
+> level values whose initializers run, varargs, `throws`, and `||` concatenation.
+>
+> **Owed:** a full re-derivation of every tag and every quoted diagnostic against the
+> current binary. It is tracked in `04-state.md`; until it is done this banner stands.
+
+`fortressc/crates/lexer/src/token.rs` reserves **73** words (⚠ 2026-08-23: was 66 at the pin,
+and the guide said 90); its own comment says twenty are acted on, and the audit found roughly
+twenty acted on by the parser, so the "the rest give one identical message" claim below is
+false for about a third of the list.
 
 **Out of scope:** user-definable syntax. Fortress lets a program extend the grammar with
 `grammar` and `syntax` declarations, but those live in `.fsi` api files and the word
 `grammar` appears in exactly zero `.fss` files in this tree. The rewrite drops the feature
 on purpose (see `README.md`), which is what keeps the frontend a plain lexer plus
 recursive descent parser. `.fsi` files are not covered here at all.
+
+⚠ 2026-08-23: `.fsi` files are no longer out of the COMPILER's scope even though they are
+still out of this guide's. `fortressc Widget.fsi` checks an api -- "headers resolved and
+bounds discharged" -- and 125 corpus apis do. User-definable syntax is still dropped.
 
 ## The whole language in one program
 
@@ -168,7 +199,7 @@ end Shuffle                (* `end` may name the component; 25 files, and unchec
 
 *Seen in: Library/List.fss:12-17, Library/Shuffle.fss:12-14, Library/Shuffle.fss:43*
 
-fortressc stops at the `end` token and discards every token after it, so `end Shuffle` is accepted incidentally rather than recognised. A file ending `end QQQ ZZZ nonsense` typechecks clean.
+fortressc stops at the `end` token and discards every token after it, so `end Shuffle` is accepted incidentally rather than recognised. A file ending `end QQQ ZZZ nonsense` typechecks clean.  ⚠ 2026-08-23: INVERTED. Nothing after the closing `end` is discarded any more, and the NAME is checked: on `component c`, `end QQQ ZZZ nonsense` answers `` `end QQQ` closes a declaration named `c` ``, and a stray `end` that opened nothing answers `expected end of file; this `end` closes nothing`. A matching `trait T end T` is accepted.
 
 A component name may be dotted, from a dotted filename, from dotted directories, or from neither. 334 files. [fortressc]
 
@@ -210,8 +241,9 @@ Exports name apis. The bare identifier is the only form fortressc reads; the bra
 
 ```fortress
 export Executable                (* bare identifier, 1766 files *)
-export { Executable }            (* braced list, 11 files *)               [legacy]
+export { Executable }            (* braced list, 11 files *)     [fortressc]
 export { FirstAPI , SecondAPI }  (* two apis on one line, 2 files *) [legacy]
+(*) ⚠ 2026-08-23: the single-name braced form `export { Executable }` compiles.
 ```
 
 *Seen in: fortressc/tests/skeleton.fss:2, ProjectFortress/compiler_tests/Compiled250.fss:13, ProjectFortress/compiler_tests/Compiled1.i.fss:13, ProjectFortress/parser_tests/AbsFieldTest.fss:13*
@@ -242,7 +274,7 @@ import CompilerSystem.args       (* what most programs do instead: 15 files *) [
 
 ### Imports
 
-The `.` before `{` is part of the import syntax, not a field access. fortressc parses the brace group as a balanced token run and DISCARDS it: there is no module system yet, so an import compiles and has no effect. [fortressc]
+The `.` before `{` is part of the import syntax, not a field access. fortressc parses the brace group as a balanced token run and DISCARDS it: there is no module system yet, so an import compiles and has no effect. [fortressc]  ⚠ 2026-08-23: THERE IS A MODULE SYSTEM NOW. An import resolves apis off the source path -- the driver prints `resolved N api(s)` and names what it could not find -- and an imported TYPE is genuinely visible: with a `Shapes.fsi` declaring `trait Shape end`, `object Circle extends Shape end` compiles with the import and gives `unknown type `Shape`` without it. `.fsi` files are first-class and 125 corpus apis check. Only an api's TRAITS and OBJECTS merge; its function and value declarations are the importer's obligation, not its scope.
 
 ```fortress
 import List.{...}                (* import every exported name - the dominant form *)
@@ -305,7 +337,7 @@ import { Length, Volume, Mass, Time, Force, Energy, Power, Temperature, Angle,
 
 fortressc swallows the brace group and then stops at the `from`: "expected a newline or `;`, found Ident("from")" when it is on the same line, "expected `(`, found Ident("Fortress")" when it is on the next.
 
-A component whose bodies live in the JVM is `native`, and pulls in Java statics with `import java`. All of this is [legacy] by construction: it is the boundary the rewrite exists to replace, and fortressc refuses it at the modifier: "reserved word `native` is not in the implemented subset".
+A component whose bodies live in the JVM is `native`, and pulls in Java statics with `import java`. All of this is [legacy] by construction: it is the boundary the rewrite exists to replace, and fortressc refuses it at the modifier: "reserved word `native` is not in the implemented subset".  ⚠ 2026-08-23: `native component c ... end` COMPILES now; the modifier is recorded and not read. `import java ...` is a separate question and was not re-probed.
 
 ```fortress
 native component File                                     (* 9 files in the whole corpus *)
@@ -453,7 +485,7 @@ var tmp:ZZ32 = 0                      (* a MUTABLE component-level value; fortre
 
 *Seen in: Library/Constants.fss:15-17, Library/Reader.fss:17, ProjectFortress/tests/ObjectFieldShadowing.fss:15*
 
-fortressc parses the non-`var` lines and then refuses: "`language`: a component-level value declaration is parsed but not implemented; its initializer would have to run at component initialization, and it is not a nullary function". The `FloatLiteral` line stops one step earlier, on "unknown type `FloatLiteral`".
+fortressc parses the non-`var` lines and then refuses: "`language`: a component-level value declaration is parsed but not implemented; its initializer would have to run at component initialization, and it is not a nullary function". The `FloatLiteral` line stops one step earlier, on "unknown type `FloatLiteral`".  ⚠ 2026-08-23: COMPONENT-LEVEL VALUES WORK AND THEIR INITIALIZERS RUN, in declaration order, inside `main` after the runtime is up and before `run`. Component-level `var` works too. `fortressc/tests/badvaluebinding.fss` is the gate fixture that asserts the ORDER.
 
 ### Assignment
 
@@ -478,7 +510,7 @@ player.fld := 5   (* same syntax when a setter is what actually runs *)
 
 *Seen in: ProjectFortress/compiler_tests/Compiled6.ar.fss:24, ProjectFortress/tests/setterTest.fss:39*
 
-Measured: `b.n := 5` parses under fortressc and the checker refuses it, "only a variable or an array element can be assigned to"; declaring the field `var` instead gives "`var n`: mutable fields are not implemented".
+Measured: `b.n := 5` parses under fortressc and the checker refuses it, "only a variable or an array element can be assigned to"; declaring the field `var` instead gives "`var n`: mutable fields are not implemented".  ⚠ 2026-08-23: BOTH INVERTED. Declaring the field `var` and assigning to it works; an immutable field answers `` field `n` is immutable; declare it `var n: T = ...` to assign to it ``.
 
 A parenthesised list of targets on the left of `:=` assigns several at once. The right side is fully evaluated first, which is how a swap is written; there is no `:=:` operator. 54 uses in 19 files. [legacy]
 
@@ -502,7 +534,7 @@ A[j,k] /= A[k,k]          (* divide and store; =/= is inequality, NOT a compound
 
 *Seen in: SpecData/examples/basic/Expr.Assign.a.fss:30, Library/CompilerLibrary.fss:475, ProjectFortress/demos/lutx.fss:79*
 
-Counts: `+=` 243 uses in 117 files, `||=` 37, `-=` 17, `UNIONCAT=` 10, `UPLUS=` 10, `TIMES=` 7, `MIN=` 2, `MAX=` 2, `MAXMIN=` 2, and `BITAND=`, `CUP=`, `/=`, `//=` once each. fortressc: "expected an expression, found Eq". There are no `++` or `--` operators.
+Counts: `+=` 243 uses in 117 files, `||=` 37, `-=` 17, `UNIONCAT=` 10, `UPLUS=` 10, `TIMES=` 7, `MIN=` 2, `MAX=` 2, `MAXMIN=` 2, and `BITAND=`, `CUP=`, `/=`, `//=` once each. fortressc: "expected an expression, found Eq". There are no `++` or `--` operators.  ⚠ 2026-08-23: COMPOUND ASSIGNMENT WORKS: `x: ZZ32 := 1` then `x += 1` prints 2. Of the other spellings only `+=` was probed; `TIMES=` is measured at zero corpus files and refused by name.
 
 ### Tuples, patterns and shadowing
 
@@ -534,7 +566,7 @@ second[\T1,T2,T3\](x:(T1,T2,T3)): T2 = do (_,b,_) = x; b end
 
 *Seen in: ProjectFortress/tests/Wildcards.fss:33-35, ProjectFortress/tests/Wildcards.fss:16, ProjectFortress/BirdyLib/Tuple.fss:22*
 
-In fortressc `_` is just an ordinary identifier (`_ = 5` compiles), so the reuse rule is not enforced there, and `_ = println(...)` is refused because `()` has no value to store, not because of the underscore. The `second` declaration parses and typechecks only while nothing instantiates it; `second[\ZZ64,ZZ64,ZZ64\]((1,2,3))` gives "a tuple type is not implemented in this subset". At component level the underscore fares no better than any other name: `_ = 5` there gives "`_`: a component-level value declaration is parsed but not implemented".
+In fortressc `_` is just an ordinary identifier (`_ = 5` compiles), so the reuse rule is not enforced there, and `_ = println(...)` is refused because `()` has no value to store, not because of the underscore. The `second` declaration parses and typechecks only while nothing instantiates it; `second[\ZZ64,ZZ64,ZZ64\]((1,2,3))` gives "a tuple type is not implemented in this subset". At component level the underscore fares no better than any other name: `_ = 5` there gives "`_`: a component-level value declaration is parsed but not implemented".  ⚠ 2026-08-23: `_ = 5` at component level compiles now.
 
 The annotation position may hold a constructor pattern that both checks the type and binds the fields. 7 files in the whole corpus. [legacy]
 
@@ -614,7 +646,7 @@ assert(DEAD.BEEF_16, DEAD.BEEF_SIXTEEN)    (* a radix POINT is allowed in a non-
 
 *Seen in: Library/CompilerLibrary.fss:524, ProjectFortress/tests/NumeralTest.fss:21-22, ProjectFortress/tests/NumeralTest.fss:25*
 
-fortressc's lexer has a dedicated refusal for a DIGIT-leading radix numeral: `1100_16` gives "radix numerals are not in the M1 subset" (fortressc/crates/lexer/src/error.rs:63). A letter-leading one never reaches that rule; `FF_16` lexes as an identifier and gives "unknown name `FF_16`".
+fortressc's lexer has a dedicated refusal for a DIGIT-leading radix numeral: `1100_16` gives "radix numerals are not in the M1 subset" (fortressc/crates/lexer/src/error.rs:63). A letter-leading one never reaches that rule; `FF_16` lexes as an identifier and gives "unknown name `FF_16`".  ⚠ 2026-08-23: DIGIT-LEADING RADIX NUMERALS COMPILE: `println(1100_16)` prints 4352, using the SPECIFICATION'S digit values (`X` is ten and `E` is eleven at radix twelve). The letter-leading half is still correct -- `FF_16` is still `unknown name`, and that is a NAMED DEVIATION rather than an omission.
 
 Floats are digits, a point, digits. No e-notation exists anywhere in the corpus and there is no `f`/`d` suffix. [fortressc]
 
@@ -649,7 +681,7 @@ assert(isDefined('''),true, "Failure of isDefined '''")  (* ''' is the apostroph
 
 *Seen in: Library/Format.fss:193, ProjectFortress/demos/BirdCount1u.fss:46, ProjectFortress/tests/CharacterTest.fss:191*
 
-The apostrophe is overloaded three ways - character quotes, digit-group separator, and primed identifiers like `t'` or `i'''` - and only position separates them. fortressc refuses at parse time: "character literals are not in the M1 subset".
+The apostrophe is overloaded three ways - character quotes, digit-group separator, and primed identifiers like `t'` or `i'''` - and only position separates them. fortressc refuses at parse time: "character literals are not in the M1 subset".  ⚠ 2026-08-23: CHARACTER LITERALS COMPILE. `ch: Char = 'a'` prints `a`. `Char` is ORDERED and NOT NUMERIC: `'a' + 'b'` is refused by name, `` `+` is not defined on Char; a character is ordered, not numeric ``.
 
 Both quote characters come in more than one pair, and the closing mark must match the opening one. [legacy]
 
@@ -664,7 +696,7 @@ println “Hello, World!”    (* U+201C / U+201D *)
 
 *Seen in: ProjectFortress/tests/matchingCharacterMarks.fss:16-18, ProjectFortress/tests/matchingStringMarks.fss:16-17*
 
-Mismatching them is an error the corpus tests for on purpose (ProjectFortress/parser_tests/XXXNotMatchingCharacterMarks.fss:16, ProjectFortress/parser_tests/XXXNotMatchingStringMarks.fss:16-17). fortressc knows the curly string well enough to name it, "curly-quote string delimiters are not in the M1 subset; use `"`", answers the backtick with "unrecognized character", and treats the U+2018/U+2019 pair as a character literal: "character literals are not in the M1 subset".
+Mismatching them is an error the corpus tests for on purpose (ProjectFortress/parser_tests/XXXNotMatchingCharacterMarks.fss:16, ProjectFortress/parser_tests/XXXNotMatchingStringMarks.fss:16-17). fortressc knows the curly string well enough to name it, "curly-quote string delimiters are not in the M1 subset; use `"`", answers the backtick with "unrecognized character", and treats the U+2018/U+2019 pair as a character literal: "character literals are not in the M1 subset".  ⚠ 2026-08-23: the curly-quote STRING compiles now -- `println(“Hello”)` prints `Hello` -- and the curly CHAR is refused with a different message: `a character literal holds one character, an escape, four or more hex digits, or TAB, NEWLINE or RETURN`.
 
 `true` and `false` are reserved words and genuine literals, not library values. [fortressc]
 
@@ -734,7 +766,7 @@ By annotation count: ZZ32 4843 in 713 files, String 3414/476, Boolean 1357/245, 
 
 ## 4. Operators and expression syntax
 
-Fortress has almost no built-in operator table: `+`, `IN`, `<| |>` and `|self|` are all ordinary library declarations written with `opr` (2640 uses in 228 files). The current Rust compiler implements a core set of expression forms natively but refuses every `opr` declaration [legacy] with "reserved word `opr` is not in the implemented subset", so the whole declaration half of this section is legacy; the expression forms are tagged where the distinction is real.
+Fortress has almost no built-in operator table: `+`, `IN`, `<| |>` and `|self|` are all ordinary library declarations written with `opr` (2640 uses in 228 files). The current Rust compiler implements a core set of expression forms natively but refuses every `opr` declaration [legacy] with "reserved word `opr` is not in the implemented subset", so the whole declaration half of this section is legacy; the expression forms are tagged where the distinction is real.  ⚠ 2026-08-23: `opr` DECLARATIONS COMPILE NOW, so the whole declaration half of this section is live: infix (`opr SMAX(x,y)` then `2 SMAX 3`), enclosing (`opr <| x |>`), the size bars (`opr |self|` then `|V(7)|`) and `opr BIG STAR()` all work. Sampled limits: a PREFIX USE like `NEGATE 5` still fails, and a generic operator's call site `SMAX[\ZZ32\](1,2)` does not parse. Retag this section construct by construct before relying on a `[legacy]` here.
 
 ### Juxtaposition
 
@@ -874,7 +906,7 @@ Two sites in the whole corpus against 258 for the trailing colon, and nothing wr
 
 ### Concatenation and line separators
 
-All [legacy]: fortressc lexes `||` and `//` as tokens and the parser refuses them.
+All [legacy]: fortressc lexes `||` and `//` as tokens and the parser refuses them.  ⚠ 2026-08-23: `||` WORKS as string concatenation -- `println("a" || "b")` prints `ab`, PLAIN with no separator per the juxtaposition ruling -- and it is the one builtin a user declaration beats, because it is an ordinary library operator. `//` is still refused.
 
 ```fortress
 a || b      (* string concatenation, and list append *)
@@ -912,13 +944,13 @@ A[1,0]       (* literal indices, straight off the array literal examples *)
 b[(i,j)]     (* the same read written as ONE tuple index, and a different declaration *)
 ```
 
-Counting lowercase array names alone, 419 comma subscripts across 37 files, answered by 21 `opr[...,...]` declarations in 10 files. [legacy]: fortressc's `Array[\T\]` is one dimensional, and `a[1,2]` stops at "expected `]`, found Comma".
+Counting lowercase array names alone, 419 comma subscripts across 37 files, answered by 21 `opr[...,...]` declarations in 10 files. [legacy]: fortressc's `Array[\T\]` is one dimensional, and `a[1,2]` stops at "expected `]`, found Comma".  ⚠ 2026-08-23: MULTI-DIMENSIONAL ARRAYS ARE BUILT. RANK IS PART OF THE TYPE, `a: ZZ32[2,2] = [3 4; 5 6]` then `a[1,0]` prints 5, and every dimension is bounds checked separately. The type is spelled with a SHAPE SUFFIX -- `Array[\ZZ32,2\]` is not it -- and the constructor is `array(m, n)`.
 
 *Seen in: SpecData/examples/basic/Expr.Array.a.fss:22, ProjectFortress/demos/mm.fss:18, ProjectFortress/tests/BadBounds.fss:51, Library/Generator22D.fss:265*
 
 ### Declaring operators with `opr`
 
-This subsection reads forward: `self`, trait and object members and `[\ \]` static parameters belong to sections 6, 7 and 8. It is also [legacy] end to end, since fortressc refuses every `opr` declaration at its first token with "reserved word `opr` is not in the implemented subset", so skim it on a first pass and come back.
+This subsection reads forward: `self`, trait and object members and `[\ \]` static parameters belong to sections 6, 7 and 8. It is also [legacy] end to end, since fortressc refuses every `opr` declaration at its first token with "reserved word `opr` is not in the implemented subset", so skim it on a first pass and come back.  ⚠ 2026-08-23: NOT legacy end to end any more; `opr` declarations compile. See the note at the head of section 4.
 
 Fixity comes from the SHAPE of the declaration. There are zero uses of `infix`, `prefix`, `postfix`, `nofix`, `multifix` or `enclosing` as keywords anywhere in the corpus.
 
@@ -1031,7 +1063,7 @@ opr BIG <|[\T\] g:Generator[\T\]|>:List[\T\] =                  (* generator for
 opr BIG $() :BigReduction[\RR64,RR64\] = BigReduction[\RR64,RR64\](SumRR64Red)
 ```
 
-fortressc refuses the declaration at its first token, "reserved word `opr` is not in the implemented subset". The `BIG` message, "reserved word `BIG` is not in the implemented subset", is what a `BIG SUM [i <- 1:n] i` EXPRESSION gets.
+fortressc refuses the declaration at its first token, "reserved word `opr` is not in the implemented subset". The `BIG` message, "reserved word `BIG` is not in the implemented subset", is what a `BIG SUM [i <- 1:n] i` EXPRESSION gets.  ⚠ 2026-08-23: `opr BIG STAR(): ZZ32 = 1` compiles as a DECLARATION. The `BIG` refusal is still right for the EXPRESSION form.
 
 *Seen in: Library/Set.fss:115-116, Library/List.fss:177, ProjectFortress/BirdyLib/Bazaar.fss:42*
 
@@ -1157,7 +1189,7 @@ self.depth > 30 AND: (¬ self.isBalanced)           (* ¬ for NOT, one use in th
 BIG ∨ [(start, str) ← pieces] (do                  (* ∨ disjunction, ← for the generator arrow <- *)
 ```
 
-⟦ ⟧ is `[\ \]`, ⟨ ⟩ is `<| |>`, ⇒ is `=>`, → is `->`, ≔ is `:=`, ↦ is `|->`. Only Library/String.fss, ProjectFortress/tests/StringTests.fss and Library/FlatString.fss are written this way at any scale, 166, 46 and 40 non-ASCII characters outside comments and strings; 24 other files carry a handful each, mostly parser tests, so ASCII dominates the corpus by orders of magnitude. [legacy]: fortressc rejects all of them with "non-ASCII characters are not in the M1 subset outside comments and strings".
+⟦ ⟧ is `[\ \]`, ⟨ ⟩ is `<| |>`, ⇒ is `=>`, → is `->`, ≔ is `:=`, ↦ is `|->`. Only Library/String.fss, ProjectFortress/tests/StringTests.fss and Library/FlatString.fss are written this way at any scale, 166, 46 and 40 non-ASCII characters outside comments and strings; 24 other files carry a handful each, mostly parser tests, so ASCII dominates the corpus by orders of magnitude. [legacy]: fortressc rejects all of them with "non-ASCII characters are not in the M1 subset outside comments and strings".  ⚠ 2026-08-23: MOST OF THESE COMPILE NOW, through a lexer ALLOWLIST. Verified working: `⟦ ⟧` for `[\ \]`, `←` for `<-`, `≤` and `≠`, `→` for `->`, `≔` for `:=`, and curly-quoted strings. The quoted message survives only for a non-ASCII IDENTIFIER, e.g. `류: ZZ32 = 1`.
 
 *Seen in: Library/String.fss:141, Library/String.fss:378, Library/String.fss:44, Library/FlatString.fss:113*
 
@@ -1246,7 +1278,7 @@ run() = print "Hello, world!"   (* a whole Hello World, and the corpus spelling.
 
 Only `widen`, `println`, `array` and `length` are recognised in juxtaposition position. `print x`, `ignore x` and `assert x` each give `unknown name`, and need the parenthesised call.
 
-`()` in the parameter position is an EMPTY LIST, not a parameter of type `()`. An actual `()`-typed parameter is refused: `f(x: ())` gives "`()` has no value, so it cannot be stored in a parameter".
+`()` in the parameter position is an EMPTY LIST, not a parameter of type `()`. An actual `()`-typed parameter is refused: `f(x: ())` gives "`()` has no value, so it cannot be stored in a parameter".  ⚠ 2026-08-23: `f(x: ()): ZZ32 = 1` COMPILES: every `()` parameter is DROPPED (DEV-16). Storing `()` in a BINDING is still refused with the quoted message.
 
 ### Parameters
 
@@ -1363,7 +1395,7 @@ wrapMethod(ty:ArrowType): (Object,Any...)->Any = do
 
 ### Function values
 
-An arrow type is domain, `->`, range. 1925 uses of `->` in 201 files against 4 of the Unicode `→`. fortressc parses these and then refuses them: `an arrow type is not implemented in this subset`. [parses]
+An arrow type is domain, `->`, range. 1925 uses of `->` in 201 files against 4 of the Unicode `→`. fortressc parses these and then refuses them: `an arrow type is not implemented in this subset`. [parses]  ⚠ 2026-08-23: ARROW TYPES WORK: `f(g: ZZ32 -> ZZ32): ZZ32 = g(1)` called with `fn (x: ZZ32): ZZ32 => x + 1` prints 2, and an arrow RESULT works too.
 
 ```fortress
 mapReduce[\R extends Any\](body: E1->R, join: (R,R)->R, id: R): R =   (* signature excerpt *)
@@ -1374,7 +1406,7 @@ a: io ZZ32->String                 (* io marks an arrow effectful; 2 files in th
 ```
 *Seen in: Library/GeneratorLibrary.fss:132, ProjectFortress/compiler_tests/Compiled7.ApplicationErrors.fss:20, ProjectFortress/tests/typeTests.fss:31, ProjectFortress/parser_tests/ioTests.fss:18*
 
-`fn` with `=>` is the only anonymous-function syntax: no backslash form, no Greek lambda, no `lambda` keyword. It is legacy only, `reserved word 'fn' is not in the implemented subset`.
+`fn` with `=>` is the only anonymous-function syntax: no backslash form, no Greek lambda, no `lambda` keyword. It is legacy only, `reserved word 'fn' is not in the implemented subset`.  ⚠ 2026-08-23: `fn` WORKS, typed and untyped: `f(fn x => x)` compiles.
 
 ```fortress
 fn(x: RR64) => if x < 0 then -x else x end   (* fn ( dominates, 749 uses against 158 of fn( *)
@@ -1515,7 +1547,7 @@ object Foo extends Any                                              (* [parses] 
 ```
 *Seen in: fortressc/tests/dottedmethod.fss:12-14, ProjectFortress/compiler_tests/Compiled10.q.fss:16, Library/FlatString.fss:34, ProjectFortress/tests/extendObject.fss:15*
 
-The Unicode brackets are a lexer refusal, "non-ASCII characters are not in the M1 subset outside comments and strings". `Any` is not built in either: the rewrite has no root trait, so `extends Any` gives "unknown type `Any`" until you declare `trait Any end` yourself, and then it compiles.
+The Unicode brackets are a lexer refusal, "non-ASCII characters are not in the M1 subset outside comments and strings". `Any` is not built in either: the rewrite has no root trait, so `extends Any` gives "unknown type `Any`" until you declare `trait Any end` yourself, and then it compiles.  ⚠ 2026-08-23: `Any` AND `Object` ARE REAL ROOT TRAITS NOW, seeded in the checker. `object Foo extends Any end` compiles, `f(x: Any)` and `f(x: Object)` compile and dispatch, and a user-written `trait Any end` still compiles beside the seeded one.
 
 1347 object declarations carry `extends`, 208 of them the brace set. ASCII `[\ \]` beats the Unicode `⟦ ⟧` 20368 to 79, so write ASCII and expect to read both.
 
@@ -1535,7 +1567,7 @@ end
 
 Those two comments are the corpus file's own, about the legacy implementation, and they name the wrong mechanism for the rewrite: what stops `y = 2 x` here is the missing annotation, "expected `:` or `(`, found Eq". Write `y: ZZ32 = 2 x` and `z: ZZ32 = y + 4` and both compile, printing 6 and 10, so a field default computed from a constructor parameter or from an earlier field works [fortressc]. `object B(n: ZZ32) m: ZZ32 = n + 1 end` with `B(4).m` prints 5.
 
-Three spellings make a body field mutable, and they fail differently in the rewrite: `var n: ZZ32 = 3` parses and the checker refuses it ("mutable fields are not implemented") [parses], while `n: ZZ32 := 3` and `var n: ZZ32 := 3` do not parse at all, "expected a newline or `;`, found ColonEq" [legacy].
+Three spellings make a body field mutable, and they fail differently in the rewrite: `var n: ZZ32 = 3` parses and the checker refuses it ("mutable fields are not implemented") [parses], while `n: ZZ32 := 3` and `var n: ZZ32 := 3` do not parse at all, "expected a newline or `;`, found ColonEq" [legacy].  ⚠ 2026-08-23: `var n: ZZ32 = 3` COMPILES now and the field is assignable: `o.n := 7` then `o.n` reads 7. The two `:=` spellings are still parse errors.
 
 ```fortress
 object Player
@@ -1610,7 +1642,7 @@ println(area(7))               (* a plain top-level area(n: ZZ32) is in the same
 
 ### Getters and setters
 
-`getter` is the commonest object-member modifier, 2310 uses in 233 files. Declarations typecheck in the rewrite but reading one is refused ("`depth` is a getter or setter; accessors parse but are not implemented, and `depth` is read rather than called") [parses].
+`getter` is the commonest object-member modifier, 2310 uses in 233 files. Declarations typecheck in the rewrite but reading one is refused ("`depth` is a getter or setter; accessors parse but are not implemented, and `depth` is read rather than called") [parses].  ⚠ 2026-08-23: READING ONE WORKS NOW. `O(5).twice` and `self.twice` both compile and run, and a getter juxtaposed onto a string -- `"Point(" self.x.asString ")"` -- is the idiom the library uses.
 
 ```fortress
     getter depth() : ZZ32 = d       (* the empty () is ALWAYS written *)
@@ -1659,7 +1691,7 @@ A setter takes one parameter and is invoked by assignment. 16 uses in 13 files. 
 ```
 *Seen in: Library/FlatString.fss:39-40, ProjectFortress/long_term_not_working/overriding/SimpleOverriding.fss:23, Library/CaseInsensitiveString.fss:29*
 
-Bare `self` and `self.m(...)` compile [fortressc]. The middle line reads getters, so the rewrite refuses it [parses], and `opr` is refused at the parser, "reserved word `opr` is not in the implemented subset" [legacy].
+Bare `self` and `self.m(...)` compile [fortressc]. The middle line reads getters, so the rewrite refuses it [parses], and `opr` is refused at the parser, "reserved word `opr` is not in the implemented subset" [legacy].  ⚠ 2026-08-23: Reading a getter and declaring an `opr` both work now, and `self` is also an operand in a JUXTAPOSITION run -- `"n: " self.x.asString` -- which it was not at the pin.
 
 `self.field := value` has zero hits corpus-wide. From inside a member, mutation is written with the bare field name; the dotted form only ever appears on an external receiver.
 
@@ -1673,7 +1705,7 @@ Bare `self` and `self.m(...)` compile [fortressc]. The middle line reads getters
 ```
 *Seen in: fortressc/tests/dispatch.fss:40-43, ProjectFortress/compiler_tests/Compiled6.be.fss:18, ProjectFortress/tests/setterTest.fss:31,34*
 
-Reading compiles [fortressc]. Writing does not: `player.fld := 5` is refused with "only a variable or an array element can be assigned to", whatever the field was declared with. Dotted assignment is rare anyway, 12 lines in 10 files.
+Reading compiles [fortressc]. Writing does not: `player.fld := 5` is refused with "only a variable or an array element can be assigned to", whatever the field was declared with.  ⚠ 2026-08-23: WRITING WORKS when the field is declared `var`. Dotted assignment is rare anyway, 12 lines in 10 files.
 
 ### Abstract, overriding, overloading
 
@@ -1893,9 +1925,9 @@ trait Equality[\T\] comprises T   (* braceless, naming its own static parameter:
 ```
 *Seen in: Library/FortressLibrary.fss:1447-1448, Library/PureList.fss:270-271, Library/CompilerAlgebra.fss:25*
 
-`comprises Self` is the same self-type seal with the parameter named `Self`, 12 uses / 12 files; fortressc reserves that word and refuses it, while `comprises T` compiles. fortressc parses and typechecks `comprises` but does NOT enforce it: a second object extending the trait compiles clean.
+`comprises Self` is the same self-type seal with the parameter named `Self`, 12 uses / 12 files; fortressc reserves that word and refuses it, while `comprises T` compiles.  ⚠ 2026-08-23: `comprises Self` compiles now; see the `Self` note in section 8. fortressc parses and typechecks `comprises` but does NOT enforce it: a second object extending the trait compiles clean.
 
-A literal `...` inside the brace set says the membership list is deliberately not exhaustive, hiding the rest from anyone importing the trait. Attested only in expected-fail parser tests, so read it, do not write it; fortressc answers "expected a type name, found Dot". [legacy]
+A literal `...` inside the brace set says the membership list is deliberately not exhaustive, hiding the rest from anyone importing the trait. Attested only in expected-fail parser tests, so read it, do not write it; fortressc answers "expected a type name, found Dot". [legacy]  ⚠ 2026-08-23: the message moved: an open `comprises` now PARSES and is refused by the checker with `` the `comprises` clause of `T` is open (`...`), which an api may write and a component may not ``.
 
 ```fortress
 trait T comprises { ... }        (* every member hidden *)
@@ -2097,7 +2129,7 @@ end
 ```
 *Seen in: ProjectFortress/compiler_tests/Compiled17ee.fss:21-23, Library/FortressLibrary.fss:100-102, ProjectFortress/demos/aStar.fss:38-40*
 
-fortressc reserves the word `Self` and refuses it. [legacy]
+fortressc reserves the word `Self` and refuses it. [legacy]  ⚠ 2026-08-23: NO LONGER. `Self` is an ordinary type VARIABLE -- 1.0 has no self-type -- and it is accepted as a static parameter name and in type position. `trait Eq[\Self extends Eq[\Self\]\]` compiles. It is still reserved everywhere else: `Self: ZZ32 = 5`, `object Self end`, `Self(): ZZ32 = 5` and `f(Self: ZZ32)` are all still refused by name.
 
 ### where clauses
 
@@ -2361,7 +2393,7 @@ trait T[\S, int i, unit U, bool b\]
 ```
 *Seen in: ProjectFortress/tests/XXXextendOprParam2.fss:15-16, Library/incomplete/advanced/Fortress.PartialTotalOrders.fss:103-105, ProjectFortress/tests/whereTest.fss:17-21*
 
-fortressc ACCEPTS `where { ... }` on the declaration's own line and silently DISCARDS it, so a bound stated only in a where clause is never enforced, while the same bound written in the bracket list is. [fortressc] One pair measures it: `object Holder[\A extends Top\](it: A)` refuses `Holder[\Plain\]` at compile time and exits 1, and the same object with that bound moved into `where { A extends Top }` compiles and runs at `Holder[\Plain\]`. A where clause on a CONTINUATION line, which is how the corpus writes it, never reaches the checker at all: the parser answers `expected a field or method name, found KwWhere`.
+fortressc ACCEPTS `where { ... }` on the declaration's own line and silently DISCARDS it, so a bound stated only in a where clause is never enforced, while the same bound written in the bracket list is. [fortressc] One pair measures it: `object Holder[\A extends Top\](it: A)` refuses `Holder[\Plain\]` at compile time and exits 1, and the same object with that bound moved into `where { A extends Top }` compiles and runs at `Holder[\Plain\]`. A where clause on a CONTINUATION line, which is how the corpus writes it, never reaches the checker at all: the parser answers `expected a field or method name, found KwWhere`.  ⚠ 2026-08-23: THIS MEASUREMENT IS INVERTED. A `where` bound IS ENFORCED now -- the same pair gives `Plain does not satisfy `A extends Top`` and exits 1 -- and `where`, `extends`, `comprises` and `excludes` all parse on a CONTINUATION line. Clause reordering works and an object header may carry `excludes`.
 
 A generic function that instantiates itself at a strictly larger type is legal legacy Fortress that the rewrite refuses outright, exit 1 with the instantiation limit named. [legacy]
 
@@ -2373,7 +2405,7 @@ deeper[\T\](x: T): ZZ32 = deeper[\Wrap[\T\]\](Wrap[\T\](x))  (* the same shape r
 
 ### Static parameter kinds beyond types
 
-Everything from here to the end of the section is [legacy]: it exists in the corpus, and fortressc refuses it. `nat`, `int`, `bool`, `unit` and `opr` are rejected by name at the parser, which answers that they are not implemented and M3d is type parameters only.
+Everything from here to the end of the section is [legacy]: it exists in the corpus, and fortressc refuses it. `nat`, `int`, `bool`, `unit` and `opr` are rejected by name at the parser, which answers that they are not implemented and M3d is type parameters only.  ⚠ 2026-08-23: `nat`, `int` and `bool` ARE VALUE PARAMETERS NOW and work: `O[\nat n\]` instantiated at `O[\3\]` reads back 3. A static ARGUMENT must be statically evaluable, and a BOUND on a value parameter is refused by name. `unit` and `dim` PARSE and are refused at the INSTANTIATION instead. Only `opr` is still refused at the parser.
 
 ```fortress
 makeVector[\T extends Number, nat s0\]():Vector[\T,s0\] = vector[\T,s0\]   (* nat: the argument is a natural-number VALUE *)
@@ -2713,7 +2745,7 @@ run() = do 3 also do 5 end     (* smallest legal group in the corpus *)
 
 ### label and exit
 
-`label` is the only early-escape mechanism in the language, and the whole family is [legacy].
+`label` is the only early-escape mechanism in the language, and the whole family is [legacy].  ⚠ 2026-08-23: THE FAMILY WORKS: `label out ... exit out with 5 ... end out` runs and yields 5. `exit` still cannot leave a `for` body, because every loop body is OUTLINED.
 
 ```fortress
 label out
@@ -2896,7 +2928,7 @@ for w ← seq(words) do testString := CatString(testString, w) end
 ```
 *Seen in: Library/Random.fss:48, Library/String.fss:196, ProjectFortress/tests/StringTests.fss:46*
 
-32 Unicode uses in 6 files against ASCII's 2384 in 292 files, and fortressc refuses the Unicode form outright: "non-ASCII characters are not in the M1 subset outside comments and strings" [legacy]. Spacing round the arrow is free, `x <- g` and `x<-g` both occur.
+32 Unicode uses in 6 files against ASCII's 2384 in 292 files, and fortressc refuses the Unicode form outright: "non-ASCII characters are not in the M1 subset outside comments and strings" [legacy].  ⚠ 2026-08-23: `for i ← 0#3 do ... end` COMPILES; `←` is on the lexer allowlist. Spacing round the arrow is free, `x <- g` and `x<-g` both occur.
 
 ### Ranges
 
@@ -3060,7 +3092,7 @@ result.init(i, r DOT other), (i,r) <- rows.indexValuePairs
 
 ### Comprehensions
 
-All [legacy]: fortressc has no set type at all and rejects both enclosers, "expected an expression, found LeftBar" and "expected an expression, found LBrace".
+All [legacy]: fortressc has no set type at all and rejects both enclosers, "expected an expression, found LeftBar" and "expected an expression, found LBrace".  ⚠ 2026-08-23: still refused, but the messages moved -- both enclosers PARSE now (`opr` declarations landed) and come back as `` unknown name `<|_|>` `` and `` unknown name `{_}` ``, which names the missing declaration rather than the bracket.
 
 ```fortress
 <| x^2 | x <- {0, 1, 2, 3, 4, 5}, x MOD 2 = 0|>   (* List: element expr, bar, the clause list a for header takes *)
@@ -3249,9 +3281,10 @@ In fortressc `seq` is not a function: the parser recognises the literal word bef
 for i <- seq(0#5000) do    (* recognised and marked sequential; 5000 is deliberately over the threshold *)
    println(i)
 end
-                           (* BUG, reproducible: a seq loop that assigns to a mutable declared OUTSIDE it *)
-                           (* passes the checker and then dies in codegen with *)
-                           (* `internal error: `total` was assigned to but has no storage` *)
+                           (* FIXED 2026-08-23. This block used to record a reproducible BUG: *)
+                           (* a seq loop assigning to a mutable declared OUTSIDE it passed the *)
+                           (* checker and died in codegen with `internal error: `total` was  *)
+                           (* assigned to but has no storage`. The same program prints 45 now. *)
 ```
 
 *Seen in: fortressc/tests/parallelseq.fss:9-11, fortressc/crates/parser/src/lib.rs:1069-1073, fortressc/crates/types/src/lib.rs:90-92*
@@ -3539,7 +3572,7 @@ fortressc has no Generator library, so a hand-written reduction parses and then 
 
 ### What fortressc refuses
 
-`atomic`, `tryatomic`, `spawn`, `at`, `also`, `io` and `BIG` are all reserved but rejected: "reserved word `X` is not in the implemented subset". `region`, `shared`, `abort` and `Thread` are library names, so they parse and come back as `unknown name` or `unknown type`. Also out of the M4 subset, and not one of them is named by its own diagnostic: a tuple binder gives `expected a loop variable, found LParen`, an array generator (`for x <- a`) gives ``expected `:` or `#` to close the generator range, found KwDo``, and a loop body with a value comes back as a plain mismatch against `()`, `expected (), found ZZ64` or `an integer literal cannot be used where () is required`. The compiler does carry a form string for the valued body, but the Void expectation is pushed into the body first and fails there, so nothing reaches the check that would print it.
+`atomic`, `tryatomic`, `spawn`, `at`, `also`, `io` and `BIG` are all reserved but rejected: "reserved word `X` is not in the implemented subset".  ⚠ 2026-08-23: `atomic`, `spawn` and `also` ALL WORK now, and so does an ARRAY GENERATOR -- `for x <- a` runs, so the `expected `:` or `#`` message below is gone; `for ch <- "abc"` answers `expected an array, found String`. A parallel loop body still may not assign to an outer mutable, and the message now adds `` Write `for ... <- seq(...)` for a sequential loop ``; the two hatches beside it are a REDUCTION VARIABLE (`s += i`) and an `atomic` block. `tryatomic`, `at`, `io` and `BIG` are still refused. `region`, `shared`, `abort` and `Thread` are library names, so they parse and come back as `unknown name` or `unknown type`. Also out of the M4 subset, and not one of them is named by its own diagnostic: a tuple binder gives `expected a loop variable, found LParen`, an array generator (`for x <- a`) gives ``expected `:` or `#` to close the generator range, found KwDo``, and a loop body with a value comes back as a plain mismatch against `()`, `expected (), found ZZ64` or `an integer literal cannot be used where () is required`. The compiler does carry a form string for the valued body, but the Void expectation is pushed into the body first and fails there, so nothing reaches the check that would print it.
 
 ```fortress
 total: ZZ64 := 0
@@ -3560,7 +3593,7 @@ end                     (* iteration owns". An array the body CREATED itself is 
 
 ## 12. Exceptions
 
-The whole control-flow half of this family is [legacy]: `throw`, `try`, `catch`, `finally`, `forbid`, `throws`, `tryatomic` and `Zilch` are all reserved words. In expression, statement or type position fortressc refuses one with `reserved word ... is not in the implemented subset`, and that covers seven of the eight, `Zilch` included. `throws` is the odd one out, because the corpus only ever writes it as a clause hanging off a type and the parser rejects the token before that check runs: `getMinimum(): ZZ32 throws NotFound = 1` gives ``expected `=`, found Reserved("throws")``, while a trait member or an arrow type gives ``expected a newline or `;`, found Reserved("throws")``, exactly the way `requires` behaves in section 14. The declaration shapes below compile today.
+The whole control-flow half of this family is [legacy]: `throw`, `try`, `catch`, `finally`, `forbid`, `throws`, `tryatomic` and `Zilch` are all reserved words. In expression, statement or type position fortressc refuses one with `reserved word ... is not in the implemented subset`, and that covers seven of the eight, `Zilch` included. `throws` is the odd one out, because the corpus only ever writes it as a clause hanging off a type and the parser rejects the token before that check runs: `getMinimum(): ZZ32 throws NotFound = 1` gives ``expected `=`, found Reserved("throws")``, while a trait member or an arrow type gives ``expected a newline or `;`, found Reserved("throws")``, exactly the way `requires` behaves in section 14.  ⚠ 2026-08-23: A `throws` CLAUSE PARSES NOW: `f(): ZZ32 throws E = 1` compiles. `throw`, `try`, `catch` and the rest of the family are still refused by name. The declaration shapes below compile today.
 
 ### Declaring exceptions
 
@@ -3892,7 +3925,7 @@ cross[\G\](g: Generator[\G\]): Generator[\(E,G)\] =   (* a tuple type as a stati
 indexAndMask(i:ZZ32) : (ZZ32,ZZ64) = (i RSHIFT 6, widen(1) LSHIFT (i BITAND 63))
 ```
 
-`(T)` with one element is just a parenthesised type, not a one-tuple, and `()` is void rather than a zero-tuple. fortressc answers `a tuple type is not implemented in this subset`.
+`(T)` with one element is just a parenthesised type, not a one-tuple, and `()` is void rather than a zero-tuple. fortressc answers `a tuple type is not implemented in this subset`.  ⚠ 2026-08-23: TUPLE TYPES AND TUPLE DESTRUCTURING WORK -- `(a, b) = (1, 2)` then `a + b` prints 3 -- and an api may NAME a tuple freely. What is still refused is a tuple VALUE in a position needing a representation, and the message changed: `a tuple value is not implemented in this subset, so it cannot be the result of a function with a body`.
 
 *Seen in: SpecData/examples/preliminaries/Overview.Expression.tuple.fss:20, Library/Map.fss:41, Library/ChunkedSparseArray.fss:75*
 
@@ -3936,7 +3969,7 @@ foo(y:ZZ32, z:ZZ32, x:ZZ32...) =                 (* two fixed parameters, then t
 private object BoundedProperty(props:GenericProperties, p:(Object,Any...)->Any)  (* rest inside an arrow domain *)
 ```
 
-fortressc's parser stops at the first dot: `expected `)`, found Dot`.
+fortressc's parser stops at the first dot: `expected `)`, found Dot`.  ⚠ 2026-08-23: VARARGS PARSE NOW: `f(x: ZZ32...): ZZ32 = 1` compiles.
 
 *Seen in: Library/Format.fss:437, Library/File.fss:89, Library/ReflectiveQuickCheck.fss:252*
 
@@ -3948,7 +3981,7 @@ fib:Array1⟦ZZ32, 0, 47⟧ = do
 shouldRaise⟦Ex extends Exception⟧ (expr: ()→()): () = do   (* void-to-void thunk, Unicode spelling *)
 ```
 
-4 Unicode arrows in 2 files against 1925 ASCII `->`, and 79 Unicode `⟦` in 7 files against 20368 ASCII `[\`. fortressc refuses both at the lexer: `non-ASCII characters are not in the M1 subset outside comments and strings`.
+4 Unicode arrows in 2 files against 1925 ASCII `->`, and 79 Unicode `⟦` in 7 files against 20368 ASCII `[\`. fortressc refuses both at the lexer: `non-ASCII characters are not in the M1 subset outside comments and strings`.  ⚠ 2026-08-23: BOTH COMPILE now: `f(g: ZZ32 → ZZ32)` and `object Cell⟦T⟧(held: T)` are on the allowlist.
 
 *Seen in: Library/String.fss:86, Library/String.fss:20, Library/FortressLibrary.fss:312*
 
@@ -4031,7 +4064,7 @@ a : RR64[3] = [1.1 2.2 3.3]        (* arrayArgs.fss marks this one "This works" 
 f([1.1 2.2 3.3])                   (* and the bare literal as an argument "This breaks" *)
 ```
 
-The trap is that part of it compiles. fortressc has its own COMMA-separated array literal, so `a = [1, 2, 3]` compiles and `a[2]` is 3, while the Fortress spelling `a = [1 2 3]` also compiles and gives a ONE-element array, `length(a)` 1, holding the juxtaposition product 6. Only the multi-row forms are refused outright, `expected `]`, found Semi`, and the sized-array type never even gets read: `a: ZZ32[3] = [1, 2, 3]` dies on the colon with `expected a newline or `;`, found Colon`.
+The trap is that part of it compiles. fortressc has its own COMMA-separated array literal, so `a = [1, 2, 3]` compiles and `a[2]` is 3, while the Fortress spelling `a = [1 2 3]` also compiles and gives a ONE-element array, `length(a)` 1, holding the juxtaposition product 6. Only the multi-row forms are refused outright, `expected `]`, found Semi`, and the sized-array type never even gets read: `a: ZZ32[3] = [1, 2, 3]` dies on the colon with `expected a newline or `;`, found Colon`.  ⚠ 2026-08-23: EVERY CLAUSE OF THIS PARAGRAPH IS NOW FALSE. `a = [1 2 3]` gives a THREE-element array; `a: ZZ32[3] = [1 2 3]` and the comma spelling both compile; and the matrix aggregate `[3 4; 5 6]` builds a rank-two array. The separator LEVEL decides the shape and the mapping is not the identity: `;` steps dimension 0, whitespace steps dimension 1, `;;` steps dimension 2.
 
 *Seen in: ProjectFortress/parser_tests/XXXarrayTest.fss:61, SpecData/examples/basic/Expr.Array.e.fss:20, SpecData/examples/basic/Expr.Array.b.fss:20-21, SpecData/examples/basic/Expr.Array.d.fss:20-22, SpecData/examples/basic/Expr.Array.f.fss:21-27, ProjectFortress/not_passing_yet/Expr.Array.Pasting.fss:21, ProjectFortress/not_passing_yet/arrayArgs.fss:19, ProjectFortress/not_passing_yet/arrayArgs.fss:22*
 
@@ -4130,7 +4163,7 @@ unit blintzal blintzals b_al_:  Force = blintz potrzebie per kovac squared  (* p
 (5 meter per second)squared
 ```
 
-None of the five is a reserved word. Placement is fussy: `(Time)squared` and `(Length Time)squared` are accepted, while unparenthesised `ZZ32 Length Time squared` and `per` inside a parenthesised dimension are recorded as "Rightly rejected".
+None of the five is a reserved word.  ⚠ 2026-08-23: ALL FIVE ARE RESERVED NOW -- `per`, `square`, `squared`, `cubic`, `inverse`, plus `cubed` -- and so is `in`. The reclassification FIXED A LIVE WRONG ANSWER: with `in` an ordinary identifier, `println(x in nm)` was a three-way juxtaposition PRODUCT and printed a number at exit 0 with no diagnostic. Placement is fussy: `(Time)squared` and `(Length Time)squared` are accepted, while unparenthesised `ZZ32 Length Time squared` and `per` inside a parenthesised dimension are recorded as "Rightly rejected".
 
 *Seen in: ProjectFortress/tests/dimensionUnitDecl.fss:21-22, Library/incomplete/basic/Fortress.SIUnits.fss:45, Library/incomplete/basic/Fortress.Potrzebie.fss:75*
 
@@ -4147,7 +4180,7 @@ h: ZZ32 Length in meter        (* `in` pins the type to a unit of measure *)
 y: (RR64 Velocity in furlongs) per fortnight = (v in furlongs) per fortnight   (* `in` works in expressions too *)
 ```
 
-`in` is not in fortressc's lexer at all, so it would lex as an identifier; every other `in` in the corpus is English prose in a comment. ProjectFortress/tests/typeTests.fss is the grammar's own boundary map, and its "Rightly rejected" comment blocks are the negative spec.
+`in` is not in fortressc's lexer at all, so it would lex as an identifier; every other `in` in the corpus is English prose in a comment.  ⚠ 2026-08-23: `in` IS RESERVED now; see the note above. ProjectFortress/tests/typeTests.fss is the grammar's own boundary map, and its "Rightly rejected" comment blocks are the negative spec.
 
 *Seen in: ProjectFortress/not_passing_yet/dimensionUnit.fss:17-19, ProjectFortress/tests/typeTests.fss:55-59, ProjectFortress/tests/typeTests.fss:38*
 
@@ -4359,7 +4392,7 @@ assert(2 + 2, 4, "arithmetic still works")    (* comparison plus a varargs messa
 
 *Seen in: fortressc/tests/builtins.fss:25-28, Library/FortressLibrary.fss:286-291*
 
-`assert(a, s)` where `s` is a String VARIABLE is the (Boolean, String) form, so deciding by whether the second argument is a literal is wrong. In fortressc a failed assert halts with a diagnostic and exit 1 instead of throwing, and it is only as strong as `=`, so `assert("a","b")` is refused. The library builds the message lazily. The varargs declaration itself is out of the subset: fortressc answers ``expected `)`, found Dot`` at the `Any...`. [legacy]
+`assert(a, s)` where `s` is a String VARIABLE is the (Boolean, String) form, so deciding by whether the second argument is a literal is wrong. In fortressc a failed assert halts with a diagnostic and exit 1 instead of throwing, and it is only as strong as `=`, so `assert("a","b")` is refused. The library builds the message lazily. The varargs declaration itself is out of the subset: fortressc answers ``expected `)`, found Dot`` at the `Any...`. [legacy]  ⚠ 2026-08-23: varargs parse now.
 
 ```fortress
 assert(x:Any, y:Any, failMsg: Any...): () =
@@ -4496,7 +4529,7 @@ end
 
 4 uses in 2 files. Shipping library code never writes `override`, it just redeclares.
 
-A `getter` is invoked as `x.name`, a `setter` as `x.name := e`. `getter` is the single most common modifier in the corpus at 2310 uses over 233 files; `setter` is about 140x rarer at 16 uses over 13 files. fortressc compiles both DECLARATIONS and refuses the use: reading `O.n` gives "`n` is a getter or setter; accessors parse but are not implemented, and `n` is read rather than called", and `o.fld := 5` gives "only a variable or an array element can be assigned to". [parses]
+A `getter` is invoked as `x.name`, a `setter` as `x.name := e`. `getter` is the single most common modifier in the corpus at 2310 uses over 233 files; `setter` is about 140x rarer at 16 uses over 13 files. fortressc compiles both DECLARATIONS and refuses the use: reading `O.n` gives "`n` is a getter or setter; accessors parse but are not implemented, and `n` is read rather than called", and `o.fld := 5` gives "only a variable or an array element can be assigned to". [parses]  ⚠ 2026-08-23: BOTH WORK NOW. A getter is read as `x.name`, and `o.fld := 5` assigns when the field is declared `var`. An immutable field answers `` field `n` is immutable; declare it `var n: T = ...` to assign to it ``. A DECLARED SETTER IS NOT ROUTED TO: the assignment writes the field directly and the setter body does not run.
 
 ```fortress
 trait Avl[\K extends StandardTotalOrder[\K\],V\]
@@ -4628,7 +4661,7 @@ halve(x: RR64): RR64 = x/2                            (* no exponent syntax in f
 f(x: (ZZ32)): (ZZ32) = x                              (* a parenthesised type is just the type *)
 ```
 
-Seven types exist and there are no others: `ZZ32`, `ZZ64`, `RR64`, `Boolean`, `String`, `()` and `Array[\T\]`. `NN32`, `NN64`, `IntLiteral`, `Any` and everything else the legacy library declares are unknown names here.
+Seven types exist and there are no others: `ZZ32`, `ZZ64`, `RR64`, `Boolean`, `String`, `()` and `Array[\T\]`. `NN32`, `NN64`, `IntLiteral`, `Any` and everything else the legacy library declares are unknown names here.  ⚠ 2026-08-23: OUT OF DATE. `Type` has TWELVE variants: `ZZ32 ZZ64 RR64 Boolean String Char Void Array(Elem, rank) Object Trait Thread Tuple`. `Char` is a real type, arrays carry their RANK, `Any` and `Object` are root traits, and a `Thread[\T\]` handle exists. `NN32`, `NN64` and `IntLiteral` are still unknown unless the library declares them and an import brings them in -- there IS an import resolver now.
 
 *Seen in: fortressc/tests/unitvoid.fss:4-6, fortressc/tests/rr64literal.fss:4-6, fortressc/tests/parenthesised.fss:4*
 
@@ -4921,7 +4954,7 @@ end
 (*)    getter asString(): String = (BIG ||[i <- self] "," i)[1:]
 ```
 
-The split is the point: declaring is fine, reading is not. Accessors change how a member is invoked (`x.f`, not `x.f()`), so they are recorded and left out of the dotted method sets; reading one gives `` `f` is a getter or setter; accessors parse but are not implemented ``. `getter` is heavy at 2310 uses in 233 files, `setter` is rare at 16 uses in 13 files.
+The split is the point: declaring is fine, reading is not. Accessors change how a member is invoked (`x.f`, not `x.f()`), so they are recorded and left out of the dotted method sets; reading one gives `` `f` is a getter or setter; accessors parse but are not implemented ``  ⚠ 2026-08-23: reading one WORKS now. `getter` is heavy at 2310 uses in 233 files, `setter` is rare at 16 uses in 13 files.
 
 *Seen in: fortressc/tests/selfgetter.fss:13-16, Library/GeneratorLibrary.fss:37*
 
@@ -5106,7 +5139,7 @@ import Map.{...} except { opr BIG UNION }
 (* |x| lexes as Bar, expr, Bar and stops at `expected an expression, found Bar` *)
 ```
 
-Enclosing operators and the literal syntaxes are tokenised so a file reaches the parser at all, but none has a production: `<|1, 2|>` gives `expected an expression, found LeftBar`, `{1, 2}` and `{1 |-> 2}` both give `expected an expression, found LBrace` (the brace pair lexes only because `extends {A, B}` needs it), and `7 // 2` gives `` expected `)`, found SlashSlash ``. `2 ** 3` is worse: a hard lex error before the parser ever sees it.
+Enclosing operators and the literal syntaxes are tokenised so a file reaches the parser at all, but none has a production: `<|1, 2|>` gives `expected an expression, found LeftBar`, `{1, 2}` and `{1 |-> 2}` both give `expected an expression, found LBrace` (the brace pair lexes only because `extends {A, B}` needs it)  ⚠ 2026-08-23: both now PARSE and come back as `` unknown name `<|_|>` `` and `` unknown name `{_}` ``., and `7 // 2` gives `` expected `)`, found SlashSlash ``. `2 ** 3` is worse: a hard lex error before the parser ever sees it.
 
 *Seen in: Library/CompilerLibrary.fss:450*
 
