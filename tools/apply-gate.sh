@@ -345,9 +345,16 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # of the 394 .fss that already compiled emits BYTE-IDENTICAL IR, measured file
 # by file with two binaries, because a set of one lowers to the same
 # `call Name$new` as `Target::ObjectNew` did.
+# `true : Boolean` IS A PARSE ERROR AND IT COST FIVE apis, 2026-08-23: 395
+# objects and 125 apis. `true` and `false` are 1.0 reserved words
+# (`Keyword.rats:49`) and `Library/FortressLibrary.fsi:2584-2585` already has
+# the same two lines commented out; the `CompilerLibrary/` copy was missed. An
+# api that does not PARSE is `unreadable` to the resolver and merges nothing, so
+# `List.fsi`, `Map.fsi`, `Pairs.fsi`, `Set.fsi` and `System.fsi` each reported a
+# core type that is declared in the very file they could not read.
 #
 OBJECT_FLOOR=321
-API_FLOOR=120
+API_FLOOR=125
 
 passed=0
 failed=0

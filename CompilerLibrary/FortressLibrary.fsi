@@ -2547,8 +2547,22 @@ opr SEQV(a:Any, b:Any):Boolean
 opr ->(a: Boolean, b:()->Boolean):Boolean
 (*) opr <->(a: Boolean, b:Boolean):Boolean
 
-true : Boolean
-false : Boolean
+(* v1 SOURCE CORRECTION: two declarations commented out, and 1.0'S OWN TEAM
+   ALREADY MADE THIS CORRECTION IN THE SIBLING FILE. `true` and `false` are
+   RESERVED WORDS -- `ProjectFortress/src/com/sun/fortress/parser/Keyword.rats
+   :49`, and :156-157 give each its own `transient String` production -- so
+   neither can be the name of a value declaration. `Library/FortressLibrary.fsi
+   :2584-2585` is the same two lines, already commented out with the same `(*)`.
+   This copy was missed.
+   IT IS A PARSE ERROR, WHICH IS WHY IT COSTS MORE THAN ITSELF: an api that does
+   not parse is `unreadable` to the resolver and merges NOTHING, so every
+   `CompilerLibrary/` api that implicitly imports this one lost every name it
+   declares. Five of them: `List.fsi`, `Map.fsi`, `Pairs.fsi`, `Set.fsi` and
+   `System.fsi`, each reporting a core type -- `LexicographicOrder`,
+   `ZeroIndexed`, `MonoidReduction`, `ImmutableArray` -- that IS declared here
+   and never arrived. *)
+(*)true : Boolean
+(*)false : Boolean
 
 opr +[\T extends Number\](x:T):T
 
