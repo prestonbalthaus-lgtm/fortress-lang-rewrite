@@ -2039,3 +2039,39 @@ fn a_bound_on_a_type_static_parameter_still_parses() {
     let tokens = fortress_lexer::lex(src).unwrap_or_else(|e| panic!("lex failed: {e}"));
     parse(&tokens).unwrap_or_else(|e| panic!("a type bound must still parse: {e}"));
 }
+
+/// `Self` IS A NAME, in the two positions 1.0's grammar spells it. It is not a
+/// self-type: `Type.rats:499`'s `SelfTypeId` feeds `makeVarType`, the same node
+/// an `Id` feeds, and `NoNewlineHeader.rats:343` makes it a static parameter of
+/// kind TYPE.
+#[test]
+fn self_is_a_static_parameter_name_and_a_type_reference() {
+    let c =
+        component("api t\ntrait Eq[\\Self extends Eq[\\Self\\]\\]\n  f(x: Self): Self\nend\nend\n");
+    match c.decls.first() {
+        Some(Decl::Trait(t)) => {
+            assert_eq!(
+                t.static_params.first().map(|p| p.name.as_str()),
+                Some("Self")
+            );
+            assert_eq!(t.static_params.first().map_or(0, |p| p.bounds.len()), 1);
+        }
+        other => panic!("expected a trait, got {other:?}"),
+    }
+}
+
+/// AND IT IS STILL RESERVED EVERYWHERE ELSE. A narrow acceptance, not a line
+/// deleted from `RESERVED`.
+#[test]
+fn self_is_still_reserved_outside_a_type_position() {
+    for src in [
+        "component t\nSelf: ZZ32 = 5\nend\n",
+        "component t\nobject Self end\nend\n",
+        "component t\nSelf(): ZZ32 = 5\nend\n",
+    ] {
+        match parse_error(src) {
+            ParseError::ReservedWord { word, .. } => assert_eq!(word, "Self"),
+            other => panic!("expected ReservedWord for {src:?}, got {other:?}"),
+        }
+    }
+}

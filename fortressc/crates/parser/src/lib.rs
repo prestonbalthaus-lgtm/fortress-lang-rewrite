@@ -18,7 +18,7 @@ use fortress_ast::{
     Assign, BinOp, Binding, BlockItem, CaseArm, Component, Decl, DimDecl, DimExpr, Expr,
     ExtentForm, ExtentRange, FieldDecl, Fixity, FnDecl, ImportDecl, ImportItems, ImportedName,
     Member, MethodDecl, Modifiers, ObjectDecl, Param, ShapeSpelling, Span, StaticExpr, StaticKind,
-    StaticOp, StaticParam, TraitDecl, TypeCaseArm, TypeRef, UnOp, UnitDecl,
+    StaticOp, StaticParam, TraitDecl, TypeCaseArm, TypeRef, UnOp, UnitDecl, SELF_TYPE_PLACEHOLDER,
 };
 use fortress_lexer::{Kind, Token};
 
@@ -1702,6 +1702,30 @@ impl<'t, 'a> Parser<'t, 'a> {
         self.tokens.get(self.pos + n).map(|t| &t.kind)
     }
 
+    /// A name in a position where `Self` is one. 1.0 reserves the word and then
+    /// spells it back in exactly two places -- `Type.rats:203`, a `TypeRef`,
+    /// and `NoNewlineHeader.rats:343`, a static PARAMETER -- and both feed the
+    /// same node an ordinary `Id` does (`makeVarType`, `makeStaticParamId` at
+    /// `KindType`). So `Self` is a TYPE VARIABLE, never a self-type: six traits
+    /// in `CompilerLibrary/FortressLibrary.fsi` write `[\Self extends
+    /// Equality[\Self\]\]` where `Library/`'s copy writes `T`.
+    ///
+    /// EVERY OTHER POSITION STILL REFUSES IT BY NAME, which is why this is not
+    /// simply dropping `Self` from `RESERVED`: `Self = 5` and `object Self` are
+    /// errors in 1.0 and stay errors here.
+    fn type_name(&mut self, expected: &'static str) -> Parsed<(String, Span)> {
+        if let Some(Token {
+            kind: Kind::Reserved("Self"),
+            span,
+        }) = self.peek()
+        {
+            let span = *span;
+            self.pos += 1;
+            return Ok(("Self".to_owned(), span));
+        }
+        self.identifier(expected)
+    }
+
     fn identifier(&mut self, expected: &'static str) -> Parsed<(String, Span)> {
         match self.peek() {
             Some(Token {
@@ -2100,15 +2124,17 @@ impl<'t, 'a> Parser<'t, 'a> {
         loop {
             // `self` is a parameter with no written type: it stands for the
             // enclosing trait or object, which is what makes the declaration a
-            // functional method rather than a function. `Self` is a reserved
-            // word, so the placeholder cannot collide with a declared type.
+            // functional method rather than a function. The placeholder is
+            // UNWRITABLE (`SELF_TYPE_PLACEHOLDER`) rather than the bare name
+            // `Self`, because `Self` is an ordinary type name in 1.0 and a
+            // static parameter may be called it.
             if self.at(&Kind::KwSelf) {
                 let span = self.span_here();
                 self.pos += 1;
                 params.push(Param {
                     name: "self".to_owned(),
                     ty: TypeRef::Named {
-                        name: "Self".to_owned(),
+                        name: SELF_TYPE_PLACEHOLDER.to_owned(),
                         args: Vec::new(),
                         span,
                     },
@@ -2378,7 +2404,7 @@ impl<'t, 'a> Parser<'t, 'a> {
             }
             return Ok(TypeRef::Tuple { elems, span });
         }
-        let (mut name, span) = self.identifier("a type name")?;
+        let (mut name, span) = self.type_name("a type name")?;
         // A QUALIFIED type name. `source-code.tex:280-287` disambiguates "the
         // type `List` declared in the API `List` or the type `List` declared in
         // the API `PureList`" with exactly this, and with ten api names
@@ -2519,7 +2545,7 @@ impl<'t, 'a> Parser<'t, 'a> {
                 self.pos += 1;
             }
         }
-        let (name, span) = self.identifier("a static parameter name")?;
+        let (name, span) = self.type_name("a static parameter name")?;
         // `[\unit U absorbs unit\]`. The `unit` after `absorbs` is the
         // reserved word again, not a name.
         let mut absorbs_unit = false;

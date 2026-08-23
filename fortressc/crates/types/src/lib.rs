@@ -38,6 +38,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use fortress_ast::{
     Assign, BinOp, BlockItem, CaseArm, Component, CutMember, Decl, Expr, FieldDecl, FnDecl, Member,
     MethodDecl, ObjectDecl, ShapeSpelling, Span, StaticExpr, TypeCaseArm, TypeRef, UnOp,
+    SELF_TYPE_PLACEHOLDER,
 };
 
 use registry::{close_traits, ObjectInfo, Registry, TraitInfo};
@@ -484,7 +485,7 @@ fn substitute_self(t: &TypeRef, owner: &str) -> TypeRef {
             extents: extents.clone(),
             span: *span,
         },
-        TypeRef::Named { name, args, span } if name == "Self" && args.is_empty() => {
+        TypeRef::Named { name, args, span } if name == SELF_TYPE_PLACEHOLDER && args.is_empty() => {
             TypeRef::Named {
                 name: owner.to_owned(),
                 args: Vec::new(),

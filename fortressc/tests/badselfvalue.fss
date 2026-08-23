@@ -1,0 +1,5 @@
+export Executable
+
+Self: ZZ32 = 5
+
+run(): () = println(1)

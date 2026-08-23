@@ -330,8 +330,16 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # reach corpus source, and the api floor sits at the measurement with no slack,
 # so reverting the three declarations takes the count below it.
 #
+# `Self` IS A TYPE VARIABLE, 2026-08-23: 394 objects and 120 apis. 1.0 reserves
+# the word and spells it back in exactly two places -- `Type.rats:203` (a
+# TypeRef) and `NoNewlineHeader.rats:343` (a static PARAMETER) -- both feeding
+# the node an ordinary `Id` feeds. There is no self-type to bound. Accepted in
+# those two positions only, and the receiver placeholder renamed to an
+# unwritable `$Self` first, or monomorphization substitutes it along with the
+# static parameter that shares its name. +6, nothing lost.
+#
 OBJECT_FLOOR=321
-API_FLOOR=117
+API_FLOOR=120
 
 passed=0
 failed=0
@@ -416,6 +424,7 @@ varvalue|15\n101\n7|a `var` top-level value is storage and an assignment target
 anyreturn|7|a trait-typed result still travels through the dispatch table
 selfjuxt|Point(3, 4)\n4 done|`self` is an operand in a juxtaposition run
 traitfn|42|a top-level function beside a TRAIT of its own name
+selftypeparam|42\ntrue|`Self` is a static parameter, and the receiver is still the trait
 CASES
 }
 
@@ -477,6 +486,7 @@ badanyreturn.fss|a result of a wider type
 badvoidarg.fss|`()` has no value, so it cannot be stored in a parameter of a wider type
 badsingletonfn.fss|`Marker` is defined twice
 badctorcall.fss|is both an object constructor and a top-level function
+badselfvalue.fss|reserved word `Self` is not in the implemented subset
 CASES
 
     # `badvaluebinding.fss` LEFT THIS LIST when component-level values landed,
@@ -683,6 +693,17 @@ CASES
 }
 
 MUTATIONS=(
+  # `Self` IS A TYPE VARIABLE, NOT A SELF-TYPE. Three axes: the receiver
+  # placeholder must be UNWRITABLE or monomorphization substitutes it along
+  # with the static parameter that shares its name, and the two positions
+  # 1.0's grammar spells `Self` in must both accept it.
+  'crates/ast/src/lib.rs|pub const SELF_TYPE_PLACEHOLDER: &str = "$Self";|pub const SELF_TYPE_PLACEHOLDER: &str = "Self";|let monomorphization substitute the receiver placeholder'
+  'crates/parser/src/lib.rs|let (name, span) = self.type_name("a static parameter name")?;|let (name, span) = self.identifier("a static parameter name")?;|refuse `Self` as a static parameter name'
+  'crates/parser/src/lib.rs|let (mut name, span) = self.type_name("a type name")?;|let (mut name, span) = self.identifier("a type name")?;|refuse `Self` in type position'
+  # AND IT IS STILL A RESERVED WORD EVERYWHERE ELSE. `Self = 5` and
+  # `object Self` are errors in 1.0 and stay errors here, which is why this
+  # is a narrow acceptance and not a line deleted from RESERVED.
+  'crates/lexer/src/token.rs|    "Self",|    "Zelf",|stop reserving `Self` at all, so it is an ordinary name everywhere'
   # ROW 5 OF THE COLLISION MATRIX, all three cells. The first row puts the old
   # over-broad rule back -- the whole type namespace, which refuses 5-1 and 5-3
   # too -- and the second drops the singleton cell it was right about.

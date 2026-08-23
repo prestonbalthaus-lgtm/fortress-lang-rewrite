@@ -1,0 +1,24 @@
+export Executable
+
+trait Holder[\Self\]
+    getter tag(): ZZ32
+    describe(self, x: Self): ZZ32 = self.tag + x
+end
+
+object Slot(t: ZZ32) extends Holder[\ZZ32\]
+    getter tag(): ZZ32 = t
+end
+
+trait Ranked[\Self extends Ranked[\Self\]\]
+    getter rank(): ZZ32
+    beats(self, other: Self): Boolean = self.rank > other.rank
+end
+
+object Card(r: ZZ32) extends Ranked[\Card\]
+    getter rank(): ZZ32 = r
+end
+
+run(): () = do
+    println(describe(Slot(40), 2))
+    println(beats(Card(9), Card(4)))
+end
