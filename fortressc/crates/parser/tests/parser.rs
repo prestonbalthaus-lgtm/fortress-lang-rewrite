@@ -152,6 +152,40 @@ fn juxtaposition_binds_tighter_than_a_loose_infix_operator() {
     }
 }
 
+#[test]
+fn a_receiver_is_a_juxtaposition_operand() {
+    // `"Reader on " self.fileName.asExprString` is how five `Library/` files
+    // spell it. `self` alone parsed at the START of an expression all along.
+    match expr("\"n: \" self.name") {
+        Expr::Juxt { items, .. } => {
+            assert_eq!(items.len(), 2);
+            assert!(matches!(items.first(), Some(Expr::StrLit { .. })));
+            match items.get(1) {
+                Some(Expr::Field { base, name, .. }) => {
+                    assert_eq!(name, "name");
+                    assert!(matches!(**base, Expr::Var { .. }));
+                }
+                other => panic!("expected a field read of `self`, got {other:?}"),
+            }
+        }
+        other => panic!("expected a flat juxtaposition, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_newline_still_ends_the_run_before_a_receiver() {
+    // The operand set is consulted only at the token AFTER the previous one, so
+    // a `self` on the next line is a statement of its own and not a factor.
+    let c = component("component t\nf() = do\n  \"a\"\n  self.name\nend\nend\n");
+    match c.decls.first() {
+        Some(Decl::Function(f)) => match f.body.as_ref() {
+            Some(Expr::Block { items, .. }) => assert_eq!(items.len(), 2),
+            other => panic!("expected a block, got {other:?}"),
+        },
+        other => panic!("expected a function, got {other:?}"),
+    }
+}
+
 // ------------------------------------------------------------------ newlines
 
 #[test]

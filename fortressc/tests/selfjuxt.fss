@@ -1,0 +1,12 @@
+export Executable
+
+object Point(x: ZZ32, y: ZZ32)
+    getter asString(): String = "Point(" self.x.asString ", " self.y.asString ")"
+    tail(): String = self.y.asString " done"
+end
+
+run(): () = do
+    p = Point(3, 4)
+    println(p.asString)
+    println(p.tail())
+end

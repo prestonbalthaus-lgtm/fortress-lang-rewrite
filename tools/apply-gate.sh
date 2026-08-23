@@ -304,6 +304,17 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # api-side milestone looks like, and twenty-two of them are `Library/` files
 # that were waiting on `ZeroIndexed`, `LexicographicOrder` and
 # `MonoidReduction`. Nothing lost.
+# `self` AS A JUXTAPOSITION OPERAND, 2026-08-23: 391 objects and 114 apis.
+# `starts_juxt_operand` had no `KwSelf` arm, so `"Reader on " self.fileName`
+# stopped the run and the parser asked for a newline. Three objects --
+# `Library/StatDigest.fss`, `long_term_not_working/closures/DottedMethods.fss`
+# and `long_term_not_working/overriding/SimpleOverriding.fss` -- and thirteen
+# more files moved off `found KwSelf` onto a LATER blocker. Nothing lost.
+# NEITHER FLOOR MOVES: the api count did not change, and the object floor keeps
+# the 38 accepted must-fails' room. That is precisely why this milestone's
+# assertion is the `selfjuxt` case above and its mutation row -- the compile
+# metric cannot see a three-file gain over that much slack.
+#
 OBJECT_FLOOR=321
 API_FLOOR=114
 
@@ -388,6 +399,7 @@ chainmixed|YES|a chain mixes equivalence with one ordering sense
 rr64literal|1.75|an integer literal in RR64 position is a float constant
 varvalue|15\n101\n7|a `var` top-level value is storage and an assignment target
 anyreturn|7|a trait-typed result still travels through the dispatch table
+selfjuxt|Point(3, 4)\n4 done|`self` is an operand in a juxtaposition run
 CASES
 }
 
@@ -629,6 +641,10 @@ implicit_builtin_import() {
 }
 
 MUTATIONS=(
+  # `self` AS A JUXTAPOSITION OPERAND. The compile metric cannot hold this --
+  # three files over the object floor's deliberate slack -- so the `selfjuxt`
+  # case is the assertion, and this row is what proves the case can refuse.
+  'crates/parser/src/lib.rs|if matches!(self.peek_kind(), Some(Kind::KwSelf)) {|if matches!(self.peek_kind(), Some(Kind::Eof)) {|stop a juxtaposition run before a `self` operand'
   # THE IMPLICIT CORE-api IMPORT, two axes. The layering is one WORD.
   'crates/driver/src/resolve.rs|const IMPLICITLY_IMPORTED: [&str; 2] = ["CompilerBuiltin", "FortressLibrary"];|const IMPLICITLY_IMPORTED: [&str; 1] = ["CompilerBuiltin"];|implicitly import the builtin and NOT the library above it'
   'crates/driver/src/resolve.rs|const IMPLICITLY_IMPORTED: [&str; 2] = ["CompilerBuiltin", "FortressLibrary"];|const IMPLICITLY_IMPORTED: [&str; 2] = ["FortressLibrary", "CompilerBuiltin"];|order the core apis the other way, so the builtin takes the library'

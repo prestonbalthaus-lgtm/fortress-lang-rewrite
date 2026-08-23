@@ -3069,6 +3069,15 @@ impl<'t, 'a> Parser<'t, 'a> {
         if self.word_operator_here() {
             return false;
         }
+        // `"Reader on " self.fileName.asExprString`. A receiver is an operand
+        // in a juxtaposition run exactly as a name is, and `self` alone already
+        // parses at the START of an expression -- `left_context` and
+        // `right_context` have both counted it a primary all along. Five
+        // `Library/` files write the juxtaposed spelling. It sits outside the
+        // match below because a mutation row may not contain a bar.
+        if matches!(self.peek_kind(), Some(Kind::KwSelf)) {
+            return true;
+        }
         match self.peek_kind() {
             Some(
                 Kind::IntLit { .. }
