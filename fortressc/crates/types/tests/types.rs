@@ -1596,3 +1596,33 @@ fn an_api_signature_may_name_a_tuple() {
         checked.err()
     );
 }
+
+/// ROW 5 OF `Compiled9.c.fss`'s COLLISION MATRIX, all three cells. A top-level
+/// function may share its name with a TRAIT (5-1) and with an OBJECT
+/// CONSTRUCTOR (5-3); a SINGLETON object (5-2) declares a value of that name
+/// outright and there is nothing left to overload against.
+#[test]
+fn a_function_may_share_its_name_with_a_trait_and_with_a_constructor() {
+    typed("component t\ntrait Tag end\nTag(): ZZ32 = 1\nend\n");
+    typed("component t\nobject Box(n: ZZ32) end\nBox(): ZZ32 = 1\nend\n");
+    typed("component t\nBox(): ZZ32 = 1\nobject Box(n: ZZ32) end\nend\n");
+}
+
+#[test]
+fn a_function_may_not_share_its_name_with_a_singleton_object() {
+    match type_error("component t\nobject Marker end\nMarker(): ZZ32 = 1\nend\n") {
+        TypeError::DuplicateDefinition { name, .. } => assert_eq!(name, "Marker"),
+        other => panic!("expected DuplicateDefinition, got {other:?}"),
+    }
+}
+
+/// AND 5-3 IS LEGAL TO DECLARE AND NOT YET LEGAL TO CALL. `construct` is
+/// reached by name before the overload set is consulted, so without this the
+/// constructor takes the call and the function is silently unreachable.
+#[test]
+fn calling_a_name_that_is_both_a_constructor_and_a_function_is_refused() {
+    match body_error("object Box(n: ZZ32) end\nBox(): ZZ32 = 1\nf(): ZZ32 = Box(2)") {
+        TypeError::ConstructorOverloadUnsupported { name, .. } => assert_eq!(name, "Box"),
+        other => panic!("expected ConstructorOverloadUnsupported, got {other:?}"),
+    }
+}

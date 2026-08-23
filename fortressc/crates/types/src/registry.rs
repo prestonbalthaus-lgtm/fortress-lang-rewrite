@@ -46,6 +46,13 @@ impl Registry {
         self.objects.contains_key(name)
     }
 
+    /// An object with no value parameters. It declares a VALUE of its own name
+    /// rather than a constructor, which is what separates row 2 of
+    /// `Compiled9.c.fss`'s collision matrix from row 3.
+    pub(crate) fn is_singleton(&self, name: &str) -> bool {
+        self.objects.get(name).is_some_and(|o| o.singleton)
+    }
+
     /// Reflexive subtyping over the closed hierarchy. Scalars are unrelated to
     /// everything but themselves: a scalar implementing a trait would force
     /// boxing, which is M3d.

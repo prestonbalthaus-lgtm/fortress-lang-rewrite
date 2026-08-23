@@ -1,0 +1,9 @@
+export Executable
+
+object Box(n: ZZ32)
+    getter size(): ZZ32 = n
+end
+
+Box(): Box = Box(0)
+
+run(): () = println(Box(7).size)

@@ -1,0 +1,7 @@
+export Executable
+
+object Marker end
+
+Marker(): ZZ32 = 3
+
+run(): () = println(1)

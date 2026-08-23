@@ -315,8 +315,14 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # assertion is the `selfjuxt` case above and its mutation row -- the compile
 # metric cannot see a three-file gain over that much slack.
 #
+# ROW 5 OF THE COLLISION MATRIX, 2026-08-23: 391 objects and 116 apis. Both
+# `File.fsi` copies -- `Library/` and `CompilerLibrary/` -- were refused for a
+# rule 1.0 does not have, and `Compiled9.c.fss` carries 1.0's own matrix in a
+# comment to say so. Nothing lost. API_FLOOR MOVES TO 116 and the object floor
+# does not move, for the reason two entries above.
+#
 OBJECT_FLOOR=321
-API_FLOOR=114
+API_FLOOR=116
 
 passed=0
 failed=0
@@ -400,6 +406,7 @@ rr64literal|1.75|an integer literal in RR64 position is a float constant
 varvalue|15\n101\n7|a `var` top-level value is storage and an assignment target
 anyreturn|7|a trait-typed result still travels through the dispatch table
 selfjuxt|Point(3, 4)\n4 done|`self` is an operand in a juxtaposition run
+traitfn|42|a top-level function beside a TRAIT of its own name
 CASES
 }
 
@@ -459,6 +466,8 @@ badanyscalar.fss|has no representation in one
 baddeclonlyoverload.fss|`g` is ambiguous for (Both)
 badanyreturn.fss|a result of a wider type
 badvoidarg.fss|`()` has no value, so it cannot be stored in a parameter of a wider type
+badsingletonfn.fss|`Marker` is defined twice
+badctorcall.fss|is both an object constructor and a top-level function
 CASES
 
     # `badvaluebinding.fss` LEFT THIS LIST when component-level values landed,
@@ -640,7 +649,37 @@ implicit_builtin_import() {
     fi
 }
 
+# ROW 5 OF `Compiled9.c.fss`'s COLLISION MATRIX. A top-level function may share
+# its name with a TRAIT (5-1) and with an OBJECT CONSTRUCTOR (5-3), and may not
+# with a SINGLETON object (5-2). The two acceptances are apis because a call is
+# a separate question -- `badctorcall.fss` in the refusals is the other half --
+# and BOTH ORDERS are written: a fixture that puts the function first only tests
+# the order the shipped library happens to use.
+collision_matrix() {
+    printf '== the collision matrix, row 5 ==\n'
+    local name err status
+    while IFS='|' read -r name label; do
+        [[ -z $name ]] && continue
+        err=$("$fortressc" "$repo/fortressc/tests/$name" --emit-obj -o /dev/null 2>&1 >/dev/null)
+        status=$?
+        if [[ $status -eq 0 ]]; then
+            ok "$label"
+        else
+            bad "$label" "status $status: $err"
+        fi
+    done <<'CASES'
+ctorfn.fsi|a function declared BEFORE the object constructor of its name
+ctorfnrev.fsi|and a function declared AFTER it
+CASES
+}
+
 MUTATIONS=(
+  # ROW 5 OF THE COLLISION MATRIX, all three cells. The first row puts the old
+  # over-broad rule back -- the whole type namespace, which refuses 5-1 and 5-3
+  # too -- and the second drops the singleton cell it was right about.
+  'crates/types/src/lib.rs|if self.registry.is_singleton(&f.name) {|if self.registry.is_object(&f.name) {|refuse a function beside the object CONSTRUCTOR of its name'
+  'crates/types/src/lib.rs|if self.registry.is_singleton(&f.name) {|if false {|accept a function beside a SINGLETON object of its name'
+  'crates/types/src/lib.rs|_ if self.registry.is_object(name) && self.functions.contains_key(name) => {|_ if self.registry.is_object(name) && false => {|let the constructor silently take a call the function also declares'
   # `self` AS A JUXTAPOSITION OPERAND. The compile metric cannot hold this --
   # three files over the object floor's deliberate slack -- so the `selfjuxt`
   # case is the assertion, and this row is what proves the case can refuse.
@@ -735,7 +774,7 @@ PY
             rm -rf "$build"; mkdir -p "$build"
             passed=0; failed=0
             runs_and_prints; evaluated_once; implicit_builtin_import
-            refusals
+            collision_matrix; refusals
             if [[ $failed -gt 0 ]]; then
                 printf 'REFUSED  %d check(s) failed, which is the point\n' "$failed"
             else
@@ -770,6 +809,7 @@ case "${1:-}" in
         runs_and_prints
         evaluated_once
         implicit_builtin_import
+        collision_matrix
         refusals
         compile_metric
         ;;

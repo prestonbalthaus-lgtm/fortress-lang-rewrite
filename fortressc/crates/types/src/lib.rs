@@ -664,7 +664,7 @@ impl Checker {
         };
         let counts = overload_counts(component);
         checker.build_hierarchy(component)?;
-        checker.build_signatures(component, &declared, &counts)?;
+        checker.build_signatures(component, &counts)?;
         checker.build_functional_signatures(component, &counts)?;
         checker.build_method_signatures(component)?;
         Ok(checker)
@@ -1144,13 +1144,30 @@ impl Checker {
     fn build_signatures(
         &mut self,
         component: &Component,
-        declared: &HashMap<&'static str, Span>,
         counts: &HashMap<String, usize>,
     ) -> Checked<()> {
         let mut raw: Vec<(String, Vec<Type>, Type, Span)> = Vec::new();
         for decl in &component.decls {
             let Decl::Function(f) = decl else { continue };
-            if declared.contains_key(intern(&f.name)) {
+            // `Compiled9.c.fss` carries 1.0'S OWN COLLISION MATRIX in a comment
+            // at the head of the file, and row 5 is the top-level function:
+            // beside a TRAIT (5-1) and beside an OBJECT CONSTRUCTOR (5-3) it is
+            // legal, and beside a SINGLETON object (5-2) it is not. This asked
+            // the TYPE NAMESPACE instead, which refuses all three.
+            //
+            // A trait puts no name in the value namespace at all, and a
+            // constructor puts one a call could still tell apart by its
+            // arguments. A singleton puts a VALUE of that name there outright,
+            // and there is nothing left for a function to overload against.
+            // `ProjectFortress/tests/OverloadConstructor1.fss` is 1.0's own
+            // positive test for 5-3 and `Library/File.fsi:16` is what the
+            // library ships: a `FileReadStream(filename: String)` factory
+            // beside `object FileReadStream`.
+            //
+            // 5-3 IS LEGAL TO DECLARE AND STILL REFUSED TO CALL -- see
+            // `ConstructorOverloadUnsupported` in `call`. Refusing the CALL is
+            // what lets an api, which has none, carry the pair.
+            if self.registry.is_singleton(&f.name) {
                 return Err(TypeError::DuplicateDefinition {
                     span: f.span,
                     name: f.name.clone(),
@@ -4631,6 +4648,20 @@ impl Checker {
             "assert" => self.assert(args, span, expected),
             "array" => self.array_new(args, span, expected),
             "length" => self.array_length(args, span, expected),
+            // THE PAIR IS LEGAL TO DECLARE AND NOT YET LEGAL TO CALL. 1.0
+            // makes a constructor and a top-level function of one name a single
+            // overload set; here `construct` is reached BY NAME above, before
+            // `self.functions` is consulted at all, so the constructor would
+            // take every call and the function would be silently unreachable.
+            // That is a wrong answer, not a missing feature, so it is refused
+            // by name until a constructor can enter the overload set as a
+            // `Signature` of its own.
+            _ if self.registry.is_object(name) && self.functions.contains_key(name) => {
+                Err(TypeError::ConstructorOverloadUnsupported {
+                    span: *callee_span,
+                    name: name.clone(),
+                })
+            }
             _ if self.registry.is_object(name) => {
                 self.refuse_shared_array_argument(args)?;
                 self.refuse_keyword_argument(args)?;

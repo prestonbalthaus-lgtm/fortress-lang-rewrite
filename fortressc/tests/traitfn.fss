@@ -1,0 +1,9 @@
+export Executable
+
+trait Tag
+    getter width(): ZZ32
+end
+
+Tag(): ZZ32 = 41
+
+run(): () = println(Tag() + 1)
