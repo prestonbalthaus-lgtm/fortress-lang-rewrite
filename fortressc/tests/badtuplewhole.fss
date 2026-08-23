@@ -1,0 +1,11 @@
+component badtuplewhole
+export Executable
+
+(* `println` is a builtin of arity one, so there is no two-argument
+   declaration for a flattened pair to reach. The tuple is written back out
+   and refused for what it is, rather than reported as an arity nobody wrote. *)
+run(): () = do
+  t = (3, 4)
+  println(t)
+end
+end

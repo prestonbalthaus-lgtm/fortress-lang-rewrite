@@ -23,6 +23,10 @@ end
 (* A component-level tuple value, split into one value per part. *)
 tu: (O, O) = (O("Hello"), O("World!"))
 
+(* THE WRITTEN ELEMENT TYPES ARE WHAT PIN THE LITERALS. Without them `1` and
+   `4` below are ZZ32 and this call does not check. *)
+half(a: RR64, b: RR64): RR64 = a / b
+
 run(): () = do
   t = (3, 4)
   println(plu(t))
@@ -32,5 +36,7 @@ run(): () = do
   println(plu(inner))
   copied = inner
   println(plu(copied))
+  ratio: (RR64, RR64) = (1, 4)
+  println(half(ratio))
 end
 end

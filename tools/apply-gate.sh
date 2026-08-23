@@ -497,7 +497,7 @@ varfield|7\n11\n2\n108\n4|a `var` value parameter and a `:=` field are BOTH assi
 meetrule|3|a bodiless meet makes a declaration SET valid, and a bodied one runs
 concatbeside|Ux\n5|concatenation survives an unrelated declaration of its name
 listcomp|5\n10\n16\n4\n7\n6\n32\n5\n36\nq\n40\n40|a list comprehension builds a real monomorphized `List` and it GROWS
-tupleflat|7\n30\nHello World!\n7\n7|a tuple parameter, a tuple value and a written tuple are FLATTENED
+tupleflat|7\n30\nHello World!\n7\n7\n0.25|a tuple parameter, a tuple value and a written tuple are FLATTENED
 CASES
 }
 
@@ -583,6 +583,7 @@ badtupleresult.fss|it cannot be the result of a function with a body
 badtuplevalue.fss|is a tuple and tuples are FLATTENED here
 badtuplemutable.fss|a mutable tuple binding is not flattened
 badtupleoverload.fss|`g` is declared twice on the same argument types (ZZ32, ZZ32)
+badtuplewhole.fss|a tuple expression is not implemented in this subset
 CASES
 
     # `badvaluebinding.fss` LEFT THIS LIST when component-level values landed,
