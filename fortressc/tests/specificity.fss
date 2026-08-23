@@ -13,7 +13,7 @@ object Dotted extends {Ink} end
 name(x: Solid): ZZ32 = 1
 name(x: Ink): ZZ32 = 2
 
-pick(n: ZZ32): Ink = if n === 0 then Solid else Dotted end
+pick(n: ZZ32): Ink = if n = 0 then Solid else Dotted end
 
 run() = do
    println(name(pick(0)))

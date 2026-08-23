@@ -97,9 +97,32 @@ the object and not the call.
 ## What it cost
 
 ONE file: `Library/CompilerAlgebra.fss`, on `` `=` is ambiguous `` for a pair of
-`Just[\(Reduction[\(Number,Number)\], ...)\]` instantiations. Another Comparison
-Meet Rule gap, now reachable because the names resolve. Not corrected here --
-the four already landed today were each measured first.
+`Just[\(Reduction[\(Number,Number)\], ...)\]` instantiations.
+
+**THIS SECTION SAID "ANOTHER COMPARISON MEET RULE GAP" AND THAT WAS WRONG.**
+Corrected 2026-08-23 after the probe was run rather than the chain reasoned out
+-- the same mistake, and the same correction, as the `NN32` case. It is not in
+the Comparison hierarchy, it is not a missing declaration, and it is not a
+source defect. BOTH COLLIDING CANDIDATES CARRY THE SAME SPAN: `Library/
+CompilerAlgebra.fss:26`, `opr =(self, other: T): Boolean = (self === other)`,
+monomorphized at `T = AnyMaybe` and at `T = AnyUniqueItem`. One declaration,
+two stamps.
+
+And the meet the Meet Rule asks for IS ALREADY WRITTEN:
+`Library/FortressLibrary.fsi:896` declares `opr =(self, other:AnyMaybe):
+Boolean`, which dominates both stamps. It is not in the component's overload
+set, because **Rule 3 above filtered it out** -- a merged functional method is
+not lifted into a component -- while monomorphization stamps the file's OWN
+generic trait at the merged types and those stamps do enter. So a component sees
+the obligations its own generic creates and none of the merged declarations that
+discharge them. The whole arity-2 `=` group is thirteen entries and every one is
+a stamp of that one line.
+
+That is a real compiler defect and it is Rule 3's cost, stated. It is NOT fixed
+by lifting merged methods on their own: `typing_candidates` prefers concrete and
+`dispatch_target` takes `applicable(.., true)`, so a bodiless meet can never beat
+a concrete stamp. Whatever fixes it has to answer that too. Recorded in
+`04-state.md`; not built here.
 
 ## The IR moved, and it is tags
 

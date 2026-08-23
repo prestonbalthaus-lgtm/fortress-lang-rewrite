@@ -20,8 +20,8 @@ draw(i: Dotted, f: Square): ZZ32 = 4000
 
 (* The return annotation is what makes the value trait typed, and so what makes
    the call site undecidable statically. *)
-inkOf(n: ZZ32): Ink = if n === 0 then Solid else Dotted(7) end
-faceOf(n: ZZ32): Face = if n === 0 then Round else Square(3) end
+inkOf(n: ZZ32): Ink = if n = 0 then Solid else Dotted(7) end
+faceOf(n: ZZ32): Face = if n = 0 then Round else Square(3) end
 
 run() = do
    i:ZZ32 := 0

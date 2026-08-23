@@ -32,7 +32,7 @@ object Spare
    f[\S\](k: ZZ32): ZZ32 = k
 end
 
-pick(n: ZZ32): T = if n === 0 then O else P end
+pick(n: ZZ32): T = if n = 0 then O else P end
 
 run(): () = do
    println(O.f[\ZZ32\]())

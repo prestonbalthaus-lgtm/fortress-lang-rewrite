@@ -1,0 +1,12 @@
+export Executable
+
+(* `===` is an ORDINARY LIBRARY OPERATOR, not a spelling of `=`.
+   `Library/CompilerLibrary.fsi:30` declares `opr ===(a:Any, b:Any):Boolean`
+   and defines it as reference identity. It reaches the overload set like any
+   other declared operator, so a file that declares its own gets its own. *)
+opr ===(a: ZZ32, b: ZZ32): Boolean = a < b
+
+run(): () = do
+    println(3 === 4)
+    println(4 === 3)
+end

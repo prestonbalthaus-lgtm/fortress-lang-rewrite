@@ -16,7 +16,7 @@ pick(x: Top, y: Top): ZZ32 = 0
 pick(x: Left, y: Top): ZZ32 = 1
 pick(x: Top, y: Right): ZZ32 = 2
 
-topOf(n: ZZ32): Top = if n === 0 then OLeft else ORight end
+topOf(n: ZZ32): Top = if n = 0 then OLeft else ORight end
 
 run() = do
    println(pick(topOf(0), topOf(1)))

@@ -451,6 +451,7 @@ selftypeparam|42\ntrue|`Self` is a static parameter, and the receiver is still t
 ctoroverload|107\n7|a constructor and a function of one name are ONE overload set
 setterfires|SETTER RAN\n105\n9\nBOX 7\nBASE 7|a declared setter FIRES and an ordinary method does not
 mergedaccessor|42|a merged getter name does not capture this file's own method
+seqvoperator|true\nfalse|`===` reaches the overload set and is not a spelling of `=`
 CASES
 }
 
@@ -521,6 +522,7 @@ badthrownotexception.fss|and this expression is of type FooExn
 badmergedfunction.fss|unknown name `gcd`
 badmergedconstruct.fss|comes from an imported api, which declares it and does not define it
 badtry.fss|`try` parses and its lowering is not implemented
+badseqv.fss|unknown name `===`
 CASES
 
     # `badvaluebinding.fss` LEFT THIS LIST when component-level values landed,
@@ -767,6 +769,9 @@ CASES
 }
 
 MUTATIONS=(
+  # `===` IS NOT `=`. Reading it as `=` gets the numeric case right by luck
+  # and the reference case wrong by construction.
+  'crates/parser/src/lib.rs|            Kind::EqEqEq => "===",|            Kind::EqEqEq => "==",|send `===` to a different operator name'
   # `try` PARSES AND IS REFUSED BY NAME. Without the parser arm it is a bare
   # reserved-word refusal again, which files it under the parser instead of
   # under exceptions and says nothing about what is missing.

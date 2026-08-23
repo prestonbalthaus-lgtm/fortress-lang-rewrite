@@ -853,7 +853,7 @@ a === b      (* reference identity, distinct from = *)
 a CMP b      (* three-way compare, returns a Comparison; LEXICO is the lexicographic one *)
 ```
 
-`< <= > >= = =/= ===` are [fortressc]; `CMP`, `LEXICO`, `SEQV`, `NEQV` are [parses].
+`< <= > >= = =/=` are [fortressc]; `CMP`, `LEXICO`, `SEQV`, `NEQV` are [parses].  ⚠ 2026-08-23: `===` LEFT THIS LIST. It used to map to the same AST node as `=`, which read `a === b` as numeric equality; it is an ORDINARY LIBRARY OPERATOR -- `Library/CompilerLibrary.fsi:30` declares `opr ===(a:Any, b:Any):Boolean` and `.fss:63` defines it as reference identity, with a separate `ZZ64` overload that IS `a = b`. So reading it as `=` got the numeric case right by luck and the reference case wrong by construction. It reaches the overload set now: with no declaration in scope `3 === 4` is `` unknown name `===` ``, and a file that declares its own gets its own. Measured before the reclassification -- ZERO corpus files that compile write one, though SEVEN of this compiler's own fixtures did and every one was caught by a gate.
 
 *Seen in: Library/FortressLibrary.fss:98, Library/CompilerLibrary.fss:63, Library/FortressLibrary.fss:224-226*
 

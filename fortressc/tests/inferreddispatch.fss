@@ -23,7 +23,7 @@ object Cat extends Animal
    noise() = 2
 end
 
-pick(n: ZZ32): Animal = if n === 0 then Dog elif n === 1 then Cat else Dog end
+pick(n: ZZ32): Animal = if n = 0 then Dog elif n = 1 then Cat else Dog end
 
 speak(a: Animal) = a.noise()
 

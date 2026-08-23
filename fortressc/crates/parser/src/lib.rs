@@ -3024,6 +3024,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         let text = match kind {
             Kind::OpWord(word) if !matches!(*word, "AND" | "OR" | "NOT") => *word,
             Kind::BarBar => "||",
+            Kind::EqEqEq => "===",
             Kind::BarRun(text) => *text,
             Kind::Bang => "!",
             Kind::Question => "?",
@@ -4880,7 +4881,16 @@ const fn comparison_op(kind: &Kind<'_>) -> Option<BinOp> {
         Kind::Gt => Some(BinOp::Gt),
         Kind::Le => Some(BinOp::Le),
         Kind::Ge => Some(BinOp::Ge),
-        Kind::EqEqEq => Some(BinOp::Eq),
+        // `===` IS NOT `=`. It used to map here, which read `a === b` as
+        // numeric equality -- and `===` is an ORDINARY LIBRARY OPERATOR:
+        // `Library/CompilerLibrary.fsi:30` declares `opr ===(a:Any, b:Any):
+        // Boolean` and `.fss:63` defines it as `jSEQUIV`, reference identity,
+        // with a separate `ZZ64` overload that IS `a = b`. Reading it as `=`
+        // gets the numeric case right by luck and the reference case wrong by
+        // construction. It goes to the overload set now, like `||`.
+        //
+        // MEASURED BEFORE THE RECLASSIFICATION, which is this project's rule:
+        // ZERO of the files that compile today write a `===`.
         Kind::NotEq => Some(BinOp::Ne),
         _ => None,
     }

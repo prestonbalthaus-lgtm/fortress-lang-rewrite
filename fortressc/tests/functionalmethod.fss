@@ -22,7 +22,7 @@ object Circle extends Shape end
 
 area(n: ZZ32): ZZ32 = n + 100
 
-pick(n: ZZ32): Shape = if n === 0 then Square(3) else Circle end
+pick(n: ZZ32): Shape = if n = 0 then Square(3) else Circle end
 
 run(): () = do
    println(area(Square(4)))

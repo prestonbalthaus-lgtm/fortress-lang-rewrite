@@ -676,7 +676,7 @@ fn a_trait_typed_argument_dispatches_even_when_one_declaration_applies_staticall
     let src = with_shapes(
         "name(x: Solid): ZZ32 = 1\n\
          name(x: Ink): ZZ32 = 2\n\
-         pick(n: ZZ32): Ink = if n === 0 then Solid else Dotted end\n\
+         pick(n: ZZ32): Ink = if n = 0 then Solid else Dotted end\n\
          run(): ZZ32 = name(pick(0))",
     );
     assert_eq!(last_target(&src), "name$dispatch$Ink");
@@ -700,7 +700,7 @@ fn a_row_whose_winners_agree_collapses_instead_of_switching() {
     // nothing left to decide and the table is a leaf.
     let src = with_shapes(
         "name(x: Ink): ZZ32 = 2\n\
-         pick(n: ZZ32): Ink = if n === 0 then Solid else Dotted end\n\
+         pick(n: ZZ32): Ink = if n = 0 then Solid else Dotted end\n\
          run(): ZZ32 = name(pick(0))",
     );
     assert_eq!(last_target(&src), "name");
@@ -718,7 +718,7 @@ fn a_symmetrically_ambiguous_call_is_refused_and_names_both_declarations() {
         pick(x: Top, y: Top): ZZ32 = 0\n\
         pick(x: Left, y: Top): ZZ32 = 1\n\
         pick(x: Top, y: Right): ZZ32 = 2\n\
-        topOf(n: ZZ32): Top = if n === 0 then OLeft else ORight end\n\
+        topOf(n: ZZ32): Top = if n = 0 then OLeft else ORight end\n\
         run(): ZZ32 = pick(topOf(0), topOf(1))\n\
         end\n";
     let e = type_error(src);
@@ -745,7 +745,7 @@ fn a_call_no_declaration_covers_is_refused_before_the_table_is_built() {
          object Dotted extends {Ink} end\n\
          name(x: Solid): ZZ32 = 1\n\
          name(x: Dotted): ZZ32 = 2\n\
-         pick(n: ZZ32): Ink = if n === 0 then Solid else Dotted end\n\
+         pick(n: ZZ32): Ink = if n = 0 then Solid else Dotted end\n\
          run(): ZZ32 = name(pick(0))",
     );
     assert!(
@@ -951,7 +951,7 @@ fn println_refuses_what_there_is_no_shim_for() {
 #[test]
 fn a_branch_of_each_concrete_type_is_allowed_under_a_shared_trait() {
     let c = typed(&with_shapes(
-        "pick(n: ZZ32): Ink = if n === 0 then Solid else Dotted end",
+        "pick(n: ZZ32): Ink = if n = 0 then Solid else Dotted end",
     ));
     assert_eq!(
         c.functions.last().map(|f| f.return_type),
@@ -976,7 +976,7 @@ fn a_cell_may_not_return_something_the_call_site_cannot_hold() {
          object Dotted extends {Ink} end\n\
          name(x: Ink): ZZ32 = 1\n\
          name(x: Solid): String = \"a\"\n\
-         pick(n: ZZ32): Ink = if n === 0 then Solid else Dotted end\n\
+         pick(n: ZZ32): Ink = if n = 0 then Solid else Dotted end\n\
          run(): ZZ32 = name(pick(0))",
     );
     assert!(
@@ -1153,7 +1153,7 @@ fn a_generic_instantiation_reaches_the_dispatch_table() {
          object Dot extends {Shape} end\n\
          area(s: Shape): ZZ32 = 1\n\
          area(s: Box[\\ZZ64\\]): ZZ32 = 3\n\
-         pick(n: ZZ32): Shape = if n === 0 then Dot else Box[\\ZZ64\\](1) end\n\
+         pick(n: ZZ32): Shape = if n = 0 then Dot else Box[\\ZZ64\\](1) end\n\
          run(): ZZ32 = area(pick(0))\n\
          end\n",
     );

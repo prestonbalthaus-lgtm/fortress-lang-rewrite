@@ -16,8 +16,8 @@ area(s: Box[\ZZ64\]): ZZ32 = 3
 area(s: Box[\String\]): ZZ32 = 4
 
 pickShape(n: ZZ32): Shape =
-   if n === 0 then Dot
-   elif n === 1 then Box[\ZZ64\](1)
+   if n = 0 then Dot
+   elif n = 1 then Box[\ZZ64\](1)
    else Box[\String\]("x") end
 
 run() = do
