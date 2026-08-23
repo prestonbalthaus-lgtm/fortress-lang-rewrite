@@ -894,6 +894,23 @@ pub enum Expr {
         body: Box<Expr>,
         span: Span,
     },
+    /// `<| e | x <- g, p |>` and the same shape in every other bracket pair.
+    /// `DelimitedExpr.rats:290-314` gives list, set and map ONE production, so
+    /// this node carries the bracket pair as the operator NAME the declaration
+    /// side already builds -- `<|_|>`, `{_}` -- and nothing here is specific to
+    /// lists.
+    ///
+    /// A GUARD IS A GENERATOR CLAUSE WITH NO BINDER, which is 1.0's own
+    /// representation (`Fortress.ast:1679`, `GeneratorClause(List<Id> bind,
+    /// Expr init)` with `bind` empty). No discriminator is invented here.
+    Comprehension {
+        /// `<|_|>`, `{_}` -- the pair, named the way `opr` declares it.
+        bracket: String,
+        static_args: Vec<TypeRef>,
+        body: Box<Expr>,
+        gens: Vec<GeneratorClause>,
+        span: Span,
+    },
     /// `try B catch x A* forbid T* finally B end`, and every part after the
     /// first is optional -- `DelimitedExpr.rats:141-142` is the production.
     ///
@@ -1088,6 +1105,23 @@ pub struct CaseArm {
 
 /// One arm of a `typecase`. `binder` is the `x` of `x: T => e`, bound to the
 /// subject at type `T` for the body only.
+/// One clause of a comprehension's generator list. `x <- g` binds; a clause
+/// with an EMPTY binder is a GUARD, which is exactly how 1.0 represents one --
+/// there is no keyword and no separate node, and the two are told apart only by
+/// whether a `<-` was written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GeneratorClause {
+    pub binders: Vec<String>,
+    pub init: Expr,
+    /// The second half of a RANGE source, `a:b` or `a#n`. A comprehension
+    /// accepts the same generator a `for` does, and `1:10` is two expressions
+    /// and a form -- not something `expr()` produces on its own.
+    pub hi: Option<Expr>,
+    /// `a:b` is inclusive; `a#n` is a count.
+    pub inclusive: bool,
+    pub span: Span,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeCaseArm {
     pub binder: Option<String>,
@@ -1160,6 +1194,7 @@ impl Expr {
             | Self::Tuple { span, .. }
             | Self::IntLit { span, .. }
             | Self::FloatLit { span, .. }
+            | Self::Comprehension { span, .. }
             | Self::Try { span, .. }
             | Self::Throw { span, .. }
             | Self::StrLit { span, .. }

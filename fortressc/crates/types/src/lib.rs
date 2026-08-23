@@ -3016,6 +3016,16 @@ impl Checker {
                     span: *span,
                 })
             }
+            // A COMPREHENSION. PARSED AND REFUSED BY NAME. The whole shape is
+            // kept -- bracket pair, static arguments, body, generator clauses
+            // with a guard represented as 1.0 represents one -- so the lowering
+            // can be built on it, and so the file lands in the comprehension
+            // bucket rather than reporting `expected an expression, found Lt`
+            // at the `<-`.
+            Expr::Comprehension { bracket, span, .. } => Err(TypeError::ComprehensionUnsupported {
+                span: *span,
+                bracket: bracket.clone(),
+            }),
             // `try ... catch ... end`. PARSED AND REFUSED BY NAME. The shape
             // is kept whole in the AST -- body, binder, arms, `forbid` list,
             // `finally` -- so the lowering can be built on it without going
@@ -3778,6 +3788,13 @@ impl Checker {
             }
             Expr::Prefix { operand, .. } => self.reads_shared(operand, floor),
             Expr::Throw { value, .. } => self.reads_shared(value, floor),
+            Expr::Comprehension { body, gens, .. } => {
+                self.reads_shared(body, floor)
+                    || gens.iter().any(|g| {
+                        self.reads_shared(&g.init, floor)
+                            || g.hi.as_ref().is_some_and(|h| self.reads_shared(h, floor))
+                    })
+            }
             Expr::Try {
                 body,
                 arms,

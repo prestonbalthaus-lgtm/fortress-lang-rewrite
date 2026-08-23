@@ -3102,7 +3102,7 @@ result.init(i, r DOT other), (i,r) <- rows.indexValuePairs
 
 ### Comprehensions
 
-All [legacy]: fortressc has no set type at all and rejects both enclosers, "expected an expression, found LeftBar" and "expected an expression, found LBrace".  ⚠ 2026-08-23: still refused, but the messages moved -- both enclosers PARSE now (`opr` declarations landed) and come back as `` unknown name `<|_|>` `` and `` unknown name `{_}` ``, which names the missing declaration rather than the bracket.
+All [legacy]: fortressc has no set type at all and rejects both enclosers, "expected an expression, found LeftBar" and "expected an expression, found LBrace".  ⚠ 2026-08-23: still refused, but the messages moved -- both enclosers PARSE now (`opr` declarations landed) and come back as `` unknown name `<|_|>` `` and `` unknown name `{_}` ``, which names the missing declaration rather than the bracket.  ⚠ 2026-08-23 (later): AND A COMPREHENSION PARSES in every bracket. `<| e | x <- g, p |>` and `{ e | x <- g }` are ONE production in 1.0 (`DelimitedExpr.rats:290-314`), so the bracket pair is carried as the operator name and nothing is list-specific. Static arguments go INSIDE the opener -- `<|[\E\] e | ... |>`. A guard is a generator clause with NO binder, which is 1.0's own representation. The separator is a bare `|` with WHITESPACE ON BOTH SIDES (`wr bar wr`); `<|x|x<-s|>` does not parse in 1.0 either. The LOWERING is refused by name: a comprehension accumulates an unknown number of elements and nothing in this backend grows storage.
 
 ```fortress
 <| x^2 | x <- {0, 1, 2, 3, 4, 5}, x MOD 2 = 0|>   (* List: element expr, bar, the clause list a for header takes *)

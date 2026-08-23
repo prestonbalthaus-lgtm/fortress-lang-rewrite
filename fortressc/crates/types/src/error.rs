@@ -478,6 +478,13 @@ pub enum TypeError {
         span: Span,
         name: String,
     },
+    /// `<| e | x <- g |>` and the same in every other bracket. It PARSES and
+    /// the lowering is not built: a comprehension accumulates an unknown number
+    /// of elements and nothing in this backend grows storage.
+    ComprehensionUnsupported {
+        span: Span,
+        bracket: String,
+    },
     /// `try ... catch ... end`. It PARSES -- the whole shape is in the AST --
     /// and the lowering is not built. Named rather than left as a reserved-word
     /// refusal so the file lands in the exceptions bucket and not the parser
@@ -905,6 +912,7 @@ impl TypeError {
             | Self::ThrownValueIsNotAnException { span, .. }
             | Self::MergedObjectNotConstructible { span, .. }
             | Self::TryUnsupported { span }
+            | Self::ComprehensionUnsupported { span, .. }
             | Self::DottedMethodUnsupported { span, .. }
             | Self::CompoundAssignThroughSetter { span, .. }
             | Self::FieldIsImmutable { span, .. }
@@ -1311,6 +1319,12 @@ impl core::fmt::Display for TypeError {
                 "`{name}` comes from an imported api, which declares it and \
                  does not define it; this compiler has no separate compilation, \
                  so there is no constructor to call"
+            ),
+            Self::ComprehensionUnsupported { bracket, .. } => write!(
+                f,
+                "a `{bracket}` comprehension parses and its lowering is not \
+                 implemented; it accumulates an unknown number of elements and \
+                 nothing in this backend grows storage yet"
             ),
             Self::TryUnsupported { .. } => write!(
                 f,

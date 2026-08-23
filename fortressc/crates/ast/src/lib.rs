@@ -5,10 +5,10 @@ mod nodes;
 
 pub use nodes::{
     Accessor, Assign, BinOp, Binding, BlockItem, BoundObligation, CaseArm, Component, CutMember,
-    Decl, DimDecl, DimExpr, Expr, ExtentForm, ExtentRange, FieldDecl, Fixity, FnDecl, ImportDecl,
-    ImportItems, ImportedName, Member, MethodDecl, Modifiers, ObjectDecl, Param, ShapeSpelling,
-    StaticExpr, StaticKind, StaticOp, StaticParam, TraitDecl, TupleBinding, TypeCaseArm, TypeRef,
-    UnOp, UnitDecl, ValueDecl,
+    Decl, DimDecl, DimExpr, Expr, ExtentForm, ExtentRange, FieldDecl, Fixity, FnDecl,
+    GeneratorClause, ImportDecl, ImportItems, ImportedName, Member, MethodDecl, Modifiers,
+    ObjectDecl, Param, ShapeSpelling, StaticExpr, StaticKind, StaticOp, StaticParam, TraitDecl,
+    TupleBinding, TypeCaseArm, TypeRef, UnOp, UnitDecl, ValueDecl,
 };
 
 /// The type the parser gives a `self` parameter, standing for the enclosing

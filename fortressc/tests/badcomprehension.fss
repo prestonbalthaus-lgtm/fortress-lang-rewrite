@@ -1,0 +1,6 @@
+export Executable
+
+run(): () = do
+    xs = <|[\ZZ32\] x | x <- 1:10, x > 3 |>
+    println(1)
+end

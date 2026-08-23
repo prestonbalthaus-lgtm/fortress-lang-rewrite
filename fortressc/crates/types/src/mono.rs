@@ -1135,6 +1135,33 @@ impl<'a> Expander<'a> {
                 else_arm: Box::new(self.expr(else_arm, subst)?),
                 span: *span,
             },
+            Expr::Comprehension {
+                bracket,
+                static_args,
+                body,
+                gens,
+                span,
+            } => Expr::Comprehension {
+                bracket: bracket.clone(),
+                static_args: self.types(static_args, subst)?,
+                body: Box::new(self.expr(body, subst)?),
+                gens: gens
+                    .iter()
+                    .map(|g| {
+                        Ok(fortress_ast::GeneratorClause {
+                            binders: g.binders.clone(),
+                            init: self.expr(&g.init, subst)?,
+                            hi: match &g.hi {
+                                Some(h) => Some(self.expr(h, subst)?),
+                                None => None,
+                            },
+                            inclusive: g.inclusive,
+                            span: g.span,
+                        })
+                    })
+                    .collect::<Result<_, TypeError>>()?,
+                span: *span,
+            },
             Expr::Try {
                 body,
                 catch_binder,

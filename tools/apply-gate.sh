@@ -525,6 +525,7 @@ badmergedconstruct.fss|comes from an imported api, which declares it and does no
 badtry.fss|`try` parses and its lowering is not implemented
 badseqv.fss|unknown name `===`
 badbigand.fss|is not one of the reduction operators this lowering reaches
+badcomprehension.fss|comprehension parses and its lowering is not implemented
 CASES
 
     # `badvaluebinding.fss` LEFT THIS LIST when component-level values landed,
@@ -771,6 +772,10 @@ CASES
 }
 
 MUTATIONS=(
+  # A COMPREHENSION PARSES. Two axes: the bare-`|` separator, and the static
+  # arguments that go INSIDE the opener.
+  'crates/parser/src/lib.rs|                if self.comprehension_bar_here() {|                if false {|stop reading the bare bar as a comprehension separator'
+  'crates/parser/src/lib.rs|            static_args = self.type_args()?;|            static_args = Vec::new();|refuse static arguments inside an enclosing opener'
   # `BIG` FOLDS INTO THE OPERATOR NAME AT THE USE SITE. Without the arm it is
   # a bare reserved word again and the thirteen files that write one are filed
   # under the parser instead of under what they actually need.

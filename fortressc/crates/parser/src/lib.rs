@@ -16,9 +16,10 @@ pub use error::ParseError;
 
 use fortress_ast::{
     Accessor, Assign, BinOp, Binding, BlockItem, CaseArm, Component, Decl, DimDecl, DimExpr, Expr,
-    ExtentForm, ExtentRange, FieldDecl, Fixity, FnDecl, ImportDecl, ImportItems, ImportedName,
-    Member, MethodDecl, Modifiers, ObjectDecl, Param, ShapeSpelling, Span, StaticExpr, StaticKind,
-    StaticOp, StaticParam, TraitDecl, TypeCaseArm, TypeRef, UnOp, UnitDecl, SELF_TYPE_PLACEHOLDER,
+    ExtentForm, ExtentRange, FieldDecl, Fixity, FnDecl, GeneratorClause, ImportDecl, ImportItems,
+    ImportedName, Member, MethodDecl, Modifiers, ObjectDecl, Param, ShapeSpelling, Span,
+    StaticExpr, StaticKind, StaticOp, StaticParam, TraitDecl, TypeCaseArm, TypeRef, UnOp, UnitDecl,
+    SELF_TYPE_PLACEHOLDER,
 };
 use fortress_lexer::{Kind, Token};
 
@@ -3735,6 +3736,17 @@ impl<'t, 'a> Parser<'t, 'a> {
         if open.is_empty() {
             return Err(self.error("an expression"));
         }
+        // STATIC ARGUMENTS GO INSIDE THE OPENER. `DelimitedExpr.rats:298-309`:
+        // `LeftEncloser (w StaticArgs)? w ...`. `<|[\E\]|>` is the empty list
+        // AT an element type and 471 corpus sites write one, so without this the
+        // whole family stops at `expected an expression, found LGeneric`.
+        let mut static_args = Vec::new();
+        if self.at(&Kind::LGeneric) {
+            self.pos += 1;
+            static_args = self.type_args()?;
+            self.expect(&Kind::RGeneric, "`\\]`")?;
+            self.skip_newlines();
+        }
         // AN EMPTY ENCLOSER IS ONE RUN. `<||>` and `{}` have no operand to stop
         // the opening run, so it swallows the closing half as well: `<|` is
         // glued to `|>`. When the run is of even length and nothing that could
@@ -3743,7 +3755,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         if open.len().is_multiple_of(2) && !self.starts_an_operand() {
             let half = open.len().div_euclid(2);
             let close = open.split_off(half);
-            return Ok(self.enclosed(start, &open, &close, args));
+            return Ok(self.enclosed(start, &open, &close, static_args, args));
         }
         self.skip_newlines();
         let empty = self.closes_here(open.len());
@@ -3751,6 +3763,31 @@ impl<'t, 'a> Parser<'t, 'a> {
             loop {
                 args.push(self.expr()?);
                 self.skip_newlines();
+                // A COMPREHENSION, and the separator is a BARE `|` WITH
+                // WHITESPACE ON BOTH SIDES -- `DelimitedExpr.rats:298,306` write
+                // it `wr bar wr`, and `Spacing.rats:93` makes `wr` mandatory.
+                // `<|x|x<-s|>` does not parse in 1.0 either.
+                if self.comprehension_bar_here() {
+                    self.pos += 1;
+                    self.skip_newlines();
+                    let gens = self.generator_clause_list()?;
+                    self.skip_newlines();
+                    let close = self.operator_run(open.len());
+                    if close.len() != open.len() {
+                        return Err(self.error("the closing half of a comprehension"));
+                    }
+                    let mut bracket = join(&open);
+                    bracket.push('_');
+                    bracket.push_str(&join(&close));
+                    let body = args.pop().unwrap_or(Expr::Unit { span: start });
+                    return Ok(Expr::Comprehension {
+                        bracket,
+                        static_args,
+                        body: Box::new(body),
+                        gens,
+                        span: Span::new(start.start, self.previous_span().end),
+                    });
+                }
                 if !self.at(&Kind::Comma) {
                     break;
                 }
@@ -3767,18 +3804,159 @@ impl<'t, 'a> Parser<'t, 'a> {
         if close.len() != open.len() {
             return Err(self.error("the closing half of an enclosing operator"));
         }
-        Ok(self.enclosed(start, &open, &close, args))
+        Ok(self.enclosed(start, &open, &close, static_args, args))
+    }
+
+    /// A bare `|` that separates a comprehension's body from its generators.
+    ///
+    /// `Symbol.rats:51-58` decides this with UNBOUNDED LOOKAHEAD -- a `|` is the
+    /// separator only if a whole generator clause list and a closer follow. The
+    /// cheap test here is the SPACING rule the same grammar imposes
+    /// (`wr bar wr`, whitespace REQUIRED on both sides) plus a scan for a `<-`
+    /// before the closing run. Without the scan, `ps || <| ... |> || qs` --
+    /// 160 corpus sites write `BIG ||` over one -- takes the wrong branch.
+    fn comprehension_bar_here(&self) -> bool {
+        if !matches!(self.peek_kind(), Some(Kind::Bar)) {
+            return false;
+        }
+        if self.glued_left(self.pos) || self.glued_right(self.pos) {
+            return false;
+        }
+        let mut depth = 0i32;
+        for index in self.pos + 1..self.tokens.len() {
+            match self.tokens.get(index).map(|t| &t.kind) {
+                Some(Kind::LParen | Kind::LBracket | Kind::LGeneric | Kind::LBrace) => depth += 1,
+                Some(Kind::RParen | Kind::RBracket | Kind::RGeneric | Kind::RBrace) => depth -= 1,
+                // `<-` is two tokens joined by adjacency, the same way
+                // `generator_clause` reads it.
+                Some(Kind::Lt) if depth == 0 && self.glued_right(index) => {
+                    if matches!(
+                        self.tokens.get(index + 1).map(|t| &t.kind),
+                        Some(Kind::Minus)
+                    ) {
+                        return true;
+                    }
+                }
+                Some(Kind::LeftArrow) if depth == 0 => return true,
+                Some(Kind::Newline | Kind::Semi | Kind::Eof) | None => return false,
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// `x <- g, p, (a,b) <- h`. A clause with no `<-` is a GUARD, and 1.0
+    /// represents it the same way: a generator clause with an empty binder.
+    fn generator_clause_list(&mut self) -> Parsed<Vec<GeneratorClause>> {
+        let mut out = Vec::new();
+        loop {
+            let start = self.span_here();
+            let save = self.pos;
+            let binders = self.comprehension_binders();
+            if binders.is_empty() {
+                self.pos = save;
+            }
+            let init = self.expr()?;
+            // THE SAME GENERATOR A `for` TAKES. `1:10` and `0#n` are two
+            // expressions and a form, so `expr()` alone stops at the `:` and
+            // the closing run then reports the wrong token.
+            let (hi, inclusive) = if self.at(&Kind::Colon) {
+                self.pos += 1;
+                self.skip_newlines();
+                (Some(self.expr()?), true)
+            } else if self.at(&Kind::Hash) {
+                self.pos += 1;
+                self.skip_newlines();
+                (Some(self.expr()?), false)
+            } else {
+                (None, false)
+            };
+            out.push(GeneratorClause {
+                binders,
+                init,
+                hi,
+                inclusive,
+                span: Span::new(start.start, self.previous_span().end),
+            });
+            self.skip_newlines();
+            if !self.at(&Kind::Comma) {
+                break;
+            }
+            self.pos += 1;
+            self.skip_newlines();
+        }
+        Ok(out)
+    }
+
+    /// `x <-` or `(a, b) <-`, consumed, or nothing consumed and an empty list.
+    fn comprehension_binders(&mut self) -> Vec<String> {
+        let save = self.pos;
+        let mut names = Vec::new();
+        if self.at(&Kind::LParen) {
+            self.pos += 1;
+            loop {
+                match self.peek_kind() {
+                    Some(Kind::Ident(n)) => {
+                        names.push((*n).to_owned());
+                        self.pos += 1;
+                    }
+                    _ => {
+                        self.pos = save;
+                        return Vec::new();
+                    }
+                }
+                if self.at(&Kind::Comma) {
+                    self.pos += 1;
+                    continue;
+                }
+                break;
+            }
+            if !self.at(&Kind::RParen) {
+                self.pos = save;
+                return Vec::new();
+            }
+            self.pos += 1;
+        } else if let Some(Kind::Ident(n)) = self.peek_kind() {
+            names.push((*n).to_owned());
+            self.pos += 1;
+        } else {
+            return Vec::new();
+        }
+        let Some(width) = self.left_arrow_width() else {
+            self.pos = save;
+            return Vec::new();
+        };
+        self.pos += width;
+        self.skip_newlines();
+        names
     }
 
     /// The name is the pair with `_` where the operands go, which is exactly
     /// what `opr_signature` builds on the declaration side.
-    fn enclosed(&self, start: Span, open: &[&str], close: &[&str], args: Vec<Expr>) -> Expr {
+    fn enclosed(
+        &self,
+        start: Span,
+        open: &[&str],
+        close: &[&str],
+        static_args: Vec<TypeRef>,
+        args: Vec<Expr>,
+    ) -> Expr {
         let mut name = join(open);
         name.push('_');
         name.push_str(&join(close));
         let span = Span::new(start.start, self.previous_span().end);
+        let callee = Expr::Var { name, span: start };
+        let callee = if static_args.is_empty() {
+            callee
+        } else {
+            Expr::Instantiate {
+                callee: Box::new(callee),
+                args: static_args,
+                span,
+            }
+        };
         Expr::Call {
-            callee: Box::new(Expr::Var { name, span: start }),
+            callee: Box::new(callee),
             args,
             span,
         }

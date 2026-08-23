@@ -2131,3 +2131,40 @@ fn a_try_may_have_no_clauses_at_all() {
         other => panic!("expected a function, got {other:?}"),
     }
 }
+
+/// `DelimitedExpr.rats:290-314` gives list, set and map ONE production, so the
+/// bracket pair is carried as the operator NAME and nothing here is specific to
+/// lists. A guard is a generator clause with NO binder, which is 1.0's own
+/// representation.
+#[test]
+fn a_comprehension_keeps_its_bracket_static_args_generators_and_guards() {
+    match expr("<|[\\ZZ32\\] x | x <- 1:10, x > 3 |>") {
+        Expr::Comprehension {
+            bracket,
+            static_args,
+            gens,
+            ..
+        } => {
+            assert_eq!(bracket, "<|_|>");
+            assert_eq!(static_args.len(), 1);
+            assert_eq!(gens.len(), 2);
+            let first = gens.first().expect("a first generator");
+            let guard = gens.get(1).expect("a guard");
+            assert_eq!(first.binders, vec!["x".to_owned()]);
+            assert!(first.hi.is_some(), "1:10 keeps its upper bound");
+            assert!(first.inclusive);
+            assert!(guard.binders.is_empty(), "a guard has no binder");
+        }
+        other => panic!("expected a comprehension, got {other:?}"),
+    }
+}
+
+/// AND THE SEPARATOR IS A BARE `|` WITH WHITESPACE ON BOTH SIDES. Without the
+/// scan for a `<-` before the closer, `ps || <| a |> || qs` -- 160 corpus sites
+/// write `BIG ||` over one -- takes the comprehension branch.
+#[test]
+fn an_enclosing_application_is_not_a_comprehension() {
+    assert!(matches!(expr("<| a, b |>"), Expr::Call { .. }));
+    assert!(matches!(expr("<| a |>"), Expr::Call { .. }));
+    assert!(matches!(expr("{ a, b }"), Expr::Call { .. }));
+}

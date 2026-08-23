@@ -1017,6 +1017,23 @@ impl Pass {
                 }
                 self.rewrite_expr(else_arm, scope)
             }
+            Expr::Comprehension { body, gens, .. } => {
+                for g in gens.iter_mut() {
+                    self.rewrite_expr(&mut g.init, scope)?;
+                    if let Some(h) = &mut g.hi {
+                        self.rewrite_expr(h, scope)?;
+                    }
+                }
+                scope.push();
+                for g in gens.iter() {
+                    for b in &g.binders {
+                        scope.declare_opaque(b);
+                    }
+                }
+                let result = self.rewrite_expr(body, scope);
+                scope.pop();
+                result
+            }
             Expr::Try {
                 body,
                 catch_binder,
@@ -1354,6 +1371,19 @@ pub(crate) fn free_names(e: &Expr, bound: &mut Vec<BTreeSet<String>>, out: &mut 
         }
         Expr::Field { base, .. } => free_names(base, bound, out),
         Expr::Throw { value, .. } => free_names(value, bound, out),
+        Expr::Comprehension { body, gens, .. } => {
+            let mut names: BTreeSet<String> = BTreeSet::new();
+            for g in gens {
+                free_names(&g.init, bound, out);
+                if let Some(h) = &g.hi {
+                    free_names(h, bound, out);
+                }
+                names.extend(g.binders.iter().cloned());
+            }
+            bound.push(names);
+            free_names(body, bound, out);
+            bound.pop();
+        }
         Expr::Try {
             body,
             catch_binder,
