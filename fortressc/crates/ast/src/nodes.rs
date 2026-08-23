@@ -338,11 +338,25 @@ pub struct MethodDecl {
     pub params: Vec<Param>,
     pub return_type: Option<TypeRef>,
     pub body: Option<Expr>,
-    /// Declared `getter` or `setter`. An accessor is reached by `o.size`, not
-    /// by `o.size()`, so it is not a dotted method call and is left out of the
-    /// dispatch sets -- keeping M3h's position that it parses and is not read.
-    pub accessor: bool,
+    /// Declared `getter` or `setter`, and WHICH. An accessor is reached by
+    /// `o.size`, not by `o.size()`, so it is never a dotted method CALL.
+    ///
+    /// THE KIND IS RECORDED RATHER THAN INFERRED FROM ARITY. A getter is
+    /// nullary and a setter takes one parameter, so arity separates the two
+    /// in practice -- and an ordinary dotted method `n(x: T)` has that arity
+    /// too, and must NOT capture `o.n := e`. Only the written modifier says
+    /// which member an assignment is allowed to reach.
+    pub accessor: Option<Accessor>,
     pub span: Span,
+}
+
+/// Which accessor modifier a member was written with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Accessor {
+    /// `getter f(): T`. Read as `o.f`, never called as `o.f()`.
+    Getter,
+    /// `setter f(x: T): ()`. Reached by `o.f := e`, never called as `o.f(e)`.
+    Setter,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

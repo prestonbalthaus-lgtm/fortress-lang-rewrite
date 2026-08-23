@@ -15,7 +15,7 @@ mod error;
 pub use error::ParseError;
 
 use fortress_ast::{
-    Assign, BinOp, Binding, BlockItem, CaseArm, Component, Decl, DimDecl, DimExpr, Expr,
+    Accessor, Assign, BinOp, Binding, BlockItem, CaseArm, Component, Decl, DimDecl, DimExpr, Expr,
     ExtentForm, ExtentRange, FieldDecl, Fixity, FnDecl, ImportDecl, ImportItems, ImportedName,
     Member, MethodDecl, Modifiers, ObjectDecl, Param, ShapeSpelling, Span, StaticExpr, StaticKind,
     StaticOp, StaticParam, TraitDecl, TypeCaseArm, TypeRef, UnOp, UnitDecl, SELF_TYPE_PLACEHOLDER,
@@ -1523,8 +1523,14 @@ impl<'t, 'a> Parser<'t, 'a> {
         // `getter f(): T = e` and `setter f(x: T) = e`. The modifier changes
         // how the member is *invoked* -- `x.f` rather than `x.f()` -- so it is
         // recorded and M3i leaves accessors out of the dotted method sets.
-        let accessor = self.at(&Kind::KwGetter) || self.at(&Kind::KwSetter);
-        if accessor {
+        let accessor = if self.at(&Kind::KwGetter) {
+            Some(Accessor::Getter)
+        } else if self.at(&Kind::KwSetter) {
+            Some(Accessor::Setter)
+        } else {
+            None
+        };
+        if accessor.is_some() {
             self.pos += 1;
         }
         let mutable = if self.at(&Kind::KwVar) {
@@ -1539,7 +1545,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         // `coerce(x: T)`. Parsed and RECORDED, never read -- see
         // `Member::Coercion`. Only its shape is consumed here; nothing may
         // depend on it until coercion has semantics.
-        if !accessor && !mutable && self.at(&Kind::Reserved("coerce")) {
+        if accessor.is_none() && !mutable && self.at(&Kind::Reserved("coerce")) {
             let start = self.span_here();
             self.pos += 1;
             // THE PARAMETER TYPES ARE KEPT and everything after them is not.
@@ -1565,7 +1571,7 @@ impl<'t, 'a> Parser<'t, 'a> {
                 span: Span::new(start.start, end.end),
             });
         }
-        if !accessor && !mutable && self.at(&Kind::Reserved("opr")) {
+        if accessor.is_none() && !mutable && self.at(&Kind::Reserved("opr")) {
             return Ok(Member::Method(self.opr_member(modifiers)?));
         }
         let (name, name_span) = self.identifier("a field or method name")?;
@@ -1837,7 +1843,7 @@ impl<'t, 'a> Parser<'t, 'a> {
             params: sig.params,
             return_type: sig.return_type,
             body,
-            accessor: false,
+            accessor: None,
             span: Span::new(start.start, end.end),
         })
     }

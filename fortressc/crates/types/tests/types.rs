@@ -3,7 +3,7 @@
 #![allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
 
 use fortress_types::{
-    check, intern_types, Type, TypeError, TypedComponent, TypedExpr, TypedExprKind,
+    check, intern_types, Type, TypeError, TypedBlockItem, TypedComponent, TypedExpr, TypedExprKind,
 };
 
 fn typed(src: &str) -> TypedComponent {
@@ -1644,5 +1644,50 @@ fn a_singleton_is_still_not_constructible() {
     match body_error("object Marker end\nf(): ZZ32 = do m = Marker() 1 end") {
         TypeError::SingletonNotConstructible { name, .. } => assert_eq!(name, "Marker"),
         other => panic!("expected SingletonNotConstructible, got {other:?}"),
+    }
+}
+
+/// A DECLARED `setter` IS CALLED, NOT STORED THROUGH. The store used to go
+/// straight to the field slot and the body never ran, at exit 0, with the field
+/// holding the value the setter was written to transform.
+#[test]
+fn an_assignment_to_a_setter_lowers_to_a_call() {
+    let shape = |member: &str| {
+        let src = format!(
+            "component t\nobject Box(k: ZZ32)\n  var n: ZZ32 = 0\n  {member}\nend\n\
+             f(): () = do\n  b = Box(1)\n  b.n := 5\nend\nend\n"
+        );
+        let c = typed(&src);
+        let f = c
+            .functions
+            .iter()
+            .find(|f| f.name == "f")
+            .unwrap_or_else(|| panic!("no `f`"));
+        match &f.body.kind {
+            TypedExprKind::Block { items, .. } => match items.last() {
+                Some(TypedBlockItem::Expr(_)) => "call",
+                Some(TypedBlockItem::Assign { .. }) => "store",
+                other => panic!("expected the assignment last, got {other:?}"),
+            },
+            other => panic!("expected a block, got {other:?}"),
+        }
+    };
+    assert_eq!(shape("setter n(x: ZZ32): () = do n := x end"), "call");
+    // AND AN ORDINARY DOTTED METHOD OF THE SAME NAME MUST NOT CAPTURE IT. It
+    // has a setter's arity; only the written modifier says which member an
+    // assignment may reach.
+    assert_eq!(shape("n(x: ZZ32): () = ()"), "store");
+    // A plain field with no member of that name at all.
+    assert_eq!(shape("g(): ZZ32 = 1"), "store");
+}
+
+#[test]
+fn a_compound_assignment_through_a_setter_is_refused_by_name() {
+    match body_error(
+        "object Box(k: ZZ32)\n  var n: ZZ32 = 0\n  setter n(x: ZZ32): () = do n := x end\nend\n\
+         f(): () = do\n  b = Box(1)\n  b.n += 1\nend",
+    ) {
+        TypeError::CompoundAssignThroughSetter { name, .. } => assert_eq!(name, "n"),
+        other => panic!("expected CompoundAssignThroughSetter, got {other:?}"),
     }
 }

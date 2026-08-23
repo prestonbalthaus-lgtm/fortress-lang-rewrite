@@ -441,6 +441,7 @@ selfjuxt|Point(3, 4)\n4 done|`self` is an operand in a juxtaposition run
 traitfn|42|a top-level function beside a TRAIT of its own name
 selftypeparam|42\ntrue|`Self` is a static parameter, and the receiver is still the trait
 ctoroverload|107\n7|a constructor and a function of one name are ONE overload set
+setterfires|SETTER RAN\n105\n9\nBOX 7\nBASE 7|a declared setter FIRES and an ordinary method does not
 CASES
 }
 
@@ -505,6 +506,7 @@ badctordup.fss|`Box` is declared twice on the same argument types (ZZ32)
 badctortie.fss|`Pair` is ambiguous for (Both, Both)
 badsingletoncall.fss|`Marker` is a singleton object; write `Marker`, not `Marker(...)`
 badselfvalue.fss|reserved word `Self` is not in the implemented subset
+badsettercompound.fss|is a setter, so `o.n := e` is a call
 CASES
 
     # `badvaluebinding.fss` LEFT THIS LIST when component-level values landed,
@@ -711,6 +713,13 @@ CASES
 }
 
 MUTATIONS=(
+  # A DECLARED SETTER FIRES. Three axes: never route to it (the store goes
+  # straight to the slot, which is the defect this closes), route to ANY dotted
+  # method of the name (an ordinary `n(x: T)` must not capture `o.n := e`), and
+  # read the written modifier as the wrong KIND.
+  'crates/types/src/lib.rs|if self.setters.contains(name) {|if false {|store into the field instead of calling the setter'
+  'crates/types/src/lib.rs|if self.setters.contains(name) {|if self.methods.contains_key(name) {|let an ordinary dotted method capture an assignment'
+  'crates/parser/src/lib.rs|            Some(Accessor::Setter)|            Some(Accessor::Getter)|read the `setter` modifier as `getter`'
   # `Self` IS A TYPE VARIABLE, NOT A SELF-TYPE. Three axes: the receiver
   # placeholder must be UNWRITABLE or monomorphization substitutes it along
   # with the static parameter that shares its name, and the two positions

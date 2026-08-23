@@ -36,9 +36,9 @@ pub use types::{
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use fortress_ast::{
-    Assign, BinOp, BlockItem, CaseArm, Component, CutMember, Decl, Expr, FieldDecl, FnDecl, Member,
-    MethodDecl, ObjectDecl, ShapeSpelling, Span, StaticExpr, TypeCaseArm, TypeRef, UnOp,
-    SELF_TYPE_PLACEHOLDER,
+    Accessor, Assign, BinOp, BlockItem, CaseArm, Component, CutMember, Decl, Expr, FieldDecl,
+    FnDecl, Member, MethodDecl, ObjectDecl, ShapeSpelling, Span, StaticExpr, TypeCaseArm, TypeRef,
+    UnOp, SELF_TYPE_PLACEHOLDER,
 };
 
 use registry::{close_traits, ObjectInfo, Registry, TraitInfo};
@@ -193,6 +193,11 @@ struct Checker {
     /// Every name declared `getter` or `setter` anywhere in the component, so a
     /// read of one is reported as an accessor rather than as a missing field.
     accessors: HashSet<String>,
+    /// Every name declared `setter`. `o.n := e` CALLS one instead of storing
+    /// into the field, which is the whole of `subscripting.tex`'s assignment
+    /// rule; without it the store went straight to the slot and the body never
+    /// ran, at exit 0.
+    setters: HashSet<String>,
     /// Every functional method that takes static parameters. It is not lifted,
     /// so a call reaches an empty overload set; naming the mechanism is what
     /// keeps the file out of the `unknown name` bucket.
@@ -370,7 +375,7 @@ fn members_of(decl: &Decl) -> &[Member] {
 /// method: 1.0 invokes it `f(x, y)` and never `x.f(y)`. A generic one is not
 /// lifted, so it is not one of these.
 fn is_functional(m: &MethodDecl) -> bool {
-    !m.accessor && m.static_params.is_empty() && m.params.iter().any(|p| p.name == "self")
+    m.accessor.is_none() && m.static_params.is_empty() && m.params.iter().any(|p| p.name == "self")
 }
 
 /// How many declarations share each functional name. Top-level declarations
@@ -643,6 +648,7 @@ impl Checker {
             functions: HashMap::new(),
             methods: HashMap::new(),
             accessors: HashSet::new(),
+            setters: HashSet::new(),
             generic_functional: HashSet::new(),
             cuts: component
                 .cuts
@@ -897,8 +903,21 @@ impl Checker {
             };
             for member in members {
                 let Member::Method(m) = member else { continue };
-                if m.accessor {
-                    self.accessors.insert(m.name.clone());
+                match m.accessor {
+                    Some(Accessor::Getter) => {
+                        self.accessors.insert(m.name.clone());
+                    }
+                    // A SETTER IS AN ACCESSOR TOO, and it is recorded in BOTH
+                    // sets: `accessors` is what makes `o.n()` say "read as
+                    // `.n`" instead of calling it, and `setters` is what
+                    // `o.n := e` looks up. The kind is written, never inferred
+                    // from arity -- an ordinary dotted method `n(x: T)` has a
+                    // setter's arity and must not capture an assignment.
+                    Some(Accessor::Setter) => {
+                        self.accessors.insert(m.name.clone());
+                        self.setters.insert(m.name.clone());
+                    }
+                    None => {}
                 }
                 // A GETTER IS A NULLARY DOTTED METHOD. `getter g(): T` declares
                 // no `self` parameter and takes no arguments, so its signature
@@ -1019,7 +1038,7 @@ impl Checker {
             };
             for (index, member) in members_of(decl).iter().enumerate() {
                 let Member::Method(m) = member else { continue };
-                if m.accessor || !m.params.iter().any(|p| p.name == "self") {
+                if m.accessor.is_some() || !m.params.iter().any(|p| p.name == "self") {
                     continue;
                 }
                 if !m.static_params.is_empty() {
@@ -3882,6 +3901,35 @@ impl Checker {
                 })
             }
             Expr::Field { base, name, span } => {
+                // A DECLARED `setter` IS CALLED, NOT STORED THROUGH. Without
+                // this the store went straight to the field slot and the body
+                // never ran -- at exit 0, with the field holding the value the
+                // setter was written to transform. It sits ABOVE the field
+                // lookup on purpose: a setter needs no backing field at all,
+                // which is the encapsulation case, and one over an IMMUTABLE
+                // field is legal because the setter decides what to do with
+                // the value.
+                //
+                // THE PARALLEL RULE STILL BINDS. A field target in a parallel
+                // body is refused above, before this match, so routing here
+                // cannot smuggle a shared receiver past it.
+                if self.setters.contains(name) {
+                    if a.op.is_some() {
+                        return Err(TypeError::CompoundAssignThroughSetter {
+                            span: *span,
+                            name: name.clone(),
+                        });
+                    }
+                    let call = self.method_call(
+                        base,
+                        name,
+                        std::slice::from_ref(&a.value),
+                        a.span,
+                        *span,
+                        None,
+                    )?;
+                    return Ok(TypedBlockItem::Expr(call));
+                }
                 let base = self.expr(base, None)?;
                 let Type::Object(object) = base.ty else {
                     return Err(TypeError::UnknownField {

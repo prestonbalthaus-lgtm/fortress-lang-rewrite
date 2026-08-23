@@ -1,0 +1,33 @@
+export Executable
+
+trait Holder
+    setter slot(x: ZZ32): () = do println("BASE " x.asString) end
+end
+
+object Box(k: ZZ32) extends Holder
+    var store: ZZ32 = 0
+    getter n(): ZZ32 = store
+    setter n(x: ZZ32): () = do
+        println("SETTER RAN")
+        store := x + 100
+    end
+    setter slot(y: ZZ32): () = do println("BOX " y.asString) end
+end
+
+object Plain(k: ZZ32) extends Holder
+    var m: ZZ32 = 0
+    m(x: ZZ32): () = println("METHOD RAN")
+end
+
+touch(h: Holder): () = do h.slot := 7 end
+
+run(): () = do
+    b = Box(1)
+    b.n := 5
+    println(b.n)
+    p = Plain(1)
+    p.m := 9
+    println(p.m)
+    touch(b)
+    touch(p)
+end

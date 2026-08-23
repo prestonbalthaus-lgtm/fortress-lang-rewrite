@@ -451,6 +451,16 @@ pub enum TypeError {
         span: Span,
         name: String,
     },
+    /// `o.n += e` where `n` is a declared `setter`. The plain form is a CALL,
+    /// so the compound form is a read through the getter, the operator, and a
+    /// call -- three steps, and the read half only became possible when getters
+    /// became readable. Refused by name rather than half-built, because storing
+    /// straight into the slot is the silent wrong answer this whole mechanism
+    /// exists to stop.
+    CompoundAssignThroughSetter {
+        span: Span,
+        name: String,
+    },
     /// A functional method that takes static parameters. 1.0 lifts a
     /// functional method into the top-level overload set of its name; a
     /// generic one needs the receiver's type to decide what to instantiate,
@@ -869,6 +879,7 @@ impl TypeError {
             | Self::NotATrait { span, .. }
             | Self::UnknownField { span, .. }
             | Self::DottedMethodUnsupported { span, .. }
+            | Self::CompoundAssignThroughSetter { span, .. }
             | Self::FieldIsImmutable { span, .. }
             | Self::FieldNeedsInitializer { span, .. }
             | Self::SingletonNotConstructible { span, .. }
@@ -1255,6 +1266,12 @@ impl core::fmt::Display for TypeError {
                 "`{name}`: a component-level value declaration is parsed but \
                  not implemented; its initializer would have to run at \
                  component initialization, and it is not a nullary function"
+            ),
+            Self::CompoundAssignThroughSetter { name, .. } => write!(
+                f,
+                "`{name}` is a setter, so `o.{name} := e` is a call; the \
+                 compound form would have to read through the getter first and \
+                 that is not implemented -- write the read out"
             ),
             Self::GenericFunctionalMethodUnsupported { name, .. } => write!(
                 f,

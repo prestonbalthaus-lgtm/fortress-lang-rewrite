@@ -1,0 +1,13 @@
+export Executable
+
+object Box(k: ZZ32)
+    var store: ZZ32 = 0
+    getter n(): ZZ32 = store
+    setter n(x: ZZ32): () = do store := x end
+end
+
+run(): () = do
+    b = Box(1)
+    b.n += 1
+    println(b.n)
+end

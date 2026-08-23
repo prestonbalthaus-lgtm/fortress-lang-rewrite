@@ -158,7 +158,7 @@ impl<'a> Expander<'a> {
         for decl in &component.decls {
             for member in members_of(decl) {
                 let Member::Method(m) = member else { continue };
-                if m.accessor || m.static_params.is_empty() {
+                if m.accessor.is_some() || m.static_params.is_empty() {
                     continue;
                 }
                 if m.params.iter().any(|p| p.name == "self") {
@@ -823,7 +823,7 @@ impl<'a> Expander<'a> {
                     // stamp of it is appended later, once some call site has
                     // said at what arguments.
                     if let Some(owner) = self.owner.clone() {
-                        if !m.accessor && !m.params.iter().any(|p| p.name == "self") {
+                        if m.accessor.is_none() && !m.params.iter().any(|p| p.name == "self") {
                             self.templates.insert(
                                 (owner, index),
                                 MethodTemplate {

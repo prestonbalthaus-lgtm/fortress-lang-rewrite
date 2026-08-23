@@ -325,7 +325,7 @@ impl Pass {
                     // of the dispatch table's winners and makes every concrete
                     // implementor the only candidate for its own tag.
                     body: None,
-                    accessor: false,
+                    accessor: None,
                     span: Span::new(0, 0),
                 })],
                 span: Span::new(0, 0),
@@ -696,7 +696,7 @@ impl Pass {
                     .unwrap_or_default(),
                 return_type: Some(to),
                 body: Some(lowered),
-                accessor: false,
+                accessor: None,
                 span,
             })],
             span,
@@ -821,7 +821,7 @@ impl Pass {
                 params: forwarded,
                 return_type: Some(to),
                 body: Some(body),
-                accessor: false,
+                accessor: None,
                 span,
             })],
             span,
