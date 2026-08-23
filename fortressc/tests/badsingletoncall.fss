@@ -1,0 +1,8 @@
+export Executable
+
+object Marker end
+
+run(): () = do
+    m = Marker()
+    println(1)
+end

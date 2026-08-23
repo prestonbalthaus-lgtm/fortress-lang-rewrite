@@ -1,0 +1,14 @@
+export Executable
+
+trait A end
+trait B end
+object Both extends { A, B } end
+
+object Pair(p: A, q: B) end
+
+Pair(p: B, q: A): ZZ32 = 1
+
+run(): () = do
+    x = Pair(Both, Both)
+    println(1)
+end

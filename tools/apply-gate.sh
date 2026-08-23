@@ -338,6 +338,14 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # unwritable `$Self` first, or monomorphization substitutes it along with the
 # static parameter that shares its name. +6, nothing lost.
 #
+# A CONSTRUCTOR IS A SIGNATURE, 2026-08-23: 395 objects and 120 apis. One file,
+# `ProjectFortress/tests/OverloadConstructor1.fss`, which is 1.0's own positive
+# test for matrix cell 5-3 -- and it now BUILDS AND RUNS, printing what its
+# source says. The number is beside the point: the milestone is that every one
+# of the 394 .fss that already compiled emits BYTE-IDENTICAL IR, measured file
+# by file with two binaries, because a set of one lowers to the same
+# `call Name$new` as `Target::ObjectNew` did.
+#
 OBJECT_FLOOR=321
 API_FLOOR=120
 
@@ -425,6 +433,7 @@ anyreturn|7|a trait-typed result still travels through the dispatch table
 selfjuxt|Point(3, 4)\n4 done|`self` is an operand in a juxtaposition run
 traitfn|42|a top-level function beside a TRAIT of its own name
 selftypeparam|42\ntrue|`Self` is a static parameter, and the receiver is still the trait
+ctoroverload|107\n7|a constructor and a function of one name are ONE overload set
 CASES
 }
 
@@ -485,7 +494,9 @@ baddeclonlyoverload.fss|`g` is ambiguous for (Both)
 badanyreturn.fss|a result of a wider type
 badvoidarg.fss|`()` has no value, so it cannot be stored in a parameter of a wider type
 badsingletonfn.fss|`Marker` is defined twice
-badctorcall.fss|is both an object constructor and a top-level function
+badctordup.fss|`Box` is declared twice on the same argument types (ZZ32)
+badctortie.fss|`Pair` is ambiguous for (Both, Both)
+badsingletoncall.fss|`Marker` is a singleton object; write `Marker`, not `Marker(...)`
 badselfvalue.fss|reserved word `Self` is not in the implemented subset
 CASES
 
@@ -709,7 +720,13 @@ MUTATIONS=(
   # too -- and the second drops the singleton cell it was right about.
   'crates/types/src/lib.rs|if self.registry.is_singleton(&f.name) {|if self.registry.is_object(&f.name) {|refuse a function beside the object CONSTRUCTOR of its name'
   'crates/types/src/lib.rs|if self.registry.is_singleton(&f.name) {|if false {|accept a function beside a SINGLETON object of its name'
-  'crates/types/src/lib.rs|_ if self.registry.is_object(name) && self.functions.contains_key(name) => {|_ if self.registry.is_object(name) && false => {|let the constructor silently take a call the function also declares'
+  # A CONSTRUCTOR IS A SIGNATURE, three axes. Registering none puts the
+  # constructor back above the overload set; registering them in an api makes
+  # the shipped `File.fsi` a duplicate; registering a SINGLETON hands codegen
+  # a `Marker$new` nothing defines.
+  'crates/types/src/lib.rs|        self.declare_constructors(component)?;|        let _unregistered = component;|register no constructor in the overload set'
+  'crates/types/src/lib.rs|        let component_side = !component.is_api;|        let component_side = true;|register a constructor in an api too'
+  'crates/types/src/lib.rs|            if info.singleton {|            if false {|register a constructor for a SINGLETON object'
   # `self` AS A JUXTAPOSITION OPERAND. The compile metric cannot hold this --
   # three files over the object floor's deliberate slack -- so the `selfjuxt`
   # case is the assertion, and this row is what proves the case can refuse.

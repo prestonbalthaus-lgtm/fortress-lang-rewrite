@@ -451,18 +451,6 @@ pub enum TypeError {
         span: Span,
         name: String,
     },
-    /// A top-level function sharing its name with an OBJECT CONSTRUCTOR, at a
-    /// CALL. The declarations are legal together -- `Compiled9.c.fss`'s own
-    /// collision matrix puts a `Y` at row 5, column 3, and
-    /// `ProjectFortress/tests/OverloadConstructor1.fss` is the positive test --
-    /// but they are not one overload set here. `construct` is reached by name
-    /// before `self.functions` is consulted, so the constructor would win every
-    /// call and the function would be silently unreachable. A constructor has
-    /// to enter the overload set as a `Signature` first.
-    ConstructorOverloadUnsupported {
-        span: Span,
-        name: String,
-    },
     /// A functional method that takes static parameters. 1.0 lifts a
     /// functional method into the top-level overload set of its name; a
     /// generic one needs the receiver's type to decide what to instantiate,
@@ -881,7 +869,6 @@ impl TypeError {
             | Self::NotATrait { span, .. }
             | Self::UnknownField { span, .. }
             | Self::DottedMethodUnsupported { span, .. }
-            | Self::ConstructorOverloadUnsupported { span, .. }
             | Self::FieldIsImmutable { span, .. }
             | Self::FieldNeedsInitializer { span, .. }
             | Self::SingletonNotConstructible { span, .. }
@@ -1268,13 +1255,6 @@ impl core::fmt::Display for TypeError {
                 "`{name}`: a component-level value declaration is parsed but \
                  not implemented; its initializer would have to run at \
                  component initialization, and it is not a nullary function"
-            ),
-            Self::ConstructorOverloadUnsupported { name, .. } => write!(
-                f,
-                "`{name}` is both an object constructor and a top-level \
-                 function; the two declarations are legal together, but a call \
-                 cannot yet choose between them and the constructor would take \
-                 every one"
             ),
             Self::GenericFunctionalMethodUnsupported { name, .. } => write!(
                 f,

@@ -1,0 +1,7 @@
+export Executable
+
+object Box(n: ZZ32) end
+
+Box(n: ZZ32): ZZ32 = n
+
+run(): () = println(1)

@@ -1616,13 +1616,33 @@ fn a_function_may_not_share_its_name_with_a_singleton_object() {
     }
 }
 
-/// AND 5-3 IS LEGAL TO DECLARE AND NOT YET LEGAL TO CALL. `construct` is
-/// reached by name before the overload set is consulted, so without this the
-/// constructor takes the call and the function is silently unreachable.
+/// AND 5-3 IS ONE OVERLOAD SET, so the call picks between them by its arguments
+/// instead of the constructor taking every one. `Box(2)` is the constructor and
+/// `Box()` is the function; without the registration `construct` is reached by
+/// name above the set and the function is silently unreachable.
 #[test]
-fn calling_a_name_that_is_both_a_constructor_and_a_function_is_refused() {
-    match body_error("object Box(n: ZZ32) end\nBox(): ZZ32 = 1\nf(): ZZ32 = Box(2)") {
-        TypeError::ConstructorOverloadUnsupported { name, .. } => assert_eq!(name, "Box"),
-        other => panic!("expected ConstructorOverloadUnsupported, got {other:?}"),
+fn a_constructor_and_a_function_of_one_name_are_one_overload_set() {
+    let target = |call: &str| {
+        let src =
+            format!("component t\nobject Box(n: ZZ32) end\nBox(): ZZ32 = 1\nf() = {call}\nend\n");
+        let c = typed(&src);
+        let f = c
+            .functions
+            .iter()
+            .find(|f| f.name == "f")
+            .unwrap_or_else(|| panic!("no `f`"));
+        target_of(&f.body)
+    };
+    assert_eq!(target("Box(2)").as_deref(), Some("Box$new"));
+    assert_eq!(target("Box()").as_deref(), Some("Box"));
+}
+
+/// A SINGLETON DECLARES A VALUE, NOT A CONSTRUCTOR, so it registers nothing and
+/// an object name with no signature still reaches `construct`.
+#[test]
+fn a_singleton_is_still_not_constructible() {
+    match body_error("object Marker end\nf(): ZZ32 = do m = Marker() 1 end") {
+        TypeError::SingletonNotConstructible { name, .. } => assert_eq!(name, "Marker"),
+        other => panic!("expected SingletonNotConstructible, got {other:?}"),
     }
 }

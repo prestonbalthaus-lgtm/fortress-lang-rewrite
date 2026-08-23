@@ -1,0 +1,15 @@
+export Executable
+
+trait Shape end
+object Dot extends Shape end
+
+object Wrap(x: Any) end
+
+Wrap(x: ZZ32): ZZ32 = x + 100
+
+tag(w: Wrap): ZZ32 = 7
+
+run(): () = do
+    println(Wrap(7))
+    println(tag(Wrap(Dot)))
+end

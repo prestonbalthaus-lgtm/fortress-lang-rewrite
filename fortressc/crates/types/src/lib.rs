@@ -1244,6 +1244,82 @@ impl Checker {
                 span,
             });
         }
+        self.declare_constructors(component)?;
+        Ok(())
+    }
+
+    /// A CONSTRUCTOR IS A DECLARATION IN THE VALUE NAMESPACE, so it belongs in
+    /// the overload set beside the functions rather than in a lookup of its own.
+    ///
+    /// `Compiled9.c.fss`'s collision matrix puts a `Y` at row 5, column 3 and
+    /// `ProjectFortress/tests/OverloadConstructor1.fss` is 1.0's positive test:
+    /// `object Thing(x:ZZ32)` beside `Thing():Thing = Thing(0)` is ONE set of
+    /// two declarations. Reaching `construct` by name above the set made the
+    /// constructor take every call and left the function unreachable, which is a
+    /// wrong answer rather than a missing feature.
+    ///
+    /// Nothing in codegen moves. A constructor is already an ordinary direct
+    /// call to `Name$new` by the time a target is lowered, so a set of one emits
+    /// the byte-identical `call` it did as `Target::ObjectNew`.
+    ///
+    /// TWO EXCLUSIONS, both load bearing:
+    ///
+    /// * a SINGLETON declares a value and not a constructor, so it gets no
+    ///   signature and an object name with no signature still reaches
+    ///   `construct` -- which is what keeps `SingletonNotConstructible` saying
+    ///   what it says.
+    /// * an api registers NONE. An api has no calls, so nothing there needs the
+    ///   set, and `Library/File.fsi:16-18` declares the factory and the object
+    ///   at the SAME parameter type -- the api hides `FlatString`, which the
+    ///   component's own pair (`File.fss:20`) does not. Registering there would
+    ///   make the shipped library a `DuplicateOverload`.
+    ///
+    /// NOT INTO `self.slots`. That list is indexed by declaration order over
+    /// `Decl::Function` and is what `resolve_inferred_returns` writes through; a
+    /// constructor has no return to infer. Appending after the loop leaves every
+    /// slot index it recorded pointing where it did.
+    fn declare_constructors(&mut self, component: &Component) -> Checked<()> {
+        let component_side = !component.is_api;
+        if !component_side {
+            return Ok(());
+        }
+        let mut pending: Vec<(String, &'static str, Vec<Type>, Span)> = Vec::new();
+        for decl in &component.decls {
+            let Decl::Object(o) = decl else { continue };
+            let name = intern(&o.name);
+            let Some(info) = self.registry.objects.get(name) else {
+                continue;
+            };
+            if info.singleton {
+                continue;
+            }
+            let params: Vec<Type> = info
+                .fields
+                .iter()
+                .take(info.param_count)
+                .map(|f| f.ty)
+                .collect();
+            pending.push((o.name.clone(), name, params, o.span));
+        }
+        for (written, name, params, span) in pending {
+            let set = self.functions.entry(written.clone()).or_default();
+            if let Some(other) = set.iter().find(|other| other.params == params) {
+                return Err(TypeError::DuplicateOverload {
+                    span,
+                    first: other.span,
+                    arguments: render(&params),
+                    name: written,
+                });
+            }
+            set.push(Signature {
+                params,
+                returns: Type::Object(name),
+                concrete: true,
+                symbol: constructor_symbol(name),
+                pruned: false,
+                span,
+            });
+        }
         Ok(())
     }
 
@@ -4649,21 +4725,13 @@ impl Checker {
             "assert" => self.assert(args, span, expected),
             "array" => self.array_new(args, span, expected),
             "length" => self.array_length(args, span, expected),
-            // THE PAIR IS LEGAL TO DECLARE AND NOT YET LEGAL TO CALL. 1.0
-            // makes a constructor and a top-level function of one name a single
-            // overload set; here `construct` is reached BY NAME above, before
-            // `self.functions` is consulted at all, so the constructor would
-            // take every call and the function would be silently unreachable.
-            // That is a wrong answer, not a missing feature, so it is refused
-            // by name until a constructor can enter the overload set as a
-            // `Signature` of its own.
-            _ if self.registry.is_object(name) && self.functions.contains_key(name) => {
-                Err(TypeError::ConstructorOverloadUnsupported {
-                    span: *callee_span,
-                    name: name.clone(),
-                })
-            }
-            _ if self.registry.is_object(name) => {
+            // A CONSTRUCTOR IS IN THE OVERLOAD SET NOW (`declare_constructors`),
+            // so an object name falls through to `user_call` and ties with a
+            // top-level function of the same name instead of shadowing it.
+            // `construct` is reached only where no signature was registered: a
+            // SINGLETON, which has no constructor and says so, and an api, which
+            // has no calls.
+            _ if self.registry.is_object(name) && !self.functions.contains_key(name) => {
                 self.refuse_shared_array_argument(args)?;
                 self.refuse_keyword_argument(args)?;
                 self.construct(name, args, span, *callee_span, expected)
