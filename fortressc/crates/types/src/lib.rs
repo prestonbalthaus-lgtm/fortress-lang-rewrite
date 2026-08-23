@@ -3213,6 +3213,13 @@ impl Checker {
                 span: *span,
                 form: "a `fn` in this position",
             }),
+            // Unreachable from a lowered component: `closure.rs` hoists an
+            // anonymous object into a minted top-level declaration and leaves a
+            // construction here. A body the hoist could not walk lands here.
+            Expr::ObjectExpr { span, .. } => Err(TypeError::LambdaUnsupported {
+                span: *span,
+                form: "an `object` expression in this position",
+            }),
             Expr::Exit { name, value, span } => {
                 self.exit_expr(name.as_deref(), value.as_deref(), *span, expected)
             }
@@ -3788,6 +3795,9 @@ impl Checker {
             }
             Expr::Prefix { operand, .. } => self.reads_shared(operand, floor),
             Expr::Throw { value, .. } => self.reads_shared(value, floor),
+            // Hoisted by `closure.rs` before this pass, so it never carries a
+            // read into a loop body; conservative anyway.
+            Expr::ObjectExpr { .. } => false,
             Expr::Comprehension { body, gens, .. } => {
                 self.reads_shared(body, floor)
                     || gens.iter().any(|g| {

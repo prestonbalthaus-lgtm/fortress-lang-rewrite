@@ -184,6 +184,17 @@ landed, linked into every binary** (`docs/superpowers/specs/2026-08-18-m3a-memor
 *Exit:* a Fortress program calls `MPI_Init` and `MPI_Comm_size` and returns the
 right rank count on two nodes.
 
+**ANONYMOUS OBJECTS, LANDED 2026-08-23.** `object ... end` in expression
+position, hoisted the way a `fn` already was: a minted top-level `ObjectDecl`
+whose value parameters are the locals its members read, and a construction of it
+left behind, so no member body is rewritten and codegen gained nothing. 423
+objects and 126 apis, +7 and nothing lost, and the oracle pass floor moves 345
+-> 348. A CAPTURE COPIES, so closing over a local declared `:=` is now REFUSED
+BY NAME at both hoists -- reading one printed the value as of construction and
+exited 0, and 1.0 captures the cell. Measured at zero corpus files.
+`objectCC_mutVar1.fss` is 1.0's own test for the cell semantics and is still
+blocked earlier, on `object O(var v: ZZ32)`.
+
 **EXCEPTIONS, PARKED 2026-08-23.** `throw` is built -- an uncaught throw halts,
 naming the exception, with no unwinding and no cost on the path that does not
 throw -- and `try`/`catch`/`forbid`/`finally` PARSE and are refused by name. The

@@ -894,6 +894,19 @@ pub enum Expr {
         body: Box<Expr>,
         span: Span,
     },
+    /// `object extends T ... end` in EXPRESSION position -- an anonymous
+    /// object. `DelimitedExpr.rats:50` is the production and it has no name and
+    /// no value parameters, because there is nothing to call the constructor
+    /// with: the object IS the value.
+    ///
+    /// `closure.rs` HOISTS IT, the same way it hoists a lambda: a minted
+    /// `ObjectDecl` whose value parameters are the locals the members capture,
+    /// and the expression becomes a construction of it.
+    ObjectExpr {
+        extends: Vec<TypeRef>,
+        members: Vec<Member>,
+        span: Span,
+    },
     /// `<| e | x <- g, p |>` and the same shape in every other bracket pair.
     /// `DelimitedExpr.rats:290-314` gives list, set and map ONE production, so
     /// this node carries the bracket pair as the operator NAME the declaration
@@ -1194,6 +1207,7 @@ impl Expr {
             | Self::Tuple { span, .. }
             | Self::IntLit { span, .. }
             | Self::FloatLit { span, .. }
+            | Self::ObjectExpr { span, .. }
             | Self::Comprehension { span, .. }
             | Self::Try { span, .. }
             | Self::Throw { span, .. }

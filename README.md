@@ -267,13 +267,13 @@ commentary:
 |---|---|---|---|
 | corpus files that LEX | 1845 of 1956 | 1845 | `crates/lexer/tests/corpus.rs` |
 | corpus files that PARSE | 839 | 839 | `crates/parser/tests/corpus.rs` |
-| `.fss` that compile and emit an object | 416 | 321 | `tools/apply-gate.sh` |
+| `.fss` that compile and emit an object | 423 | 321 | `tools/apply-gate.sh` |
 | `.fsi` that check | 126 | 126 | `tools/apply-gate.sh` |
-| oracle cases that agree with 1.0 | 345 | 345 | `tools/oracle-gate.sh` |
+| oracle cases that agree with 1.0 | 348 | 348 | `tools/oracle-gate.sh` |
 
 The headline metric is object emission plus api checking, split on purpose: an
 api emits no object, so one number stopped meaning one thing. Every compiling
-corpus file is also LINKED AND RUN under a signal sweep -- 421 binaries.
+corpus file is also LINKED AND RUN under a signal sweep -- 431 binaries.
 
 **THE MODULE SYSTEM REACHES COMPONENTS.** `source-code.tex:305` says every
 component implicitly imports the Fortress core APIs, and as of 2026-08-23 it

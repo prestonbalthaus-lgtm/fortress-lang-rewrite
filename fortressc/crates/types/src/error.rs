@@ -683,6 +683,14 @@ pub enum TypeError {
         span: Span,
         name: String,
     },
+    /// A `fn` or an anonymous `object` closing over a MUTABLE local. The hoist
+    /// makes a capture a constructor argument, which copies it, so a later
+    /// assignment to the local would not be seen and an assignment from inside
+    /// would not be written back. 1.0 captures the cell.
+    CaptureIsMutable {
+        span: Span,
+        name: String,
+    },
     /// A function name in a slot that wants an arrow, where the overload set
     /// has no declaration with that exact signature, or more than one.
     FunctionValueUnresolved {
@@ -930,6 +938,7 @@ impl TypeError {
             | Self::ParallelSharedArrayArgument { span, .. }
             | Self::LambdaUnsupported { span, .. }
             | Self::LambdaCaptureUntyped { span, .. }
+            | Self::CaptureIsMutable { span, .. }
             | Self::FunctionValueUnresolved { span, .. }
             | Self::AlsoBlockNotVoid { span, .. }
             | Self::CaseHasNoArms { span }
@@ -1448,6 +1457,13 @@ impl core::fmt::Display for TypeError {
                 "`{name}` has no written type, so a `fn` closing over it has \
                  nothing to declare its constructor parameter with. Annotate \
                  it -- `{name}: T = ...`"
+            ),
+            Self::CaptureIsMutable { name, .. } => write!(
+                f,
+                "`{name}` is mutable, and a closure captures it BY VALUE here: \
+                 the hoist makes every capture a constructor argument. A later \
+                 `{name} := ...` would not be seen inside. Pass it in, or bind \
+                 an immutable copy first"
             ),
             Self::FunctionValueUnresolved {
                 name, arrow, found, ..

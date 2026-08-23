@@ -365,6 +365,12 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # logical operators, 206 corpus sites, and the three files gained are
 # `Compiled9.aj`, `InliningTest3a` and `InliningTest9`. The object floor keeps
 # its slack; the api count did not move.
+# ANONYMOUS OBJECTS, 2026-08-23: 423 objects and 126 apis. `object ... end` in
+# EXPRESSION position, hoisted the way a lambda already was -- a minted
+# top-level declaration whose value parameters are the locals its members read,
+# and a construction of it left behind -- so no member body is rewritten and
+# codegen gains nothing. +7, nothing lost. The api count did not move: an api
+# has no bodies to write one in.
 OBJECT_FLOOR=321
 API_FLOOR=126
 
@@ -458,6 +464,7 @@ mergedaccessor|42|a merged getter name does not capture this file's own method
 seqvoperator|true\nfalse|`===` reaches the overload set and is not a spelling of `=`
 bigoperator|7\n42\n10|`BIG` folds into the operator NAME at the use site too
 conditionalops|false\ntrue\ntrue\nfalse|`AND:` and `OR:` are the conditional forms and SHORT CIRCUIT
+objectexpr|8\n100\n42|an anonymous `object` captures a local and gets a tag of its own
 CASES
 }
 
@@ -531,6 +538,7 @@ badtry.fss|`try` parses and its lowering is not implemented
 badseqv.fss|unknown name `===`
 badbigand.fss|is not one of the reduction operators this lowering reaches
 badcomprehension.fss|comprehension parses and its lowering is not implemented
+badmutablecapture.fss|is mutable, and a closure captures it BY VALUE here
 CASES
 
     # `badvaluebinding.fss` LEFT THIS LIST when component-level values landed,
@@ -875,6 +883,16 @@ MUTATIONS=(
   'crates/parser/src/lib.rs|Some((seen, earlier)) if seen != this => {|Some((seen, earlier)) if false => {|drop the chain sense check'
   'crates/parser/src/lib.rs|&& self.glued_left(self.pos + 1)|&& false|drop the local function declaration guard'
   'crates/types/src/lib.rs|Decl::Value(v) => Some(v),|Decl::Value(_) => None,|see no component-level values at all, so no initializer runs'
+  # AN ANONYMOUS OBJECT, three axes: the parser must reach the expression at
+  # all, the hoist must carry the locals its members read, and each one must
+  # get a NAME of its own or two of them are one declaration and one tag.
+  'crates/parser/src/lib.rs|            Kind::KwObject => {|            Kind::Eof => {|refuse `object` in expression position again'
+  'crates/types/src/closure.rs|free_names(&probe, &mut Vec::new(), &mut free);|let _uncaptured = &probe;|hoist an anonymous object without the locals its members read'
+  'crates/types/src/closure.rs|let object_name = format!("obj${index}");|let object_name = "obj$".to_owned();|mint one name for every anonymous object in the component'
+  # A CAPTURE COPIES, so closing over a MUTABLE local is refused by name at
+  # BOTH hoists. Reading one compiled and printed the value at construction
+  # time; 1.0 captures the cell. Zero corpus files, measured.
+  'crates/types/src/closure.rs|                (t, true) => scope.declare_mutable(name, t),|                (_t, true) => scope.declare_opaque(name),|forget that a local was declared mutable, so a closure may copy it'
 )
 
 # FORTRESSC AND --mutate DO NOT MIX, and the failure is silent. Every mutation

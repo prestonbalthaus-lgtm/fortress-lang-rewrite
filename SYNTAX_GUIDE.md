@@ -1787,7 +1787,7 @@ f2(s:S, a:A) = a.internalF(s)
 
 ### Anonymous objects
 
-`object ... end` in expression position builds one unnamed object, capturing what is in scope. It never takes parentheses, because there is no anonymous constructor. 77 uses in 39 files, and the rewrite does not parse it, "expected an expression, found KwObject" [legacy].
+`object ... end` in expression position builds one unnamed object, capturing what is in scope. It never takes parentheses, because there is no anonymous constructor. 77 uses in 39 files, and the rewrite does not parse it, "expected an expression, found KwObject" [legacy].  ⚠ 2026-08-23: IT PARSES AND IT RUNS. An anonymous object is HOISTED the way a `fn` already was -- a minted top-level declaration named `obj$0`, `obj$1` and so on, whose VALUE PARAMETERS are the locals its members read, with a construction of it left behind -- so a member body reads a captured name by its own spelling and nothing in codegen changed. `extends` works, so does no clause at all, fields with initializers work, a functional method works, and each anonymous object gets a type tag of its own. TWO REFUSALS BY NAME: a captured local with no written type (a constructor parameter needs one), and a captured local declared `:=`. THE MUTABLE ONE IS THE INTERESTING ONE -- the hoist COPIES, so a later `k := 9` would not be seen inside and 1.0 captures the CELL; reading one printed the value as of construction and exited 0, which is a silent wrong answer. Refused at both hoists, measured at zero corpus files. `objectCC_mutVar1.fss` is 1.0's own test for the cell semantics and it is blocked earlier, on `object O(var v: ZZ32)`.
 
 ```fortress
     r = object end             (* the minimal anonymous object *)
@@ -1817,7 +1817,7 @@ Most of them carry an `extends` clause: 69 of the 77 write `object extends ...`,
 
 `extends` is the only clause an anonymous object ever takes.
 
-Inside one, `self` rebinds to the new object, so an enclosing `self` has to be captured first.
+Inside one, `self` rebinds to the new object, so an enclosing `self` has to be captured first.  ⚠ 2026-08-23: the rewrite agrees -- the hoist never captures the name `self`, so an inner `self` is the minted object and an outer one has to be bound to another name first, exactly as below.
 
 ```fortress
 object O

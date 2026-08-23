@@ -1,0 +1,24 @@
+component objectexpr
+export Executable
+
+trait Box
+  peek(): ZZ32
+end
+
+use(b: Box): ZZ32 = b.peek()
+
+run(): () = do
+  k: ZZ32 = 7
+  one: Box = object extends Box
+    peek(): ZZ32 = k + 1
+  end
+  two: Box = object extends Box
+    peek(): ZZ32 = 100
+  end
+  println(use(one))
+  println(use(two))
+  println(use(object extends Box
+    peek(): ZZ32 = k * 6
+  end))
+end
+end

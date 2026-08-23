@@ -3709,6 +3709,22 @@ impl<'t, 'a> Parser<'t, 'a> {
             Kind::Reserved("fn") => self.lambda_expr(),
             // `BIG SUM[i <- 1:10] e`. `BIG` is a reserved word and optional in
             // the corpus, which writes both spellings.
+            // `object extends T ... end` -- an anonymous object.
+            // `DelimitedExpr.rats:50`: no name, no value parameters, and the
+            // `end` closes nothing that could be named, so `named_end` does not
+            // apply either.
+            Kind::KwObject => {
+                let start = self.span_here();
+                self.pos += 1;
+                let topology = self.topology_clauses()?;
+                let members = self.members()?;
+                let end = self.expect(&Kind::KwEnd, "`end`")?.span;
+                Ok(Expr::ObjectExpr {
+                    extends: topology.extends,
+                    members,
+                    span: Span::new(start.start, end.end),
+                })
+            }
             Kind::Reserved("BIG") if self.big_reduction_here(1) => self.big_reduction(),
             // EVERY OTHER `BIG`. It is a MODIFIER ON THE OPERATOR NAME, not a
             // keyword of its own -- `opr BIG SQCAP` and `opr SQCAP` are two

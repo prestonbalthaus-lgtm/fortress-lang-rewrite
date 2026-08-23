@@ -522,6 +522,116 @@ impl Pass {
         self.rewrite_expr(e, scope)
     }
 
+    /// `object extends T ... end` in expression position, hoisted to a minted
+    /// top-level `ObjectDecl` whose VALUE PARAMETERS are the locals its members
+    /// capture, and replaced by a construction of it.
+    ///
+    /// THE SAME SHAPE AS A LAMBDA AND FOR THE SAME REASON. A captured name
+    /// becomes a field of the minted object, so a member body reads it by its
+    /// own spelling and needs no rewriting -- no environment struct, no fat
+    /// pointer, and nothing in codegen that did not already exist.
+    ///
+    /// A capture with no WRITTEN type is refused by name, exactly as it is for a
+    /// lambda: a constructor parameter needs one and inventing it is how a
+    /// wrong type gets in.
+    fn object_expr(&mut self, e: &mut Expr, scope: &mut Scope) -> Result<(), TypeError> {
+        let Expr::ObjectExpr {
+            extends,
+            members,
+            span,
+        } = e
+        else {
+            return Ok(());
+        };
+        let span = *span;
+        let mut extends = std::mem::take(extends);
+        for t in extends.iter_mut() {
+            self.rewrite_type(t)?;
+        }
+        let mut members = std::mem::take(members);
+        let mut free: BTreeSet<String> = BTreeSet::new();
+        let probe = Expr::ObjectExpr {
+            extends: Vec::new(),
+            members: members.clone(),
+            span,
+        };
+        free_names(&probe, &mut Vec::new(), &mut free);
+        let mut captures: Vec<Param> = Vec::new();
+        for name in free {
+            if name == "self" {
+                continue;
+            }
+            let Some(slot) = scope.get(&name) else {
+                continue;
+            };
+            if slot.mutable {
+                return Err(TypeError::CaptureIsMutable { span, name });
+            }
+            let Some(ty) = slot.ty.clone() else {
+                return Err(TypeError::LambdaCaptureUntyped { span, name });
+            };
+            captures.push(Param {
+                name,
+                ty,
+                varargs: false,
+                span,
+            });
+        }
+        let index = self.lambdas;
+        self.lambdas = self.lambdas.saturating_add(1);
+        let object_name = format!("obj${index}");
+        for member in &mut members {
+            if let Member::Method(m) = member {
+                if let Some(body) = &mut m.body {
+                    scope.push();
+                    for p in &m.params {
+                        scope.declare_opaque(&p.name);
+                    }
+                    for c in &captures {
+                        scope.declare_opaque(&c.name);
+                    }
+                    let result = self.rewrite_expr(body, scope);
+                    scope.pop();
+                    result?;
+                }
+            }
+        }
+        // The map is keyed by (name, arrow) because a lambda mints one object
+        // per arrow type. An anonymous object implements no arrow, and its
+        // minted name is already unique, so the arrow half is empty.
+        self.objects.insert(
+            (object_name.clone(), (String::new(), String::new())),
+            ObjectDecl {
+                merged: false,
+                modifiers: Modifiers::default(),
+                name: object_name.clone(),
+                static_params: Vec::new(),
+                params: Some(captures.clone()),
+                extends,
+                comprises: Vec::new(),
+                comprises_open: false,
+                excludes: Vec::new(),
+                members,
+                span,
+            },
+        );
+        *e = Expr::Call {
+            callee: Box::new(Expr::Var {
+                name: object_name,
+                span,
+            }),
+            args: captures
+                .iter()
+                .map(|c| Expr::Var {
+                    name: c.name.clone(),
+                    span,
+                })
+                .collect(),
+            span,
+        };
+        Ok(())
+    }
+
     /// `fn (x: T): R => e`, lowered to a generated object whose CONSTRUCTOR
     /// PARAMETERS are the names the body captures.
     ///
@@ -661,6 +771,9 @@ impl Pass {
                 // Those are reachable from inside `apply` unchanged.
                 continue;
             };
+            if slot.mutable {
+                return Err(TypeError::CaptureIsMutable { span, name });
+            }
             let Some(ty) = slot.ty.clone() else {
                 return Err(TypeError::LambdaCaptureUntyped { span, name });
             };
@@ -1017,6 +1130,13 @@ impl Pass {
                 }
                 self.rewrite_expr(else_arm, scope)
             }
+            // AN ANONYMOUS OBJECT IS HOISTED THE WAY A LAMBDA IS. Its members'
+            // free locals become the minted object's value parameters, which is
+            // exactly what makes the bodies need no rewriting: a dotted method
+            // reads its receiver's fields by their own spelling, so a captured
+            // `i` inside a member resolves to the field `i` exactly as it
+            // resolved to the enclosing local before.
+            Expr::ObjectExpr { .. } => self.object_expr(e, scope),
             Expr::Comprehension { body, gens, .. } => {
                 for g in gens.iter_mut() {
                     self.rewrite_expr(&mut g.init, scope)?;
@@ -1106,16 +1226,21 @@ impl Pass {
             match item {
                 BlockItem::Binding(b) => {
                     let Binding {
-                        name, ty, value, ..
+                        name,
+                        ty,
+                        value,
+                        mutable,
+                        ..
                     } = b;
                     if let Some(t) = ty {
                         self.rewrite_type(t)?;
                     }
                     let written = ty.clone();
                     self.rewrite_slotted(value, written.as_ref(), scope)?;
-                    match ty {
-                        Some(t) => scope.declare(name, t),
-                        None => scope.declare_opaque(name),
+                    match (ty.as_ref(), *mutable) {
+                        (t, true) => scope.declare_mutable(name, t),
+                        (Some(t), false) => scope.declare(name, t),
+                        (None, false) => scope.declare_opaque(name),
                     }
                 }
                 // Every name a tuple binder introduces is opaque here: its type
@@ -1371,6 +1496,25 @@ pub(crate) fn free_names(e: &Expr, bound: &mut Vec<BTreeSet<String>>, out: &mut 
         }
         Expr::Field { base, .. } => free_names(base, bound, out),
         Expr::Throw { value, .. } => free_names(value, bound, out),
+        Expr::ObjectExpr { members, .. } => {
+            for member in members {
+                match member {
+                    Member::Method(m) => {
+                        if let Some(b) = &m.body {
+                            bound.push(m.params.iter().map(|p| p.name.clone()).collect());
+                            free_names(b, bound, out);
+                            bound.pop();
+                        }
+                    }
+                    Member::Field(f) => {
+                        if let Some(init) = &f.init {
+                            free_names(init, bound, out);
+                        }
+                    }
+                    Member::Coercion { .. } => {}
+                }
+            }
+        }
         Expr::Comprehension { body, gens, .. } => {
             let mut names: BTreeSet<String> = BTreeSet::new();
             for g in gens {
@@ -1506,6 +1650,9 @@ pub(crate) fn free_names(e: &Expr, bound: &mut Vec<BTreeSet<String>>, out: &mut 
 /// rather than guessed at.
 struct Slot {
     ty: Option<TypeRef>,
+    /// Declared with `:=`. A capture copies, so closing over one is refused by
+    /// name rather than answered wrongly.
+    mutable: bool,
 }
 
 impl Slot {
@@ -1536,6 +1683,17 @@ impl Scope {
             name,
             Slot {
                 ty: Some(ty.clone()),
+                mutable: false,
+            },
+        );
+    }
+
+    fn declare_mutable(&mut self, name: &str, ty: Option<&TypeRef>) {
+        self.insert(
+            name,
+            Slot {
+                ty: ty.cloned(),
+                mutable: true,
             },
         );
     }
@@ -1543,7 +1701,13 @@ impl Scope {
     /// A name that is bound and whose type is not written: an unannotated
     /// binding, a loop binder, a typecase binder with no type of its own.
     fn declare_opaque(&mut self, name: &str) {
-        self.insert(name, Slot { ty: None });
+        self.insert(
+            name,
+            Slot {
+                ty: None,
+                mutable: false,
+            },
+        );
     }
 
     fn insert(&mut self, name: &str, slot: Slot) {

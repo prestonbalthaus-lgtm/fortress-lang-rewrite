@@ -1,0 +1,12 @@
+component badmutablecapture
+export Executable
+
+run(): () = do
+  k: ZZ32 := 5
+  r = object
+    got(): ZZ32 = k
+  end
+  k := 9
+  println(r.got())
+end
+end

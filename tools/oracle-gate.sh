@@ -322,7 +322,9 @@ RUN_TIMEOUT     = 20
 # set. `Compiled2.f` is the specification's own Meet Rule example.
 # LINK 5, 2026-08-23: 345. The component-side implicit core import took the
 # pass count up by one and the binaries built and RUN from 402 to 421.
-PASS_FLOOR = 345
+# ANONYMOUS OBJECTS, 2026-08-23: 348. `object ... end` in expression position,
+# and the three are `Compiled5.bf`, `Compiled5.bfs` and `Compiled6.ai`.
+PASS_FLOOR = 348
 
 args, opt = sys.argv[1:], {}
 i = 0

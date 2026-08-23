@@ -1135,6 +1135,10 @@ impl<'a> Expander<'a> {
                 else_arm: Box::new(self.expr(else_arm, subst)?),
                 span: *span,
             },
+            // `closure.rs` hoists every one of these before this pass runs, so
+            // reaching here means the lowering was skipped rather than that the
+            // shape needs substituting. Carried through unchanged.
+            Expr::ObjectExpr { .. } => e.clone(),
             Expr::Comprehension {
                 bracket,
                 static_args,
