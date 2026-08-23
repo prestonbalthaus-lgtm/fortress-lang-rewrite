@@ -1,0 +1,9 @@
+component badmergedfunctional
+export Executable
+import cuplib.{...}
+
+(* `pour` is a merged FUNCTIONAL METHOD. It is lifted, so the name is KNOWN
+   here -- the refusal names the argument types instead of the name. It is
+   bodiless, so it can never be the target of this or any other call. *)
+run(): () = println(pour(3, 4))
+end

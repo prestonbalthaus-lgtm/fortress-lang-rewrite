@@ -1,0 +1,18 @@
+component concatbeside
+export Executable
+
+trait Blob
+  opr ||(self, b: Blob): Blob
+  size(): ZZ32
+end
+object B(n: ZZ32) extends Blob
+  opr ||(self, b: Blob): Blob = B(n + b.size())
+  size(): ZZ32 = n
+end
+
+run(): () = do
+  println("U" || "x")
+  c: Blob = B(2) || B(3)
+  println(c.size())
+end
+end

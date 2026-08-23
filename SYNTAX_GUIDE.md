@@ -918,7 +918,7 @@ Two sites in the whole corpus against 258 for the trailing colon, and nothing wr
 
 ### Concatenation and line separators
 
-All [legacy]: fortressc lexes `||` and `//` as tokens and the parser refuses them.  ⚠ 2026-08-23: `||` WORKS as string concatenation -- `println("a" || "b")` prints `ab`, PLAIN with no separator per the juxtaposition ruling -- and it is the one builtin a user declaration beats, because it is an ordinary library operator. `//` is still refused.
+All [legacy]: fortressc lexes `||` and `//` as tokens and the parser refuses them.  ⚠ 2026-08-23: `||` WORKS as string concatenation -- `println("a" || "b")` prints `ab`, PLAIN with no separator per the juxtaposition ruling -- and it is the one builtin a user declaration beats, because it is an ordinary library operator. `//` is still refused.  ⚠ 2026-08-23 (later): "the one builtin a user declaration beats" is now measured by APPLICABILITY, not by the name. Declaring `opr ||` on an unrelated type no longer takes concatenation away -- it used to report `expected Blob, found String` on `"U" || "x"`, because with one candidate the argument takes that candidate's parameter type as its hint. A pair of Strings no declaration reaches goes to the builtin; a pair the builtin cannot concatenate goes to whatever declaration reaches it.
 
 ```fortress
 a || b      (* string concatenation, and list append *)

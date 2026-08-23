@@ -204,6 +204,38 @@ flag has to survive monomorphization: `mono::params` rebuilt every `Param` and
 defaulted it, so `object O(var v: ZZ32)` parsed and the assignment then reported
 `v` immutable. Five mutation rows, one per axis.
 
+**RULE 3 RETIRED AND THE MEET RULE LANDED, 2026-08-23.** A component sees the
+merged declarations that discharge its own generic's obligations. Three parts,
+and the middle one is what the other two were waiting on.
+
+`Library/CompilerAlgebra.fss` declares `trait Equality[\T\]` with
+`opr =(self, other: T)`. `AnyMaybe` reaches `Equality` twice -- directly and
+through `AnyUniqueItem` -- so monomorphization stamps that one line at both
+instantiations and every `Just` inherits two `=`. The declaration that settles
+it is `FortressLibrary.fsi:896`'s BODILESS `opr =(self, other:AnyMaybe)`, and a
+component could not see it.
+
+1. **The concatenation fallback tested for the NAME.** `opr ||(a: Blob, b:
+   Blob)` anywhere in scope took `"U" || "x"` away and reported `expected Blob,
+   found String`, because with one candidate `agreed` hands position 0 that
+   candidate's parameter type. It tests APPLICABILITY now, in both directions:
+   a pair of Strings no declaration reaches goes to the builtin, and a pair the
+   builtin cannot concatenate goes to a declaration that reaches it. THIS ONE
+   DEFECT WAS THE WHOLE COST OF RULE 3 -- 25 files, measured by list diff.
+2. **A merged functional method is LIFTED.** With (1) in, it costs zero files.
+3. **THE MEET RULE.** `advanced/overloading.tex:396-411` is discharged by a
+   declaration applicable to the meet and more specific than both, and it does
+   not ask that one for a body. `typing_candidates` takes implementations
+   first, which is right for a CALL and wrong for a declaration SET, so the
+   full set is consulted to RESOLVE a tie and never to create one -- an
+   inherited requirement still cannot tie with the implementation beneath it.
+   A bodiless meet makes the SET valid; the CALL is still refused, because
+   dispatch has no target.
+
+426 objects, 126 apis, oracle 350 -- all unchanged. Twenty-five files moved onto
+a LATER blocker and `unknown name X` became `no declaration of X applies to
+(T)`, which is the lift becoming visible.
+
 **EXCEPTIONS, PARKED 2026-08-23.** `throw` is built -- an uncaught throw halts,
 naming the exception, with no unwinding and no cost on the path that does not
 throw -- and `try`/`catch`/`forbid`/`finally` PARSE and are refused by name. The

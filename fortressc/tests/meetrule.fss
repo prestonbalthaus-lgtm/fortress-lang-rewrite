@@ -1,0 +1,34 @@
+component meetrule
+export Executable
+
+(* A BODILESS meet. The declaration set is VALID -- the meet is what makes it
+   so -- and nothing calls it, which is the whole point: validity is a question
+   about the declarations, and `advanced/overloading.tex:396-411` does not ask
+   the meet for a body. *)
+trait Alpha
+  mm(self, o: Alpha): ZZ32 = 1
+end
+trait Beta
+  mm(self, o: Beta): ZZ32 = 2
+end
+trait Both extends { Alpha, Beta }
+  mm(self, o: Both): ZZ32
+end
+object O() extends Both end
+
+(* The same tie with a BODIED meet, and this one is called. *)
+trait Gamma
+  nn(self, o: Gamma): ZZ32 = 1
+end
+trait Delta
+  nn(self, o: Delta): ZZ32 = 2
+end
+trait Pair extends { Gamma, Delta }
+  nn(self, o: Pair): ZZ32 = 3
+end
+object P() extends Pair end
+
+(* `O` is declared and never called: the BODILESS group is checked by the
+   validity rule alone, which is the half no call can reach. *)
+run(): () = println(nn(P(), P()))
+end

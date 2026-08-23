@@ -1,0 +1,14 @@
+component badnomeet
+export Executable
+
+trait Alpha
+  mm(self, o: Alpha): ZZ32 = 1
+end
+trait Beta
+  mm(self, o: Beta): ZZ32 = 2
+end
+trait Both extends { Alpha, Beta } end
+object O() extends Both end
+
+run(): () = println(mm(O(), O()))
+end

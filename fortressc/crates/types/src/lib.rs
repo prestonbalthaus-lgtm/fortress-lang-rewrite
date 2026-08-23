@@ -92,6 +92,13 @@ struct Signature {
 /// barely better than one that panics on it, so reaching this is a diagnostic.
 const MAX_DISPATCH_CELLS: usize = 1_000_000;
 
+/// String concatenation. NAMED because a mutation table row splits on `|` and
+/// the operator's own spelling cannot appear in one.
+const CONCAT: &str = "||";
+
+/// What `CONCAT` has to reach before a declaration takes concatenation away.
+const STRING_PAIR: [Type; 2] = [Type::String, Type::String];
+
 /// While a dotted method body is checked: the receiver's type, and the fields
 /// a bare name may resolve against. A method sees its object's fields.
 struct SelfCtx {
@@ -1148,29 +1155,36 @@ impl Checker {
         counts: &HashMap<String, usize>,
     ) -> Checked<()> {
         for decl in &component.decls {
-            // A MERGED TRAIT'S FUNCTIONAL METHODS ARE NOT LIFTED INTO A
-            // COMPONENT, and it is the resolver's own rule one level down.
-            // `traits.tex:484-494` makes a functional method a TOP-LEVEL
-            // declaration, and the resolver refuses to merge an api's top-level
-            // functions precisely because those are obligations the importer
-            // must SATISFY rather than names it may use. Lifting them here
-            // merges a function by the back door.
+            // A MERGED TRAIT'S FUNCTIONAL METHODS ARE LIFTED, as of 2026-08-23,
+            // and this is where they were kept OUT until then.
             //
-            // MEASURED: without this, twenty-four files stop on
-            // `expected FlatString, found String` at `println("U" || x)`. `||`
-            // is the one builtin a user declaration beats -- deliberately,
-            // because it is an ordinary library operator -- and a MERGED
-            // declaration was beating it too, which is not the same thing.
-            if merged_decl(decl) && !component.is_api {
-                continue;
-            }
+            // `traits.tex:484-494` makes a functional method a top-level
+            // declaration, so lifting a merged one does merge a function --
+            // and that is the POINT. `Library/CompilerAlgebra.fss` declares
+            // `trait Equality[\T\]` with `opr =(self, other: T)`, which is
+            // stamped at `AnyMaybe` and at `AnyUniqueItem` because `AnyMaybe`
+            // reaches `Equality` twice; the declaration that settles the tie is
+            // `FortressLibrary.fsi:896`'s bodiless `opr =(self, other:AnyMaybe)`
+            // on `trait AnyMaybe`. A component saw the obligations its own
+            // generic created and none of the merged declarations that
+            // discharge them.
+            //
+            // THE BAN WAS PAYING FOR ONE DEFECT AND IT WAS NOT THIS ONE.
+            // Twenty-five files stopped on `expected FlatString, found String`
+            // at `println("U" || x)` -- and so did a file declaring its OWN
+            // `opr ||` on an unrelated trait, which no ban could have covered.
+            // `||`'s builtin fallback tested for the NAME rather than for a
+            // declaration that could apply to Strings. Corrected at
+            // `concat_is_declared`; with that in, lifting costs ZERO files,
+            // measured by list diff over all 1956 and not by the count.
             let owner = match decl {
                 Decl::Trait(t) => intern(&t.name),
                 Decl::Object(o) => intern(&o.name),
                 // A value has no members to walk.
                 Decl::Function(_) | Decl::Value(_) => continue,
             };
-            for (index, member) in members_of(decl).iter().enumerate() {
+            let liftable = members_of(decl);
+            for (index, member) in liftable.iter().enumerate() {
                 let Member::Method(m) = member else { continue };
                 if m.accessor.is_some() || !m.params.iter().any(|p| p.name == "self") {
                     continue;
@@ -1970,7 +1984,31 @@ impl Checker {
                     if applicable.len() < 2 {
                         continue;
                     }
-                    self.winner(name, &applicable, &tuple, span)?;
+                    let Err(tie) = self.winner(name, &applicable, &tuple, span) else {
+                        continue;
+                    };
+                    // THE MEET RULE, and it asks a DECLARATION for nothing but
+                    // its signature. `advanced/overloading.tex:396-411` is
+                    // discharged by a declaration applicable to the meet and
+                    // more specific than both, and 1.0's own library writes
+                    // that declaration ABSTRACTLY -- `AnyMaybe` extends
+                    // `Equality[\AnyMaybe\]` AND `AnyUniqueItem`, which
+                    // extends `Equality[\AnyUniqueItem\]`, so every `Just`
+                    // inherits `=` at two instantiations and `FortressLibrary
+                    // .fsi:896` settles it with a bodiless `opr =(self,
+                    // other:AnyMaybe)`.
+                    //
+                    // `typing_candidates` CANNOT see it: it takes
+                    // implementations first, which is right for a CALL -- a
+                    // requirement types one and never wins one -- and wrong
+                    // here, because validity is a question about the
+                    // DECLARATION SET. Consulted only to RESOLVE a tie, never
+                    // to create one, so an inherited requirement still cannot
+                    // tie with the implementation beneath it.
+                    let every = self.applicable(&group, &tuple, false);
+                    if self.winner(name, &every, &tuple, span).is_err() {
+                        return Err(tie);
+                    }
                 }
             }
         }
@@ -4855,6 +4893,21 @@ impl Checker {
     /// one of them a String -- the library declares `||` on String and nowhere
     /// else, so `3 || 4` is not concatenation and must not silently become
     /// `"34"`.
+    /// Whether some declaration of `||` accepts this pair. That, and not the
+    /// mere existence of the name, is what decides between the builtin
+    /// concatenation and a declaration -- in BOTH directions.
+    fn concat_applies_to(&self, arguments: &[Type]) -> bool {
+        self.functions.get(CONCAT).is_some_and(|set| {
+            set.iter().any(|s| {
+                s.params.len() == arguments.len()
+                    && s.params
+                        .iter()
+                        .zip(arguments)
+                        .all(|(p, a)| self.registry.is_subtype(*a, *p))
+            })
+        })
+    }
+
     fn builtin_concat(
         &mut self,
         args: &[Expr],
@@ -4869,13 +4922,26 @@ impl Checker {
                 found: args.len(),
             });
         };
-        let has_string = [left, right]
+        // Typed with NO HINT, which is the whole point: a hint drawn from a
+        // declaration that cannot apply is what reported `expected Blob, found
+        // String`. These types are then what decides where the call goes.
+        let statics: Vec<Type> = [left, right]
             .iter()
             .map(|e| self.expr(e, None))
             .collect::<Checked<Vec<_>>>()?
             .iter()
-            .any(|t| t.ty == Type::String);
-        if !has_string {
+            .map(|t| t.ty)
+            .collect();
+        if !statics.contains(&Type::String) {
+            // NOT AN ERROR WHERE A DECLARATION REACHES THIS PAIR. Concatenation
+            // is the fallback for the pair the library's own operator cannot
+            // reach; a pair of anything else is what a user declaration is for.
+            // APPLICABILITY, not the bare name: with the name alone `3 || 4`
+            // beside a merged `opr ||(self, b:FlatString)` reported an integer
+            // literal in a FlatString slot instead of `unknown name`.
+            if self.concat_applies_to(&statics) {
+                return self.user_call(CONCAT, args, span, span, expected);
+            }
             return Err(TypeError::UnknownName {
                 span,
                 name: "||".to_owned(),
@@ -5015,7 +5081,17 @@ impl Checker {
         // PLAIN concatenation, per the 2026-08-21 juxtaposition ruling -- the
         // library's own `||` is `self || b` with no separator, and the
         // space-inserting `|||` is a different operator.
-        if name == "||" && !self.functions.contains_key("||") {
+        //
+        // AND "NO DECLARATION OF THE NAME" WAS THE WRONG TEST, corrected
+        // 2026-08-23. `opr ||(a: Blob, b: Blob)` anywhere in scope -- the
+        // file's own or one merged out of an api -- took `"U" || "x"` away and
+        // reported `expected Blob, found String`, because with one candidate
+        // `agreed` hands position 0 that candidate's parameter type. Twenty-five
+        // corpus files were held up by exactly this, through `FlatString.fsi`'s
+        // `opr ||(self, b:FlatString)`, and it is the whole of what the
+        // merged-functional-method ban was paying for. The test is whether a
+        // declaration could APPLY to a pair of Strings.
+        if name == CONCAT && !self.concat_applies_to(&STRING_PAIR) {
             return self.builtin_concat(args, span, expected);
         }
         // The builtins keep precedence over user declarations, exactly as

@@ -378,6 +378,13 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # the field mutable. +3, nothing lost. The flag has to survive monomorphization,
 # which rebuilt every `Param` and defaulted it -- the declaration parsed and the
 # assignment then reported the field immutable.
+# RULE 3 RETIRED AND THE MEET RULE IN, 2026-08-23: 426 objects and 126 apis,
+# UNCHANGED, and that is the honest number -- twenty-five files moved onto a
+# LATER blocker and none moved onto the compile list. `Library/CompilerAlgebra
+# .fss` is the one that matters: its `=` ambiguity is discharged and it now
+# stops on `unknown name ===`. The compile metric cannot see any of this, so
+# the assertions are `meetrule`, `concatbeside`, `badnomeet`,
+# `badmergedfunctional` and their four mutation rows.
 OBJECT_FLOOR=321
 API_FLOOR=126
 
@@ -473,6 +480,8 @@ bigoperator|7\n42\n10|`BIG` folds into the operator NAME at the use site too
 conditionalops|false\ntrue\ntrue\nfalse|`AND:` and `OR:` are the conditional forms and SHORT CIRCUIT
 objectexpr|8\n100\n42|an anonymous `object` captures a local and gets a tag of its own
 varfield|7\n11\n2\n108\n4|a `var` value parameter and a `:=` field are BOTH assignable
+meetrule|3|a bodiless meet makes a declaration SET valid, and a bodied one runs
+concatbeside|Ux\n5|concatenation survives an unrelated declaration of its name
 CASES
 }
 
@@ -548,6 +557,8 @@ badbigand.fss|is not one of the reduction operators this lowering reaches
 badcomprehension.fss|comprehension parses and its lowering is not implemented
 badmutablecapture.fss|is mutable, and a closure captures it BY VALUE here
 badimmutableparam.fss|field `w` is immutable
+badnomeet.fss|is ambiguous for (O, O)
+badmergedfunctional.fss|where Cup is required
 CASES
 
     # `badvaluebinding.fss` LEFT THIS LIST when component-level values landed,
@@ -878,7 +889,9 @@ MUTATIONS=(
   # are lifted and which are lowered.
   'crates/driver/src/resolve.rs|            if from_api {|            if false {|stop marking an api declaration as merged, so all of them are lowered'
   'crates/driver/src/resolve.rs|            if from_api && !component.is_api {|            if false && !component.is_api {|let a merged declaration shadow the builtin of its own name'
-  'crates/types/src/lib.rs|            if merged_decl(decl) && !component.is_api {|            if false {|lift a merged functional method into the importing component'
+  # RETIRED 2026-08-23: this row toggled the ban on lifting a merged
+  # functional method, and the ban is GONE. Its replacement puts the ban BACK,
+  # and lives with the rest of Phase B at the end of the table.
   'crates/types/src/lib.rs|            if info.merged {|            if false {|give an unlowerable merged object a constructor anyway'
   'crates/types/src/lib.rs|            let merged_names_are_not_ours = merged_decl(decl) && !component.is_api;|            let merged_names_are_not_ours = false;|let a merged accessor name capture a method the importing file declares'
   # RETARGETED 2026-08-23: the guard is per-name now, and it is a `break` --
@@ -913,6 +926,15 @@ MUTATIONS=(
   # grammar rule. Refusing it, and taking it as immutable, are separate.
   'crates/parser/src/lib.rs|let assigned = self.at_field_initializer();|let assigned = false;|refuse `:=` where a field initializer goes'
   'crates/parser/src/lib.rs|            is_a_mutable_field = true;|            is_a_mutable_field = false;|read a `:=` field as immutable'
+  # RULE 3 IS RETIRED AND THE MEET RULE IS IN, four axes. The concatenation
+  # fallback tested for the NAME `||` rather than for a declaration that could
+  # reach a pair of Strings, and that one defect was the whole cost of the ban
+  # on lifting a merged functional method. The operator cannot be written in a
+  # row -- `IFS` splits on its own spelling -- so it is a named const.
+  'crates/types/src/lib.rs|if name == CONCAT && !self.concat_applies_to(&STRING_PAIR) {|if name == CONCAT && !self.functions.contains_key(CONCAT) {|take concatenation away from any declaration of the name'
+  'crates/types/src/lib.rs|            if self.concat_applies_to(&statics) {|            if false {|refuse a non-String pair instead of letting a declaration have it'
+  'crates/types/src/lib.rs|let every = self.applicable(&group, &tuple, false);|let every = Vec::new();|stop the meet rule discharging a tie'
+  'crates/types/src/lib.rs|            let liftable = members_of(decl);|            let liftable = if merged_decl(decl) { &[][..] } else { members_of(decl) };|put the ban on lifting a merged functional method back'
 )
 
 # FORTRESSC AND --mutate DO NOT MIX, and the failure is silent. Every mutation
