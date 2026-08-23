@@ -1135,6 +1135,34 @@ impl<'a> Expander<'a> {
                 else_arm: Box::new(self.expr(else_arm, subst)?),
                 span: *span,
             },
+            Expr::Try {
+                body,
+                catch_binder,
+                arms,
+                forbids,
+                finally,
+                span,
+            } => Expr::Try {
+                body: Box::new(self.expr(body, subst)?),
+                catch_binder: catch_binder.clone(),
+                arms: arms
+                    .iter()
+                    .map(|a| {
+                        Ok(TypeCaseArm {
+                            binder: a.binder.clone(),
+                            ty: self.ty(&a.ty, subst)?,
+                            body: self.expr(&a.body, subst)?,
+                            span: a.span,
+                        })
+                    })
+                    .collect::<Result<_, TypeError>>()?,
+                forbids: self.types(forbids, subst)?,
+                finally: match finally {
+                    Some(f) => Some(Box::new(self.expr(f, subst)?)),
+                    None => None,
+                },
+                span: *span,
+            },
             Expr::Label { name, body, span } => Expr::Label {
                 name: name.clone(),
                 body: Box::new(self.expr(body, subst)?),

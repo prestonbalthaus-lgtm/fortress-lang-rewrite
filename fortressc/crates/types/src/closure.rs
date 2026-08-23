@@ -1017,6 +1017,28 @@ impl Pass {
                 }
                 self.rewrite_expr(else_arm, scope)
             }
+            Expr::Try {
+                body,
+                catch_binder,
+                arms,
+                finally,
+                ..
+            } => {
+                self.rewrite_expr(body, scope)?;
+                for arm in arms.iter_mut() {
+                    scope.push();
+                    if let Some(b) = catch_binder {
+                        scope.declare_opaque(b);
+                    }
+                    let result = self.rewrite_expr(&mut arm.body, scope);
+                    scope.pop();
+                    result?;
+                }
+                if let Some(f) = finally {
+                    self.rewrite_expr(f, scope)?;
+                }
+                Ok(())
+            }
             Expr::Label { body, .. } => self.rewrite_expr(body, scope),
             Expr::AlsoDo { blocks, .. } => self.rewrite_exprs(blocks, scope),
             Expr::ForIn {
@@ -1332,6 +1354,23 @@ pub(crate) fn free_names(e: &Expr, bound: &mut Vec<BTreeSet<String>>, out: &mut 
         }
         Expr::Field { base, .. } => free_names(base, bound, out),
         Expr::Throw { value, .. } => free_names(value, bound, out),
+        Expr::Try {
+            body,
+            catch_binder,
+            arms,
+            finally,
+            ..
+        } => {
+            free_names(body, bound, out);
+            for arm in arms {
+                bound.push(catch_binder.iter().cloned().collect());
+                free_names(&arm.body, bound, out);
+                bound.pop();
+            }
+            if let Some(f) = finally {
+                free_names(f, bound, out);
+            }
+        }
         Expr::For {
             binder,
             lo,

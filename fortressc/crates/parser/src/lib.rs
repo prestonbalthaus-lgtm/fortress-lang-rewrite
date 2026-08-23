@@ -3606,6 +3606,7 @@ impl<'t, 'a> Parser<'t, 'a> {
             // corpus writes: `throw NotFound`, `throw TestFailCalled(s)`,
             // `throw KeyOverlap[\Key,Val\](pk,pv,cv)`. It stops where any
             // expression stops, so `else throw E end` closes on the `end`.
+            Kind::Reserved("try") => self.try_expr(),
             Kind::Reserved("throw") => {
                 let start = self.span_here();
                 self.pos += 1;
@@ -4426,6 +4427,78 @@ impl<'t, 'a> Parser<'t, 'a> {
     /// `typecase subject of T => e ... else => e end`, with `x: T => e` for the
     /// binder form. The two are told apart by the `:` after an identifier,
     /// which is the only thing that can follow a binder.
+    /// `try B catch x A* forbid T* finally B end`, exactly
+    /// `DelimitedExpr.rats:141-142`. Every clause after the body is optional
+    /// and they come in that order.
+    fn try_expr(&mut self) -> Parsed<Expr> {
+        let start = self.span_here();
+        self.pos += 1; // `try`
+        self.skip_newlines();
+        let body = Box::new(self.block_body(&[
+            Kind::KwEnd,
+            Kind::Reserved("catch"),
+            Kind::Reserved("forbid"),
+            Kind::Reserved("finally"),
+        ])?);
+        let mut catch_binder = None;
+        let mut arms = Vec::new();
+        if self.at_reserved("catch") {
+            self.pos += 1;
+            let (name, _) = self.identifier("the name `catch` binds")?;
+            catch_binder = Some(name);
+            self.skip_newlines();
+            // `Type => expr`, the same shape a typecase arm has. A `catch` with
+            // no matching arm RE-THROWS, so there is no `else` and this is not
+            // a typecase: the exhaustiveness question does not arise.
+            while !self.at(&Kind::KwEnd)
+                && !self.at_reserved("forbid")
+                && !self.at_reserved("finally")
+                && !self.at_eof()
+            {
+                let arm_start = self.span_here();
+                let ty = self.type_ref()?;
+                self.expect(&Kind::FatArrow, "`=>`")?;
+                self.skip_newlines();
+                let body = self.arm_body()?;
+                let end = self.previous_span();
+                arms.push(TypeCaseArm {
+                    binder: None,
+                    ty,
+                    body,
+                    span: Span::new(arm_start.start, end.end),
+                });
+                self.skip_newlines();
+            }
+        }
+        let mut forbids = Vec::new();
+        if self.at_reserved("forbid") {
+            self.pos += 1;
+            self.skip_newlines();
+            forbids.push(self.type_ref()?);
+            while self.at(&Kind::Comma) {
+                self.pos += 1;
+                self.skip_newlines();
+                forbids.push(self.type_ref()?);
+            }
+            self.skip_newlines();
+        }
+        let mut finally = None;
+        if self.at_reserved("finally") {
+            self.pos += 1;
+            self.skip_newlines();
+            finally = Some(Box::new(self.block_body(&[Kind::KwEnd])?));
+        }
+        let end = self.expect(&Kind::KwEnd, "`end`")?.span;
+        Ok(Expr::Try {
+            body,
+            catch_binder,
+            arms,
+            forbids,
+            finally,
+            span: Span::new(start.start, end.end),
+        })
+    }
+
     fn typecase_expr(&mut self) -> Parsed<Expr> {
         let start = self.span_here();
         self.pos += 1; // `typecase`

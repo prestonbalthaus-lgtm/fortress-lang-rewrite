@@ -3016,6 +3016,12 @@ impl Checker {
                     span: *span,
                 })
             }
+            // `try ... catch ... end`. PARSED AND REFUSED BY NAME. The shape
+            // is kept whole in the AST -- body, binder, arms, `forbid` list,
+            // `finally` -- so the lowering can be built on it without going
+            // back to the grammar, and so this refusal can say which file it
+            // is about instead of blaming a token.
+            Expr::Try { span, .. } => Err(TypeError::TryUnsupported { span: *span }),
             // `throw e`, AND IN THIS SUBSET EVERY THROW IS UNCAUGHT: there is
             // no `catch`, so a throw terminates the program and lowers to a
             // halt naming the exception. No unwinding, no landing pad, and no
@@ -3772,6 +3778,18 @@ impl Checker {
             }
             Expr::Prefix { operand, .. } => self.reads_shared(operand, floor),
             Expr::Throw { value, .. } => self.reads_shared(value, floor),
+            Expr::Try {
+                body,
+                arms,
+                finally,
+                ..
+            } => {
+                self.reads_shared(body, floor)
+                    || arms.iter().any(|a| self.reads_shared(&a.body, floor))
+                    || finally
+                        .as_ref()
+                        .is_some_and(|f| self.reads_shared(f, floor))
+            }
             Expr::Call { callee, args, .. } => {
                 self.reads_shared(callee, floor) || args.iter().any(|a| self.reads_shared(a, floor))
             }

@@ -478,6 +478,13 @@ pub enum TypeError {
         span: Span,
         name: String,
     },
+    /// `try ... catch ... end`. It PARSES -- the whole shape is in the AST --
+    /// and the lowering is not built. Named rather than left as a reserved-word
+    /// refusal so the file lands in the exceptions bucket and not the parser
+    /// one.
+    TryUnsupported {
+        span: Span,
+    },
     /// A functional method that takes static parameters. 1.0 lifts a
     /// functional method into the top-level overload set of its name; a
     /// generic one needs the receiver's type to decide what to instantiate,
@@ -897,6 +904,7 @@ impl TypeError {
             | Self::UnknownField { span, .. }
             | Self::ThrownValueIsNotAnException { span, .. }
             | Self::MergedObjectNotConstructible { span, .. }
+            | Self::TryUnsupported { span }
             | Self::DottedMethodUnsupported { span, .. }
             | Self::CompoundAssignThroughSetter { span, .. }
             | Self::FieldIsImmutable { span, .. }
@@ -1303,6 +1311,11 @@ impl core::fmt::Display for TypeError {
                 "`{name}` comes from an imported api, which declares it and \
                  does not define it; this compiler has no separate compilation, \
                  so there is no constructor to call"
+            ),
+            Self::TryUnsupported { .. } => write!(
+                f,
+                "`try` parses and its lowering is not implemented; an uncaught \
+                 `throw` halts, and nothing catches one yet"
             ),
             Self::GenericFunctionalMethodUnsupported { name, .. } => write!(
                 f,

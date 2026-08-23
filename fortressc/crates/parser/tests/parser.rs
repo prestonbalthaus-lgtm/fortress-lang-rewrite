@@ -2077,3 +2077,57 @@ fn self_is_still_reserved_outside_a_type_position() {
         }
     }
 }
+
+/// `try B catch x A* forbid T* finally B end`, exactly
+/// `DelimitedExpr.rats:141-142`. Every clause after the body is optional, and
+/// the whole shape is kept so the lowering can be built on it later.
+#[test]
+fn a_try_keeps_all_four_of_its_clauses() {
+    let src = "component t\nf() = try\n  g()\ncatch e\n  A => 1\n  B => 2\nforbid C, D\nfinally\n  h()\nend\nend\n";
+    let c = component(src);
+    match c.decls.first() {
+        Some(Decl::Function(f)) => match f.body.as_ref() {
+            Some(Expr::Try {
+                catch_binder,
+                arms,
+                forbids,
+                finally,
+                ..
+            }) => {
+                assert_eq!(catch_binder.as_deref(), Some("e"));
+                assert_eq!(arms.len(), 2);
+                assert_eq!(forbids.len(), 2);
+                assert!(finally.is_some());
+            }
+            other => panic!("expected a try, got {other:?}"),
+        },
+        other => panic!("expected a function, got {other:?}"),
+    }
+}
+
+/// AND EVERY CLAUSE IS OPTIONAL. `try B end` alone is the shape
+/// `Library/FortressLibrary.fss` writes with only a `catch`.
+#[test]
+fn a_try_may_have_no_clauses_at_all() {
+    match component("component t\nf() = try\n  g()\nend\nend\n")
+        .decls
+        .first()
+    {
+        Some(Decl::Function(f)) => match f.body.as_ref() {
+            Some(Expr::Try {
+                catch_binder,
+                arms,
+                forbids,
+                finally,
+                ..
+            }) => {
+                assert!(catch_binder.is_none());
+                assert!(arms.is_empty());
+                assert!(forbids.is_empty());
+                assert!(finally.is_none());
+            }
+            other => panic!("expected a try, got {other:?}"),
+        },
+        other => panic!("expected a function, got {other:?}"),
+    }
+}

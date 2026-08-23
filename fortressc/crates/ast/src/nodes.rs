@@ -894,6 +894,24 @@ pub enum Expr {
         body: Box<Expr>,
         span: Span,
     },
+    /// `try B catch x A* forbid T* finally B end`, and every part after the
+    /// first is optional -- `DelimitedExpr.rats:141-142` is the production.
+    ///
+    /// THE CATCH ARMS ARE TYPECASE ARMS. `catch e` binds the exception and each
+    /// arm is `Type => expr`, which is the shape `Expr::TypeCase` already
+    /// carries; a `catch` with no matching arm re-throws, so there is no `else`
+    /// and it is NOT a `TypeCase`.
+    Try {
+        body: Box<Expr>,
+        /// `catch e`. `None` when the clause is absent entirely.
+        catch_binder: Option<String>,
+        arms: Vec<TypeCaseArm>,
+        /// `forbid T, U`: an exception of one of these types is not caught here
+        /// however the arms read.
+        forbids: Vec<TypeRef>,
+        finally: Option<Box<Expr>>,
+        span: Span,
+    },
     /// `throw e`. An uncaught throw terminates the program, and in this
     /// subset every throw is uncaught -- there is no `catch` yet -- so it
     /// lowers to a halt naming the exception rather than to any unwinding.
@@ -1142,6 +1160,7 @@ impl Expr {
             | Self::Tuple { span, .. }
             | Self::IntLit { span, .. }
             | Self::FloatLit { span, .. }
+            | Self::Try { span, .. }
             | Self::Throw { span, .. }
             | Self::StrLit { span, .. }
             | Self::CharLit { span, .. }

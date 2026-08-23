@@ -520,6 +520,7 @@ badthrowscalar.fss|`throw` can only throw objects of Exception type, and this ex
 badthrownotexception.fss|and this expression is of type FooExn
 badmergedfunction.fss|unknown name `gcd`
 badmergedconstruct.fss|comes from an imported api, which declares it and does not define it
+badtry.fss|`try` parses and its lowering is not implemented
 CASES
 
     # `badvaluebinding.fss` LEFT THIS LIST when component-level values landed,
@@ -766,6 +767,10 @@ CASES
 }
 
 MUTATIONS=(
+  # `try` PARSES AND IS REFUSED BY NAME. Without the parser arm it is a bare
+  # reserved-word refusal again, which files it under the parser instead of
+  # under exceptions and says nothing about what is missing.
+  'crates/parser/src/lib.rs|Kind::Reserved("try") => self.try_expr(),|Kind::Reserved("tryx") => self.try_expr(),|refuse `try` at the parser again, as a bare reserved word'
   # AN UNCAUGHT `throw` HALTS. Three axes: refuse it at the parser again, take
   # away its bottom type so it cannot stand in value position, and stop the
   # halt naming the exception.

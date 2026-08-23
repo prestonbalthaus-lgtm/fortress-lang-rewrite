@@ -1,0 +1,17 @@
+export Executable
+
+trait Exception end
+object Scooby extends Exception end
+object Shaggy extends Exception end
+
+run(): () = do
+    try
+        throw Scooby
+    catch e
+        Shaggy => println(1)
+        Scooby => println(2)
+    forbid Exception
+    finally
+        println(3)
+    end
+end
