@@ -1,0 +1,10 @@
+export Executable
+
+trait Exception end
+
+object FooExn end
+
+run(): () = do
+    throw FooExn
+    println(1)
+end

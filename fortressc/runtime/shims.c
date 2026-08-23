@@ -456,6 +456,26 @@ static void fortress_halt(const char *what, long long a, long long b) {
 }
 
 /*
+ * `throw e` WITH NOTHING TO CATCH IT. An uncaught throw terminates the program,
+ * so this subset's `throw` IS the termination: no unwinding, no landing pad, no
+ * cost of any kind on the path that does not throw.
+ *
+ * It takes the exception's STATIC type name rather than the object, because
+ * nothing here can render one: `asString` is a dotted method and this is C. The
+ * value is still evaluated at the call site -- `throw MakeExn(x)` runs `MakeExn`
+ * -- it is only the rendering that is static.
+ *
+ * NOT `fortress_halt`: that one is for a fault the language decided to make
+ * fatal, and its message shape carries two numbers. This is a program saying so
+ * itself, and the wording has to name the exception because that is the whole
+ * of the information a `throw` carries here.
+ */
+void fortress_throw(const char *name) {
+    fprintf(stderr, "fortress: uncaught exception %s\n", name);
+    fortress_abnormal_exit();
+}
+
+/*
  * Integer division. TWO of an `sdiv`'s operand pairs fault on x86-64 rather
  * than producing a value -- a zero divisor, and the minimum value over -1,
  * whose quotient is not representable -- and both raise SIGFPE. That is a core

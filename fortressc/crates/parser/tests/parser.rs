@@ -271,12 +271,14 @@ fn a_newline_before_the_equals_means_it_is_not_a_binding() {
 
 #[test]
 fn a_reserved_word_is_rejected_by_name() {
-    // Was `atomic` until M5 implemented it and `spawn` until M6 did. All three
-    // are still in the lexer's reserved list -- that is what keeps them out of
-    // the identifier namespace -- and the parser intercepts each by name before
-    // this arm is reached, so this test needs a word nothing intercepts yet.
-    match expr_error("throw") {
-        ParseError::ReservedWord { word, .. } => assert_eq!(word, "throw"),
+    // Was `atomic` until M5 implemented it, `spawn` until M6 did, and `throw`
+    // until the exception milestone did. All four are still in the lexer's
+    // reserved list -- that is what keeps them out of the identifier namespace
+    // -- and the parser intercepts each by name before this arm is reached, so
+    // this test needs a word nothing intercepts yet. THE WORD KEEPS CHANGING,
+    // and that is the milestone ratchet working rather than the test rotting.
+    match expr_error("catch") {
+        ParseError::ReservedWord { word, .. } => assert_eq!(word, "catch"),
         other => panic!("expected a reserved word error, got {other:?}"),
     }
 }

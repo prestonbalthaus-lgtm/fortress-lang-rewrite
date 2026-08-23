@@ -947,6 +947,9 @@ impl Pass {
                 self.rewrite_expr(body, scope)
             }
             Expr::Field { base, .. } => self.rewrite_expr(base, scope),
+            // A `throw` inside an outlined body still evaluates its operand,
+            // so the operand's captures are rewritten like any other.
+            Expr::Throw { value, .. } => self.rewrite_expr(value, scope),
             Expr::For {
                 binder,
                 lo,
@@ -1317,6 +1320,7 @@ pub(crate) fn free_names(e: &Expr, bound: &mut Vec<BTreeSet<String>>, out: &mut 
             free_names(body, bound, out);
         }
         Expr::Field { base, .. } => free_names(base, bound, out),
+        Expr::Throw { value, .. } => free_names(value, bound, out),
         Expr::For {
             binder,
             lo,

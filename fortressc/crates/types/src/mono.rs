@@ -1035,6 +1035,10 @@ impl<'a> Expander<'a> {
                 body: Box::new(self.expr(body, subst)?),
                 span: *span,
             },
+            Expr::Throw { value, span } => Expr::Throw {
+                value: Box::new(self.expr(value, subst)?),
+                span: *span,
+            },
             // Substitution walks INTO a spawned body. It is ordinary code and a
             // static parameter mentioned inside one has to be replaced like any
             // other -- returning `e.clone()` here would leave the parameter

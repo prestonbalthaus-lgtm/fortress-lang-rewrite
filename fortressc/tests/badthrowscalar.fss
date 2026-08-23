@@ -1,0 +1,6 @@
+export Executable
+
+run(): () = do
+    throw 3
+    println(1)
+end

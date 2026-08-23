@@ -461,6 +461,15 @@ pub enum TypeError {
         span: Span,
         name: String,
     },
+    /// `throw FooExn` where `FooExn` does not extend `Exception`. 1.0's own
+    /// message, recorded in `XXX9aa.test`, is "`throw` can only throw objects of
+    /// Exception type. This expression is of type FooExn." -- and that file is
+    /// in the oracle's must-fail set, so a laxer rule here shows up as a
+    /// regression rather than as generosity.
+    ThrownValueIsNotAnException {
+        span: Span,
+        found: Type,
+    },
     /// A functional method that takes static parameters. 1.0 lifts a
     /// functional method into the top-level overload set of its name; a
     /// generic one needs the receiver's type to decide what to instantiate,
@@ -878,6 +887,7 @@ impl TypeError {
             | Self::ThreadValueNotRepresentable { span, .. }
             | Self::NotATrait { span, .. }
             | Self::UnknownField { span, .. }
+            | Self::ThrownValueIsNotAnException { span, .. }
             | Self::DottedMethodUnsupported { span, .. }
             | Self::CompoundAssignThroughSetter { span, .. }
             | Self::FieldIsImmutable { span, .. }
@@ -1272,6 +1282,12 @@ impl core::fmt::Display for TypeError {
                 "`{name}` is a setter, so `o.{name} := e` is a call; the \
                  compound form would have to read through the getter first and \
                  that is not implemented -- write the read out"
+            ),
+            Self::ThrownValueIsNotAnException { found, .. } => write!(
+                f,
+                "`throw` can only throw objects of Exception type, and this \
+                 expression is of type {}",
+                found.name()
             ),
             Self::GenericFunctionalMethodUnsupported { name, .. } => write!(
                 f,

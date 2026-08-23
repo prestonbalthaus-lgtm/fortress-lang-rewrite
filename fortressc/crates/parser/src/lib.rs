@@ -3600,6 +3600,21 @@ impl<'t, 'a> Parser<'t, 'a> {
             // identifier namespace, so it is intercepted here rather than
             // given a keyword token -- again, no lexer change.
             Kind::Reserved("atomic") => self.atomic_expr(),
+            // `throw e`. A PREFIX over a full expression, which is what the
+            // corpus writes: `throw NotFound`, `throw TestFailCalled(s)`,
+            // `throw KeyOverlap[\Key,Val\](pk,pv,cv)`. It stops where any
+            // expression stops, so `else throw E end` closes on the `end`.
+            Kind::Reserved("throw") => {
+                let start = self.span_here();
+                self.pos += 1;
+                self.skip_newlines();
+                let value = self.expr()?;
+                let span = Span::new(start.start, value.span().end);
+                Ok(Expr::Throw {
+                    value: Box::new(value),
+                    span,
+                })
+            }
             // Same trade as `for` and `atomic`: intercepted here rather than
             // given a keyword token, so no file in the corpus lexes
             // differently.

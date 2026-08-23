@@ -507,6 +507,8 @@ badctortie.fss|`Pair` is ambiguous for (Both, Both)
 badsingletoncall.fss|`Marker` is a singleton object; write `Marker`, not `Marker(...)`
 badselfvalue.fss|reserved word `Self` is not in the implemented subset
 badsettercompound.fss|is a setter, so `o.n := e` is a call
+badthrowscalar.fss|`throw` can only throw objects of Exception type, and this expression is of type ZZ32
+badthrownotexception.fss|and this expression is of type FooExn
 CASES
 
     # `badvaluebinding.fss` LEFT THIS LIST when component-level values landed,
@@ -688,6 +690,39 @@ implicit_builtin_import() {
     fi
 }
 
+# AN UNCAUGHT `throw` HALTS, and every throw is uncaught in this subset because
+# there is no `catch`. Three separate claims and each has its own assertion: the
+# work before the throw runs, the OPERAND runs (a throw is not a no-op that
+# skips its argument), and the halt NAMES the exception.
+throw_halts() {
+    printf '== an uncaught throw halts ==\n'
+    if ! "$fortressc" "$repo/fortressc/tests/throwhalts.fss" \
+            -o "$build/throwhalts" 2>"$build/throwhalts.err"; then
+        bad 'throwhalts.fss compiles' "$(cat "$build/throwhalts.err")"
+        return
+    fi
+    local out err status
+    out=$("$build/throwhalts" 2>"$build/throwhalts.run")
+    status=$?
+    err=$(cat "$build/throwhalts.run")
+    if [[ $status -eq 1 ]]; then
+        ok 'an uncaught throw exits 1'
+    else
+        bad 'an uncaught throw exits 1' "status $status"
+    fi
+    if [[ $out == "7"$'\n'"OPERAND RAN" ]]; then
+        ok 'the work before the throw ran, and so did the operand'
+    else
+        bad 'the work before the throw ran, and so did the operand' \
+            "stdout: $(printf '%s' "$out" | tr '\n' '/')"
+    fi
+    if [[ $err == *'uncaught exception NotFound'* ]]; then
+        ok 'the halt names the exception'
+    else
+        bad 'the halt names the exception' "stderr: $err"
+    fi
+}
+
 # ROW 5 OF `Compiled9.c.fss`'s COLLISION MATRIX. A top-level function may share
 # its name with a TRAIT (5-1) and with an OBJECT CONSTRUCTOR (5-3), and may not
 # with a SINGLETON object (5-2). The two acceptances are apis because a call is
@@ -713,6 +748,12 @@ CASES
 }
 
 MUTATIONS=(
+  # AN UNCAUGHT `throw` HALTS. Three axes: refuse it at the parser again, take
+  # away its bottom type so it cannot stand in value position, and stop the
+  # halt naming the exception.
+  'crates/parser/src/lib.rs|Kind::Reserved("throw") => {|Kind::Reserved("throwx") => {|refuse `throw` at the parser again'
+  'crates/types/src/lib.rs|let bottom = expected.unwrap_or(Type::Void);|let bottom = Type::Void;|take the bottom type away from a throw in value position'
+  'runtime/shims.c|fortress: uncaught exception %s|fortress: something happened %s|stop the halt naming the exception'
   # A DECLARED SETTER FIRES. Three axes: never route to it (the store goes
   # straight to the slot, which is the defect this closes), route to ANY dotted
   # method of the name (an ordinary `n(x: T)` must not capture `o.n := e`), and
@@ -837,7 +878,7 @@ PY
             rm -rf "$build"; mkdir -p "$build"
             passed=0; failed=0
             runs_and_prints; evaluated_once; implicit_builtin_import
-            collision_matrix; refusals
+            throw_halts; collision_matrix; refusals
             if [[ $failed -gt 0 ]]; then
                 printf 'REFUSED  %d check(s) failed, which is the point\n' "$failed"
             else
@@ -872,6 +913,7 @@ case "${1:-}" in
         runs_and_prints
         evaluated_once
         implicit_builtin_import
+        throw_halts
         collision_matrix
         refusals
         compile_metric

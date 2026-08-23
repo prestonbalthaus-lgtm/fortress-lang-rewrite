@@ -868,6 +868,13 @@ pub enum Expr {
         body: Box<Expr>,
         span: Span,
     },
+    /// `throw e`. An uncaught throw terminates the program, and in this
+    /// subset every throw is uncaught -- there is no `catch` yet -- so it
+    /// lowers to a halt naming the exception rather than to any unwinding.
+    Throw {
+        value: Box<Expr>,
+        span: Span,
+    },
     /// `x.f`. A field read, or -- under a glued `(` -- the receiver of a
     /// dotted method call, which the checker refuses.
     Field {
@@ -1109,6 +1116,7 @@ impl Expr {
             | Self::Tuple { span, .. }
             | Self::IntLit { span, .. }
             | Self::FloatLit { span, .. }
+            | Self::Throw { span, .. }
             | Self::StrLit { span, .. }
             | Self::CharLit { span, .. }
             | Self::BoolLit { span, .. }

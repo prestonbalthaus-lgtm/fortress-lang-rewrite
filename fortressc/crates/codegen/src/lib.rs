@@ -13,9 +13,9 @@ use fortress_types::{
     TypedReduction, TypedTypeCaseArm, ARRAY_ALLOC, ARRAY_ALLOC_N, ARRAY_LENGTH, ARRAY_SLOT,
     ARRAY_SLOT_N, ASSERT_FAILED, ATOMIC_ENTER, ATOMIC_LEAVE, CASE_FAILED, DISPATCH_FAILED,
     ENV_ALLOC, OBJECT_ALLOC, PARALLEL_FOR, REDUCTION_ALLOC, REDUCTION_WORKERS, SPAWN, THREAD_READY,
-    THREAD_STOP, THREAD_VAL, THREAD_WAIT,
+    THREAD_STOP, THREAD_VAL, THREAD_WAIT, THROW,
 };
-use inkwell::attributes::AttributeLoc;
+use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -382,6 +382,10 @@ impl<'ctx> Lowering<'ctx> {
             i64t.fn_type(&[ptr.into()], false),
             Some(Linkage::External),
         );
+        // `throw e` with nothing to catch it. It takes the exception's name and
+        // does not return, which is what lets the throw site emit `unreachable`
+        // instead of a value.
+
         self.module.add_function(
             ARRAY_SLOT,
             ptr.fn_type(&[ptr.into(), i64t.into()], false),
@@ -1070,6 +1074,34 @@ impl<'ctx> Lowering<'ctx> {
                     .build_global_string_ptr(value, "str")
                     .map_err(CodegenError::from_builder)?;
                 Ok(Some(global.as_pointer_value().into()))
+            }
+            // `throw e`. THE OPERAND IS EVALUATED FIRST -- `throw MakeExn(x)`
+            // runs `MakeExn` -- and only the RENDERING is static: the halt takes
+            // the exception's compile-time type name, because `asString` is a
+            // dotted method and the shim is C.
+            //
+            // NO `unreachable` IS EMITTED, and that is a correctness point rather
+            // than a simplification. A throw can sit in VALUE position -- `if c
+            // then x else throw E end` is the corpus's commonest shape -- and
+            // the branch it sits in still has to reach the merge block. Writing
+            // a terminator there gives "Terminator found in the middle of a
+            // basic block", which is what the first version did. The shim is
+            // `noreturn` instead, so LLVM prunes the dead edge itself and the
+            // poison below is never live.
+            TypedExprKind::Throw { exception, value } => {
+                self.operand(value)?;
+                let name = self
+                    .builder
+                    .build_global_string_ptr(exception, "exn")
+                    .map_err(CodegenError::from_builder)?;
+                self.declare_throw();
+                self.call_runtime(THROW, &[name.as_pointer_value().into()], false)?;
+                Ok(self.basic_type(e.ty).map(|t| match t {
+                    BasicTypeEnum::IntType(i) => i.get_poison().into(),
+                    BasicTypeEnum::FloatType(x) => x.get_poison().into(),
+                    BasicTypeEnum::PointerType(p) => p.get_poison().into(),
+                    other => other.const_zero(),
+                }))
             }
             TypedExprKind::Var(name) => self.read(name).map(Some),
             TypedExprKind::Apply { target, args } => self.apply(target, args, e.ty),
@@ -2470,6 +2502,35 @@ impl<'ctx> Lowering<'ctx> {
             )
             .map_err(CodegenError::from_builder)?;
         Ok(widened.into())
+    }
+
+    /// DECLARED ON DEMAND, and that is not tidiness. Every other runtime symbol
+    /// goes into the module header unconditionally, which is fine because they
+    /// predate the invariant; adding one more there renumbers LLVM's attribute
+    /// groups and every function in every module goes from `#0` to `#1`. The IR
+    /// of all 395 files that compile changes for a feature none of them uses,
+    /// and the byte-identical-IR check that guards this compiler stops meaning
+    /// anything. A module with no `throw` in it is untouched this way.
+    fn declare_throw(&mut self) {
+        if self.module.get_function(THROW).is_some() {
+            return;
+        }
+        let ptr = self.ptr();
+        let throw = self.module.add_function(
+            THROW,
+            self.context.void_type().fn_type(&[ptr.into()], false),
+            Some(Linkage::External),
+        );
+        // `noreturn` IS WHAT KEEPS THE CONTROL FLOW PREDICTABLE. The throw site
+        // emits a call and no terminator, because a throw in value position
+        // still sits inside a branch that has to reach its merge block; the
+        // attribute is how LLVM learns the edge is dead and prunes it, without
+        // this compiler having to invent a basic block per throw.
+        let noreturn = Attribute::get_named_enum_kind_id("noreturn");
+        throw.add_attribute(
+            AttributeLoc::Function,
+            self.context.create_enum_attribute(noreturn, 0),
+        );
     }
 
     fn call_runtime(

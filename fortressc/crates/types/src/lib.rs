@@ -30,7 +30,7 @@ pub use types::{
     TypedReduction, TypedTypeCaseArm, TypedValue, ARRAY_ALLOC, ARRAY_ALLOC_N, ARRAY_LENGTH,
     ARRAY_SLOT, ARRAY_SLOT_N, ASSERT_FAILED, ATOMIC_ENTER, ATOMIC_LEAVE, CASE_FAILED,
     DISPATCH_FAILED, ENV_ALLOC, FIRST_TAG, OBJECT_ALLOC, PARALLEL_FOR, REDUCTION_ALLOC,
-    REDUCTION_WORKERS, SPAWN, THREAD_READY, THREAD_STOP, THREAD_VAL, THREAD_WAIT,
+    REDUCTION_WORKERS, SPAWN, THREAD_READY, THREAD_STOP, THREAD_VAL, THREAD_WAIT, THROW,
 };
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -2851,6 +2851,50 @@ impl Checker {
                     span: *span,
                 })
             }
+            // `throw e`, AND IN THIS SUBSET EVERY THROW IS UNCAUGHT: there is
+            // no `catch`, so a throw terminates the program and lowers to a
+            // halt naming the exception. No unwinding, no landing pad, and no
+            // cost of any kind on the path that does not throw.
+            //
+            // IT TAKES THE TYPE ITS CONTEXT WANTS, which is this compiler's
+            // stand-in for the bottom type 1.0 gives it: a throw never returns,
+            // so `if c then 1 else throw E end` has to type, and `require` is
+            // the wrong instrument for a value that never exists. Nothing can
+            // observe the choice -- the call does not come back.
+            Expr::Throw { value, span } => {
+                let thrown = self.expr(value, None)?;
+                // 1.0'S RULE, AND THE ORACLE ENFORCES IT. `XXX9aa.test` records
+                // "`throw` can only throw objects of Exception type. This
+                // expression is of type FooExn." for a bare `object FooExn end`,
+                // so a laxer rule here is a must-fail acceptance and the ratchet
+                // goes red -- which is exactly how the first version of this was
+                // caught. Being a subtype of `Exception` also guarantees the
+                // NAME the halt prints, which a scalar would not have.
+                let exception = match thrown.ty {
+                    Type::Object(name) | Type::Trait(name)
+                        if self
+                            .registry
+                            .is_subtype(thrown.ty, Type::Trait(intern("Exception"))) =>
+                    {
+                        name.to_owned()
+                    }
+                    other => {
+                        return Err(TypeError::ThrownValueIsNotAnException {
+                            span: *span,
+                            found: other,
+                        })
+                    }
+                };
+                let bottom = expected.unwrap_or(Type::Void);
+                Ok(TypedExpr {
+                    kind: TypedExprKind::Throw {
+                        exception,
+                        value: Box::new(thrown),
+                    },
+                    ty: bottom,
+                    span: *span,
+                })
+            }
             Expr::Tuple { span, .. } => Err(TypeError::TypeNotImplemented {
                 span: *span,
                 form: "a tuple expression",
@@ -3562,6 +3606,7 @@ impl Checker {
                 self.reads_shared(lhs, floor) || self.reads_shared(rhs, floor)
             }
             Expr::Prefix { operand, .. } => self.reads_shared(operand, floor),
+            Expr::Throw { value, .. } => self.reads_shared(value, floor),
             Expr::Call { callee, args, .. } => {
                 self.reads_shared(callee, floor) || args.iter().any(|a| self.reads_shared(a, floor))
             }

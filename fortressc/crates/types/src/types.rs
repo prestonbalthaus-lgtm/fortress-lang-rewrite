@@ -509,6 +509,9 @@ pub const ATOMIC_LEAVE: &str = "fortress_atomic_leave";
 pub const REDUCTION_ALLOC: &str = "fortress_reduction_alloc";
 pub const REDUCTION_WORKERS: &str = "fortress_reduction_workers";
 
+/// `throw e` with nothing to catch it, which in this subset is every throw.
+/// The argument is the exception's STATIC type name.
+pub const THROW: &str = "fortress_throw";
 pub const ARRAY_ALLOC: &str = "fortress_array_alloc";
 pub const ARRAY_LENGTH: &str = "fortress_array_length";
 pub const ARRAY_SLOT: &str = "fortress_array_slot";
@@ -765,6 +768,17 @@ pub enum TypedExprKind {
     Block {
         items: Vec<TypedBlockItem>,
         tail: Option<Box<TypedExpr>>,
+    },
+    /// `throw e`. The value is evaluated for its effects and then the
+    /// program halts naming `exception`, the value's STATIC type.
+    ///
+    /// IT HAS THE TYPE ITS CONTEXT WANTS, which is this compiler's stand-in
+    /// for a bottom type: a throw never returns, so it may stand where any
+    /// type is required and codegen emits a poison value of that type after
+    /// the call. Nothing reads it -- the call does not return.
+    Throw {
+        exception: String,
+        value: Box<TypedExpr>,
     },
     ArrayLit {
         elem: Elem,
