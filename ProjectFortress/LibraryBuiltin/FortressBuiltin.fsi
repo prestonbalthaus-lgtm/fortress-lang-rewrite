@@ -83,6 +83,32 @@ value object NN32 extends { StandardTotalOrder[\NN32\], NN64 }
     opr |self| : NN32
     opr =(self, b:NN32):Boolean
     opr <(self, b:NN32):Boolean
+(* v1 SOURCE CORRECTION: three disambiguating declarations added.
+   This object already declares `=` and `<` at (NN32, NN32) and they resolve;
+   `>`, `<=` and `>=` were missed, and they are the SAME THREE the Comparison
+   hierarchy was missing in `Library/FortressLibrary.fsi:127`.
+   THE OBJECT INHERITS ONE GENERIC TRAIT AT AN INSTANTIATION AND A GROUND TRAIT
+   THAT DECLARES THE SAME OPERATOR:
+     NN32                        extends { StandardTotalOrder[\NN32\], NN64 }
+     StandardTotalOrder[\T\]      `CompilerAlgebra.fsi:18`   opr >(self, other:T)
+     NN64                        `CompilerBuiltin.fsi:338`  opr >(self, other:NN64)
+   so `>` arrives at NN32 twice, as (StandardTotalOrder[\NN32\], NN32) and as
+   (NN64, NN64). The SELF positions are unrelated -- a generic trait's static
+   argument is INVARIANT and NN64 is not one of its instantiations -- while the
+   second parameter runs the other way, NN32 below NN64. The two cross and
+   neither is most specific.
+   `advanced/overloading.tex:396-410`, the Meet Rule for Functional Methods:
+   "if there exists a trait or object C that provides both f(P) and f(Q) then
+   P /= Q and there is a declaration f(P INTER Q) provided by C". C is `NN32`
+   and P INTER Q is `(NN32, NN32)`. These three ARE that declaration.
+   `object IntLiteral` further down this same file is the precedent for the
+   shape: it writes all five of `<`, `<=`, `>`, `>=` and `CMP` at its own type.
+   `CMP` is NOT owed here -- `NN64` does not declare one, so nothing collides.
+   Nothing is widened and nothing is weakened in the compiler; the same rule
+   stands. *)
+    opr >(self, b:NN32):Boolean
+    opr <=(self, b:NN32):Boolean
+    opr >=(self, b:NN32):Boolean
     opr -(self):NN32
     opr +(self,b:NN32):NN32
     opr -(self,b:NN32):NN32

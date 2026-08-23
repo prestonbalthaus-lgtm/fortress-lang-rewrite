@@ -321,8 +321,17 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # comment to say so. Nothing lost. API_FLOOR MOVES TO 116 and the object floor
 # does not move, for the reason two entries above.
 #
+# THE NUMERIC HIERARCHY'S MEET RULE, 2026-08-23: 391 objects and 117 apis.
+# `ProjectFortress/LibraryBuiltin/FortressBuiltin.fsi`, and it is the same
+# defect the Comparison hierarchy had -- `value object NN32` inherits `>`, `<=`
+# and `>=` from `StandardTotalOrder[\NN32\]` and from `NN64` and declares
+# neither meet. Three `v1 SOURCE CORRECTION` declarations at (NN32, NN32).
+# THE API FLOOR IS THE RATCHET FOR A SOURCE CORRECTION: no mutation row can
+# reach corpus source, and the api floor sits at the measurement with no slack,
+# so reverting the three declarations takes the count below it.
+#
 OBJECT_FLOOR=321
-API_FLOOR=116
+API_FLOOR=117
 
 passed=0
 failed=0
