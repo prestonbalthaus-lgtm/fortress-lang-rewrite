@@ -667,6 +667,10 @@ impl<'a> Expander<'a> {
         let mut out = Vec::with_capacity(list.len());
         for p in list {
             out.push(Param {
+                // CARRIED, not defaulted. An object's value parameters ARE its
+                // fields, and dropping the flag here made `object O(var v: T)`
+                // parse and then report `v` immutable at the assignment.
+                mutable: p.mutable,
                 name: p.name.clone(),
                 ty: self.ty(&p.ty, subst)?,
                 varargs: p.varargs,

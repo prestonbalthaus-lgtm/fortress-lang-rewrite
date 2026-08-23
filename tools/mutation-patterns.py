@@ -35,11 +35,27 @@ for gate in sorted((repo / 'tools').glob('*-gate.sh')):
             continue
         if line[0] in "'\"" and line[-1] == line[0]:
             rows.append(line[1:-1])
+    # `IFS='|' read -r file from to label <<<"$entry"` -- the one that reads
+    # THIS table, which is the one naming a variable called `from`.
+    reader = re.search(r"IFS='\|' read -r ((?:\w+ )*from(?: \w+)*) <<<", text)
+    want = len(reader.group(1).split()) if reader else 4
     problems = []
     for row in rows:
         parts = row.split('|')
         if len(parts) < 2:
             problems.append(f'      UNPARSEABLE: {row[:60]}')
+            bad = 1
+            continue
+        # A ROW HAS EXACTLY AS MANY FIELDS AS THE GATE'S OWN `read` NAMES.
+        # `IFS='|' read -r file from to label` splits on EVERY bar, so a `||`
+        # inside a pattern silently shifts the replacement and the label into
+        # the wrong variables -- and the uniqueness check below would still
+        # pass, because the TRUNCATED pattern happens to match once. Recorded
+        # in 04-state.md as a gate-authoring trap; this is the instrument for
+        # it, and the field count is READ FROM THE GATE rather than assumed,
+        # because `control-flow-gate` carries a fifth column of its own.
+        if len(parts) != want:
+            problems.append(f'      {len(parts)} FIELDS, want {want}: {row[:70]!r}')
             bad = 1
             continue
         f, frm = parts[0], parts[1]

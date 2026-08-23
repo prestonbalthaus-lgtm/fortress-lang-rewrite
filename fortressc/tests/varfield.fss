@@ -1,0 +1,23 @@
+component varfield
+export Executable
+
+object Counter(var n: ZZ32, step: ZZ32)
+  var seen: ZZ32 := 0
+  total: ZZ32 := 100
+  tick(): ZZ32 = do
+    n := n + step
+    seen := seen + 1
+    total := total + step
+    n
+  end
+end
+
+run(): () = do
+  c = Counter(3, 4)
+  println(c.tick())
+  println(c.tick())
+  println(c.seen)
+  println(c.total)
+  println(c.step)
+end
+end

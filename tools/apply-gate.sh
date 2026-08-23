@@ -371,6 +371,13 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # and a construction of it left behind -- so no member body is rewritten and
 # codegen gains nothing. +7, nothing lost. The api count did not move: an api
 # has no bodies to write one in.
+# `var` VALUE PARAMETERS AND `:=` FIELD INITIALIZERS, 2026-08-23: 426 objects
+# and 126 apis. Two halves of `Variable.rats`: `AbsVarMod` is legal in an
+# OBJECT's parameter list, because an object's value parameters ARE its fields,
+# and `InitVal = ("=" / ":=")` makes `:=` a field initializer that also declares
+# the field mutable. +3, nothing lost. The flag has to survive monomorphization,
+# which rebuilt every `Param` and defaulted it -- the declaration parsed and the
+# assignment then reported the field immutable.
 OBJECT_FLOOR=321
 API_FLOOR=126
 
@@ -465,6 +472,7 @@ seqvoperator|true\nfalse|`===` reaches the overload set and is not a spelling of
 bigoperator|7\n42\n10|`BIG` folds into the operator NAME at the use site too
 conditionalops|false\ntrue\ntrue\nfalse|`AND:` and `OR:` are the conditional forms and SHORT CIRCUIT
 objectexpr|8\n100\n42|an anonymous `object` captures a local and gets a tag of its own
+varfield|7\n11\n2\n108\n4|a `var` value parameter and a `:=` field are BOTH assignable
 CASES
 }
 
@@ -539,6 +547,7 @@ badseqv.fss|unknown name `===`
 badbigand.fss|is not one of the reduction operators this lowering reaches
 badcomprehension.fss|comprehension parses and its lowering is not implemented
 badmutablecapture.fss|is mutable, and a closure captures it BY VALUE here
+badimmutableparam.fss|field `w` is immutable
 CASES
 
     # `badvaluebinding.fss` LEFT THIS LIST when component-level values landed,
@@ -893,6 +902,17 @@ MUTATIONS=(
   # BOTH hoists. Reading one compiled and printed the value at construction
   # time; 1.0 captures the cell. Zero corpus files, measured.
   'crates/types/src/closure.rs|                (t, true) => scope.declare_mutable(name, t),|                (_t, true) => scope.declare_opaque(name),|forget that a local was declared mutable, so a closure may copy it'
+  # AN OBJECT'S VALUE PARAMETERS ARE ITS FIELDS, so `var` belongs in ITS
+  # parameter list and nowhere else, and the flag has to survive
+  # monomorphization -- dropping it there made the declaration parse and the
+  # assignment report the field immutable.
+  'crates/parser/src/lib.rs|let params = self.params(true)?;|let params = self.params(false)?;|refuse `var` in an object parameter list again'
+  'crates/parser/src/lib.rs|let mutable = mutable_allowed && self.at(&Kind::KwVar);|let mutable = false;|read a `var` value parameter as immutable'
+  'crates/types/src/mono.rs|mutable: p.mutable,|mutable: false,|drop the mutable flag in monomorphization'
+  # AND `:=` IS A FIELD INITIALIZER, which is the other half of the same
+  # grammar rule. Refusing it, and taking it as immutable, are separate.
+  'crates/parser/src/lib.rs|let assigned = self.at_field_initializer();|let assigned = false;|refuse `:=` where a field initializer goes'
+  'crates/parser/src/lib.rs|            is_a_mutable_field = true;|            is_a_mutable_field = false;|read a `:=` field as immutable'
 )
 
 # FORTRESSC AND --mutate DO NOT MIX, and the failure is silent. Every mutation

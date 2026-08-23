@@ -195,6 +195,15 @@ exited 0, and 1.0 captures the cell. Measured at zero corpus files.
 `objectCC_mutVar1.fss` is 1.0's own test for the cell semantics and is still
 blocked earlier, on `object O(var v: ZZ32)`.
 
+**`var` VALUE PARAMETERS AND `:=` FIELD INITIALIZERS, LANDED 2026-08-23.** Two
+halves of one grammar rule. `AbsVarMod` is legal in an OBJECT's parameter list
+and nowhere else -- an object's value parameters ARE its fields -- and
+`InitVal = ("=" / ":=")` (`Variable.rats:37`) makes `:=` a field initializer
+that also declares the field mutable. 426 objects, 126 apis, oracle 350. The
+flag has to survive monomorphization: `mono::params` rebuilt every `Param` and
+defaulted it, so `object O(var v: ZZ32)` parsed and the assignment then reported
+`v` immutable. Five mutation rows, one per axis.
+
 **EXCEPTIONS, PARKED 2026-08-23.** `throw` is built -- an uncaught throw halts,
 naming the exception, with no unwinding and no cost on the path that does not
 throw -- and `try`/`catch`/`forbid`/`finally` PARSE and are refused by name. The

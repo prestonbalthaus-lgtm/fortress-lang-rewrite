@@ -1,0 +1,9 @@
+component badimmutableparam
+export Executable
+
+object O(w: ZZ32)
+  bump(): ZZ32 = do w := w + 1; w end
+end
+
+run(): () = println(O(3).bump())
+end

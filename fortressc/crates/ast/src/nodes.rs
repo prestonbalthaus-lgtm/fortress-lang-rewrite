@@ -397,6 +397,11 @@ pub struct Param {
     /// parameter is an ordinary one of type `T`, so a call with the wrong
     /// arity is refused rather than silently accepted.
     pub varargs: bool,
+    /// `object O(var v: ZZ32)`. A value parameter IS a field, so this decides
+    /// whether that field can be assigned. Legal ONLY in an object's parameter
+    /// list -- `Variable.rats:48-52` makes `var` an AbsVarMod and nothing else,
+    /// and a function parameter is not storage.
+    pub mutable: bool,
     pub span: Span,
 }
 

@@ -955,7 +955,7 @@ impl Checker {
             fields.push(TypedField {
                 name: p.name.clone(),
                 ty: self.storable(&p.ty, "a field")?,
-                mutable: false,
+                mutable: p.mutable,
             });
         }
         for member in &o.members {

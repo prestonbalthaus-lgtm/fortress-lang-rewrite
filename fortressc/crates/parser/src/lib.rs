@@ -1240,7 +1240,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         let mut static_params = self.static_params()?;
         let params = if self.at(&Kind::LParen) {
             self.pos += 1;
-            let params = self.params()?;
+            let params = self.params(true)?;
             self.expect(&Kind::RParen, "`)`")?;
             // `objects.tex:100` spells an object's varargs parameter
             // `transient Varargs`, so the bare form is a static error rather
@@ -1558,7 +1558,7 @@ impl<'t, 'a> Parser<'t, 'a> {
             let mut from = Vec::new();
             if self.at(&Kind::LParen) {
                 self.pos += 1;
-                for p in self.params()? {
+                for p in self.params(false)? {
                     from.push(p.ty);
                 }
                 if self.at(&Kind::RParen) {
@@ -1586,7 +1586,7 @@ impl<'t, 'a> Parser<'t, 'a> {
                 return Err(self.error("a field name after `var`"));
             }
             self.pos += 1;
-            let params = self.params()?;
+            let params = self.params(false)?;
             let rparen = self.expect(&Kind::RParen, "`)`")?.span;
             let return_type = self.optional_return_type()?;
             self.where_clause(&mut static_params)?;
@@ -1611,13 +1611,26 @@ impl<'t, 'a> Parser<'t, 'a> {
         self.expect(&Kind::Colon, "`:` or `(`")?;
         self.skip_newlines();
         let ty = self.type_ref()?;
-        let init = self.optional_definition()?;
+        // `InitVal = ("=" / ":=") w NoNewlineExpr` (`Variable.rats:37`), so a
+        // FIELD takes either spelling where a method body takes only `=`. The
+        // `:=` spelling also DECLARES the field mutable, the same rule
+        // `value_decl` already applies at component level.
+        let assigned = self.at_field_initializer();
+        let mut is_a_mutable_field = mutable;
+        let init = if assigned {
+            is_a_mutable_field = true;
+            self.pos += 1;
+            self.skip_newlines();
+            Some(self.expr()?)
+        } else {
+            self.optional_definition()?
+        };
         let end = init.as_ref().map_or_else(|| ty.span(), Expr::span);
         Ok(Member::Field(FieldDecl {
             name,
             ty,
             init,
-            mutable,
+            mutable: is_a_mutable_field,
             span: Span::new(name_span.start, end.end),
         }))
     }
@@ -1643,6 +1656,13 @@ impl<'t, 'a> Parser<'t, 'a> {
 
     /// `= e`, where the `=` may sit on the following line. Restores the
     /// position when there is none, so the separator the caller needs survives.
+    /// `:=` where a field's initializer goes. A NEWLINE MAY NOT PRECEDE IT:
+    /// `NoNewlineVarWTypes` binds the type to the name, and the next line of an
+    /// object body may itself open with an assignment statement.
+    fn at_field_initializer(&self) -> bool {
+        self.at(&Kind::ColonEq)
+    }
+
     fn optional_definition(&mut self) -> Parsed<Option<Expr>> {
         let save = self.pos;
         self.skip_newlines();
@@ -1768,7 +1788,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         let mut static_params = self.static_params()?;
         self.skip_newlines();
         self.expect(&Kind::LParen, "`(`")?;
-        let params = self.params()?;
+        let params = self.params(false)?;
         let rparen = self.expect(&Kind::RParen, "`)`")?.span;
 
         let return_type = self.optional_return_type()?;
@@ -1880,7 +1900,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         let mut params = Vec::new();
         if self.at(&Kind::LParen) {
             self.pos += 1;
-            params = self.params()?;
+            params = self.params(false)?;
             self.expect(&Kind::RParen, "`)`")?;
         }
 
@@ -1919,7 +1939,7 @@ impl<'t, 'a> Parser<'t, 'a> {
             self.at(&Kind::KwSelf) || matches!(self.peek_kind(), Some(Kind::Ident(_)));
         let mark = self.pos;
         let inner = if has_operand {
-            self.params()?
+            self.params(false)?
         } else {
             Vec::new()
         };
@@ -1952,7 +1972,7 @@ impl<'t, 'a> Parser<'t, 'a> {
                 self.skip_newlines();
                 let open_paren =
                     self.expect(&Kind::LParen, "`(` for the value of a subscript assignment")?;
-                let value = self.params()?;
+                let value = self.params(false)?;
                 let close_paren = self.expect(&Kind::RParen, "`)`")?;
                 // subscripting.tex:47-49 -- the second list "must contain
                 // exactly one non-keyword value parameter". It is the value
@@ -2034,7 +2054,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         let mut end;
         if params.is_empty() || self.at(&Kind::LParen) {
             self.expect(&Kind::LParen, "`(`")?;
-            params.extend(self.params()?);
+            params.extend(self.params(false)?);
             end = self.expect(&Kind::RParen, "`)`")?.span;
         } else {
             end = self.previous_span();
@@ -2124,7 +2144,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         Ok(())
     }
 
-    fn params(&mut self) -> Parsed<Vec<Param>> {
+    fn params(&mut self, mutable_allowed: bool) -> Parsed<Vec<Param>> {
         let mut params = Vec::new();
         self.skip_newlines();
         if self.at(&Kind::RParen) {
@@ -2141,6 +2161,7 @@ impl<'t, 'a> Parser<'t, 'a> {
                 let span = self.span_here();
                 self.pos += 1;
                 params.push(Param {
+                    mutable: false,
                     name: "self".to_owned(),
                     ty: TypeRef::Named {
                         name: SELF_TYPE_PLACEHOLDER.to_owned(),
@@ -2158,6 +2179,16 @@ impl<'t, 'a> Parser<'t, 'a> {
                 self.skip_newlines();
                 continue;
             }
+            // `var` here is a FIELD modifier, not a parameter one: an
+            // object's value parameters ARE its fields, so `object O(var v: T)`
+            // declares a mutable one. `Variable.rats:48-52` makes `var` an
+            // AbsVarMod and nothing else, which is why a FUNCTION's parameter
+            // list still refuses it at `identifier` -- a parameter is not
+            // storage and there would be nothing for the modifier to say.
+            let mutable = mutable_allowed && self.at(&Kind::KwVar);
+            if mutable {
+                self.pos += 1;
+            }
             let (name, name_span) = self.identifier("a parameter name")?;
             self.expect(&Kind::Colon, "`:`")?;
             let ty = self.type_ref()?;
@@ -2172,6 +2203,7 @@ impl<'t, 'a> Parser<'t, 'a> {
                 name,
                 ty,
                 varargs,
+                mutable,
                 span,
             });
             self.skip_newlines();
@@ -4622,6 +4654,7 @@ impl<'t, 'a> Parser<'t, 'a> {
                 // A lambda parameter is never varargs: `fn (xs...) => e` has no
                 // corpus witness and the arrow it would land in has no spelling.
                 varargs: false,
+                mutable: false,
                 span: name_span,
             });
         }
@@ -4632,6 +4665,7 @@ impl<'t, 'a> Parser<'t, 'a> {
             name,
             ty,
             varargs: false,
+            mutable: false,
             span,
         })
     }

@@ -167,6 +167,7 @@ fn apply_params(from: &TypeRef, name: &str, span: Span) -> Vec<Param> {
             .iter()
             .enumerate()
             .map(|(index, ty)| Param {
+                mutable: false,
                 name: format!("{name}${index}"),
                 ty: ty.clone(),
                 varargs: false,
@@ -174,6 +175,7 @@ fn apply_params(from: &TypeRef, name: &str, span: Span) -> Vec<Param> {
             })
             .collect(),
         _ => vec![Param {
+            mutable: false,
             name: name.to_owned(),
             ty: from.clone(),
             varargs: false,
@@ -574,6 +576,7 @@ impl Pass {
                 name,
                 ty,
                 varargs: false,
+                mutable: false,
                 span,
             });
         }
@@ -781,6 +784,7 @@ impl Pass {
                 name,
                 ty,
                 varargs: false,
+                mutable: false,
                 span,
             });
         }
@@ -810,6 +814,7 @@ impl Pass {
                     .as_ref()
                     .map(|p| {
                         vec![Param {
+                            mutable: false,
                             name: p.name.clone(),
                             ty: from.clone(),
                             varargs: false,
