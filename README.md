@@ -267,13 +267,32 @@ commentary:
 |---|---|---|---|
 | corpus files that LEX | 1845 of 1956 | 1845 | `crates/lexer/tests/corpus.rs` |
 | corpus files that PARSE | 839 | 839 | `crates/parser/tests/corpus.rs` |
-| `.fss` that compile and emit an object | 395 | 321 | `tools/apply-gate.sh` |
-| `.fsi` that check | 125 | 125 | `tools/apply-gate.sh` |
-| oracle cases that agree with 1.0 | 344 | 344 | `tools/oracle-gate.sh` |
+| `.fss` that compile and emit an object | 413 | 321 | `tools/apply-gate.sh` |
+| `.fsi` that check | 126 | 126 | `tools/apply-gate.sh` |
+| oracle cases that agree with 1.0 | 345 | 345 | `tools/oracle-gate.sh` |
 
 The headline metric is object emission plus api checking, split on purpose: an
 api emits no object, so one number stopped meaning one thing. Every compiling
-corpus file is also LINKED AND RUN under a signal sweep -- 402 binaries.
+corpus file is also LINKED AND RUN under a signal sweep -- 421 binaries.
+
+**THE MODULE SYSTEM REACHES COMPONENTS.** `source-code.tex:305` says every
+component implicitly imports the Fortress core APIs, and as of 2026-08-23 it
+does: a `.fss` resolves `Generator`, `Maybe`, `Number` and the rest with no
+written import. `unknown type` as a first blocker went from 93 corpus files to
+26. Four rules make it safe, each measured against the alternative:
+
+* a merged declaration LOSES to a builtin of the same name -- merging the
+  library's own `trait String` shadowed `Type::String` and `expected String,
+  found String` broke forty files;
+* a merged trait's supertype edge to a builtin is DROPPED, because a scalar has
+  no trait representation here and the edge could never have been honoured;
+* a merged functional method is NOT lifted into the importing component, for the
+  same reason an api's top-level functions are not merged -- they are
+  obligations the component must satisfy, not names it may use;
+* a merged object is lowered ONLY when this file names it and its layout is
+  buildable, and never if it is a singleton. Lowering all of them put eighty
+  library singletons into every program's `main` and took a hello world from
+  125 lines of IR to 205.
 
 Still missing: comprehensions, `at` and distributions, coercion (recorded but
 never applied), unit algebra above declaration, tuple VALUES, and user definable

@@ -137,6 +137,13 @@ build.
 
 **3. Names and modules.** Component and API resolution, imports, scoping.
 *Exit:* `Library/` resolves clean with no unresolved references.
+*Where it is, 2026-08-23:* the resolver merges an api's TYPES transitively, into
+apis and now into COMPONENTS as well -- `source-code.tex:305`'s implicit core
+import, both halves. `unknown type` as a first blocker fell from 93 corpus files
+to 26. What an api's FUNCTIONS and VALUES declare is still not merged, and is
+not meant to be: `source-code.tex:313-320` makes satisfying them the importing
+component's obligation. See
+`docs/superpowers/specs/2026-08-23-link-5-component-side-core-import.md`.
 
 **4. Types.** Traits, polymorphism and overload resolution. The legacy
 implementation never finished this, so the specification is the authority here,

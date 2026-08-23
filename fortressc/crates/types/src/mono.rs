@@ -120,6 +120,11 @@ struct Expander<'a> {
     /// Names of generic *dotted* methods, from the source. Needed at rewrite
     /// time, before any template has necessarily been registered.
     generic_methods: BTreeSet<String>,
+    /// Owners whose declaration was MERGED IN by the import resolver. A
+    /// merged template loses a stamp to a non-merged one of the same shape --
+    /// "the file's own declarations win", one pass earlier than the resolver
+    /// says it.
+    merged_owners: BTreeSet<String>,
     /// Which declaration `members` is currently expanding, so a generic method
     /// it meets can be filed under the owner it will be emitted into.
     owner: Option<OwnerKey>,
@@ -155,7 +160,16 @@ impl<'a> Expander<'a> {
         check_uniformity(component)?;
         let mut generic_functional = BTreeSet::new();
         let mut generic_methods = BTreeSet::new();
+        let mut merged_owners = BTreeSet::new();
         for decl in &component.decls {
+            let merged = match decl {
+                Decl::Trait(t) => t.merged,
+                Decl::Object(o) => o.merged,
+                Decl::Function(_) | Decl::Value(_) => false,
+            };
+            if merged {
+                merged_owners.insert(decl_name(decl).to_owned());
+            }
             for member in members_of(decl) {
                 let Member::Method(m) = member else { continue };
                 if m.accessor.is_some() || m.static_params.is_empty() {
@@ -176,6 +190,7 @@ impl<'a> Expander<'a> {
             demand: Vec::new(),
             generic_functional,
             generic_methods,
+            merged_owners,
             owner: None,
             owner_name: String::new(),
             current_owner: None,
@@ -230,14 +245,36 @@ impl<'a> Expander<'a> {
     /// code, and `MAX_INSTANTIATIONS` is what bounds the guessing.
     fn stamp_methods(&mut self) -> Result<bool, TypeError> {
         let mut work: Vec<((OwnerKey, usize), MethodRequest)> = Vec::new();
-        for (tkey, template) in &self.templates {
-            for request in self.method_demand.values() {
-                if template.decl.name != request.name
-                    || template.decl.static_params.len() != request.args.len()
-                    || template.decl.params.len() != request.value_arity
-                {
-                    continue;
-                }
+        for request in self.method_demand.values() {
+            let matches: Vec<&(OwnerKey, usize)> = self
+                .templates
+                .iter()
+                .filter(|(_, t)| {
+                    t.decl.name == request.name
+                        && t.decl.static_params.len() == request.args.len()
+                        && t.decl.params.len() == request.value_arity
+                })
+                .map(|(tkey, _)| tkey)
+                .collect();
+            // THE FILE'S OWN DECLARATION WINS, one pass before the resolver
+            // says it. A demand is matched on the method NAME and its two
+            // arities, so `G[\E\]`'s `generate[\R\](body, combine)` and the
+            // merged `Generator[\E\]`'s `generate[\R\](r, body)` are the same
+            // shape -- and stamping both put two live candidates in front of
+            // the checker, which then read `plus` at the WRONG arrow type.
+            // `Compiled17d.fss` is the witness and it self-checks: it prints
+            // the concatenation `34`.
+            let own: Vec<&(OwnerKey, usize)> = matches
+                .iter()
+                .copied()
+                .filter(|tkey| {
+                    self.templates
+                        .get(*tkey)
+                        .is_some_and(|t| !self.merged_owners.contains(&t.owner_name))
+                })
+                .collect();
+            let chosen = if own.is_empty() { matches } else { own };
+            for tkey in chosen {
                 let key = (tkey.0.clone(), tkey.1, request.mangled.clone());
                 if self.stamps.contains_key(&key) {
                     continue;
@@ -691,6 +728,9 @@ impl<'a> Expander<'a> {
                 span: f.span,
             }),
             Decl::Trait(t) => Decl::Trait(TraitDecl {
+                // A STAMP INHERITS ITS TEMPLATE'S PROVENANCE: an instance of a
+                // merged generic is merged too, and must not be lowered either.
+                merged: t.merged,
                 modifiers: t.modifiers,
                 name: rename.unwrap_or(&t.name).to_owned(),
                 static_params: Vec::new(),
@@ -702,6 +742,7 @@ impl<'a> Expander<'a> {
                 span: t.span,
             }),
             Decl::Object(o) => Decl::Object(ObjectDecl {
+                merged: o.merged,
                 modifiers: o.modifiers,
                 name: rename.unwrap_or(&o.name).to_owned(),
                 static_params: Vec::new(),

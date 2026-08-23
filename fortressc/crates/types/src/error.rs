@@ -470,6 +470,14 @@ pub enum TypeError {
         span: Span,
         found: Type,
     },
+    /// `O(...)` where `O` was MERGED IN by the import resolver. The api that
+    /// declared it gave a signature; the definition is in that api's own
+    /// component, which this whole-program compiler never compiles. Reaching
+    /// codegen with one produced `internal error: unknown function `O$new``.
+    MergedObjectNotConstructible {
+        span: Span,
+        name: String,
+    },
     /// A functional method that takes static parameters. 1.0 lifts a
     /// functional method into the top-level overload set of its name; a
     /// generic one needs the receiver's type to decide what to instantiate,
@@ -888,6 +896,7 @@ impl TypeError {
             | Self::NotATrait { span, .. }
             | Self::UnknownField { span, .. }
             | Self::ThrownValueIsNotAnException { span, .. }
+            | Self::MergedObjectNotConstructible { span, .. }
             | Self::DottedMethodUnsupported { span, .. }
             | Self::CompoundAssignThroughSetter { span, .. }
             | Self::FieldIsImmutable { span, .. }
@@ -1288,6 +1297,12 @@ impl core::fmt::Display for TypeError {
                 "`throw` can only throw objects of Exception type, and this \
                  expression is of type {}",
                 found.name()
+            ),
+            Self::MergedObjectNotConstructible { name, .. } => write!(
+                f,
+                "`{name}` comes from an imported api, which declares it and \
+                 does not define it; this compiler has no separate compilation, \
+                 so there is no constructor to call"
             ),
             Self::GenericFunctionalMethodUnsupported { name, .. } => write!(
                 f,

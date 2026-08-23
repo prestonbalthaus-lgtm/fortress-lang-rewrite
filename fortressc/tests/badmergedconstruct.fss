@@ -1,0 +1,15 @@
+component badmergedconstruct
+import UnstorableApi.{...}
+export Executable
+
+(* The NAME resolves -- `Marker` and `Pair` are both usable in a signature --
+   and CONSTRUCTING `Pair` does not: its field is a tuple, which this backend
+   cannot store, so the object was never lowered and there is no constructor. *)
+name(m: Marker): ZZ32 = 1
+
+run(): () = do
+    p = Pair(1)
+    println(1)
+end
+
+end

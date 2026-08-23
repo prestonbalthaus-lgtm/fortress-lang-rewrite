@@ -1,0 +1,6 @@
+component badmergedfunction
+export Executable
+
+run(): () = println(gcd(4, 6))
+
+end

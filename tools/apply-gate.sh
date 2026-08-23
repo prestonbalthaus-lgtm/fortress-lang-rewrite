@@ -352,9 +352,17 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # api that does not PARSE is `unreadable` to the resolver and merges nothing, so
 # `List.fsi`, `Map.fsi`, `Pairs.fsi`, `Set.fsi` and `System.fsi` each reported a
 # core type that is declared in the very file they could not read.
+# LINK 5, THE COMPONENT-SIDE IMPLICIT CORE IMPORT, 2026-08-23: 413 objects and
+# 126 apis. +20 gained, -1 lost. `unknown type` as a first blocker goes from 93
+# corpus files to 26. Four rules, each with a mutation row: a merged declaration
+# is MARKED (api-side only -- a component DEFINES and its objects keep their
+# constructors), a merged declaration whose name is a BUILTIN is skipped and its
+# supertype edges to builtins dropped, a merged functional method is NOT lifted
+# into the importing component, and a merged object is lowered only if its
+# layout is buildable.
 #
 OBJECT_FLOOR=321
-API_FLOOR=125
+API_FLOOR=126
 
 passed=0
 failed=0
@@ -509,6 +517,8 @@ badselfvalue.fss|reserved word `Self` is not in the implemented subset
 badsettercompound.fss|is a setter, so `o.n := e` is a call
 badthrowscalar.fss|`throw` can only throw objects of Exception type, and this expression is of type ZZ32
 badthrownotexception.fss|and this expression is of type FooExn
+badmergedfunction.fss|unknown name `gcd`
+badmergedconstruct.fss|comes from an imported api, which declares it and does not define it
 CASES
 
     # `badvaluebinding.fss` LEFT THIS LIST when component-level values landed,
@@ -618,15 +628,22 @@ implicit_builtin_import() {
         bad 'an api names `RR32` with no import written' "status $status: $err"
     fi
 
-    # AND THE COMPONENT HALF IS OUT. Without this the api case above passes
-    # whether the scope is api-only or universal.
-    err=$("$fortressc" "$repo/fortressc/tests/implicitbuiltin.fss" \
-            --emit-obj -o /dev/null 2>&1 >/dev/null)
-    status=$?
-    if refused_cleanly "$status" && [[ $err == *'unknown type `RR32`'* ]]; then
-        ok 'and a COMPONENT writing the same thing is still refused'
+    # AND THE COMPONENT HALF IS IN NOW, TYPES ONLY. Built and RUN, because the
+    # whole risk of the component half is that a merged declaration shadows a
+    # BUILTIN of the same name: the literal, the `String` and the `||` in this
+    # fixture all have to keep typing against the compiler's own.
+    if "$fortressc" "$repo/fortressc/tests/implicitbuiltin.fss" \
+            -o "$build/implicitbuiltin" 2>"$build/implicitbuiltin.err"; then
+        out=$("$build/implicitbuiltin" 2>&1)
+        if [[ $out == "7"$'\n'"still a String" ]]; then
+            ok 'a COMPONENT gets the core apis, and the BUILTIN keeps its name'
+        else
+            bad 'a COMPONENT gets the core apis, and the BUILTIN keeps its name' \
+                "$(printf '%s' "$out" | tr '\n' '/')"
+        fi
     else
-        bad 'and a COMPONENT writing the same thing is still refused' "status $status: $err"
+        bad 'implicitbuiltin.fss compiles' \
+            "$(grep -v '^fortressc: ' "$build/implicitbuiltin.err" | head -1)"
     fi
 
     # NOT INTO THE BUILTIN ITSELF. Observable in the count the driver prints:
@@ -807,11 +824,15 @@ MUTATIONS=(
   'crates/parser/src/lib.rs|let parenthesised_list = self.at(&Kind::LParen);|let parenthesised_list = false;|stop refusing a parenthesised variable list by name'
   'crates/parser/src/lib.rs|_ if modifier && ty.is_some() => {|_ if false => {|stop refusing a local `var` with no initializer by name'
   'crates/types/src/lib.rs|if self.lookup(name).is_some() {|if false {|drop the shadowing guard on a function element'
-  # THE IMPLICIT BUILTIN IMPORT, four axes. Its SCOPE is two decisions -- api
-  # rather than component, and not the builtin itself -- and the two defects it
-  # exposed are two more. Every target line is bar-free on purpose.
-  'crates/driver/src/resolve.rs|if !component.is_api {|if true {|never implicitly import the builtins'
-  'crates/driver/src/resolve.rs|if !component.is_api {|if false {|implicitly import the builtins into COMPONENTS too'
+  # LINK 5, five axes. The old pair of rows here toggled a component-side
+  # early return that no longer exists: the component half is IN, and what
+  # holds it up is which declarations are marked, which are skipped, which
+  # are lifted and which are lowered.
+  'crates/driver/src/resolve.rs|            if from_api {|            if false {|stop marking an api declaration as merged, so all of them are lowered'
+  'crates/driver/src/resolve.rs|            if from_api && !component.is_api {|            if false && !component.is_api {|let a merged declaration shadow the builtin of its own name'
+  'crates/types/src/lib.rs|            if merged_decl(decl) && !component.is_api {|            if false {|lift a merged functional method into the importing component'
+  'crates/types/src/lib.rs|            if info.merged {|            if false {|give an unlowerable merged object a constructor anyway'
+  'crates/types/src/lib.rs|            let merged_names_are_not_ours = merged_decl(decl) && !component.is_api;|            let merged_names_are_not_ours = false;|let a merged accessor name capture a method the importing file declares'
   # RETARGETED 2026-08-23: the guard is per-name now, and it is a `break` --
   # a core api takes the ones BELOW it and no more. Dropping it lets the
   # builtin implicitly import itself AND the layer above it.

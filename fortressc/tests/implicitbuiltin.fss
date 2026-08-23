@@ -1,12 +1,19 @@
 component implicitbuiltin
 export Executable
 
-(* THE COMPONENT HALF IS ARCHITECTURALLY OUT and this is the fixture that says
-   so. A merged OBJECT takes a 32-bit type tag, which shifts every dispatch
-   table built after it, and a merged SINGLETON is CONSTRUCTED in `main`. So
-   `RR32` is still unknown here. *)
-narrow(x: RR64): RR32 = 0.0
+(* THE COMPONENT HALF IS IN, AND IT IS TYPES ONLY. `RR32` and `Maybe` come from
+   the core apis with no written import, and the BUILTIN still wins its own
+   name: the literal, the string and `println` below all type against the
+   compiler's `ZZ32`/`String`, not against the library's declarations of them. *)
+widen32(x: RR32): RR64 = 0.0
 
-run(): () = println(1)
+hold(m: Maybe[\ZZ32\]): ZZ32 = 1
+
+count(n: ZZ32, s: String): ZZ32 = n
+
+run(): () = do
+    println(count(7, "ok"))
+    println("still a " || "String")
+end
 
 end

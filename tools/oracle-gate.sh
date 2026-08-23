@@ -320,7 +320,9 @@ RUN_TIMEOUT     = 20
 # apis -- refuses `Compiled2.f`, `Compiled10.q` and `Compiled10.s`, which are
 # three must-fails that had been accepted for as long as nothing called the
 # set. `Compiled2.f` is the specification's own Meet Rule example.
-PASS_FLOOR = 344
+# LINK 5, 2026-08-23: 345. The component-side implicit core import took the
+# pass count up by one and the binaries built and RUN from 402 to 421.
+PASS_FLOOR = 345
 
 args, opt = sys.argv[1:], {}
 i = 0

@@ -25,6 +25,10 @@ pub(crate) struct ObjectInfo {
     pub(crate) fields: Vec<TypedField>,
     pub(crate) param_count: usize,
     pub(crate) singleton: bool,
+    /// Merged in by the import resolver. Its NAME resolves and it has a tag and
+    /// a place in the hierarchy; it has no layout and no constructor, because
+    /// the api that declared it described neither.
+    pub(crate) merged: bool,
 }
 
 #[derive(Debug, Default)]
@@ -51,6 +55,10 @@ impl Registry {
     /// `Compiled9.c.fss`'s collision matrix from row 3.
     pub(crate) fn is_singleton(&self, name: &str) -> bool {
         self.objects.get(name).is_some_and(|o| o.singleton)
+    }
+
+    pub(crate) fn is_merged(&self, name: &str) -> bool {
+        self.objects.get(name).is_some_and(|o| o.merged)
     }
 
     /// Reflexive subtyping over the closed hierarchy. Scalars are unrelated to

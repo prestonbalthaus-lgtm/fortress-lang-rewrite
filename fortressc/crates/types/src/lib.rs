@@ -28,9 +28,10 @@ pub use types::{
     Elem, MpiOp, Target, ThreadOp, Type, TypedBinding, TypedBlockItem, TypedCapture,
     TypedComponent, TypedExpr, TypedExprKind, TypedField, TypedFn, TypedObject, TypedParam,
     TypedReduction, TypedTypeCaseArm, TypedValue, ARRAY_ALLOC, ARRAY_ALLOC_N, ARRAY_LENGTH,
-    ARRAY_SLOT, ARRAY_SLOT_N, ASSERT_FAILED, ATOMIC_ENTER, ATOMIC_LEAVE, CASE_FAILED,
-    DISPATCH_FAILED, ENV_ALLOC, FIRST_TAG, OBJECT_ALLOC, PARALLEL_FOR, REDUCTION_ALLOC,
-    REDUCTION_WORKERS, SPAWN, THREAD_READY, THREAD_STOP, THREAD_VAL, THREAD_WAIT, THROW,
+    ARRAY_SLOT, ARRAY_SLOT_N, ASSERT_FAILED, ATOMIC_ENTER, ATOMIC_LEAVE, BUILTIN_TYPE_NAMES,
+    CASE_FAILED, DISPATCH_FAILED, ENV_ALLOC, FIRST_TAG, OBJECT_ALLOC, PARALLEL_FOR,
+    REDUCTION_ALLOC, REDUCTION_WORKERS, SPAWN, THREAD_READY, THREAD_STOP, THREAD_VAL, THREAD_WAIT,
+    THROW,
 };
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -382,6 +383,50 @@ fn is_functional(m: &MethodDecl) -> bool {
 /// and functional methods are ONE overload set, so the count has to span both:
 /// counting only the top-level ones gave two members one symbol, and codegen
 /// defined the second against the first's declaration.
+/// Every name the file's OWN declarations mention in an expression.
+///
+/// Conservative and syntactic, which is the right side to err on: a name that
+/// only appears as a callee is collected too, and a merged object is lowered on
+/// the strength of being MENTIONED rather than of being constructed. A false
+/// positive costs one unused layout; a false negative is `unknown function
+/// `O$new`` out of codegen.
+fn demanded_names(component: &Component) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    let mut bound: Vec<BTreeSet<String>> = Vec::new();
+    for decl in &component.decls {
+        if merged_decl(decl) {
+            continue;
+        }
+        let mut bodies: Vec<&Expr> = Vec::new();
+        match decl {
+            Decl::Function(f) => bodies.extend(f.body.iter()),
+            Decl::Value(v) => bodies.extend(v.init.iter()),
+            Decl::Trait(_) | Decl::Object(_) => {}
+        }
+        for member in members_of(decl) {
+            match member {
+                Member::Method(m) => bodies.extend(m.body.iter()),
+                Member::Field(f) => bodies.extend(f.init.iter()),
+                Member::Coercion { .. } => {}
+            }
+        }
+        for body in bodies {
+            closure::free_names(body, &mut bound, &mut out);
+        }
+    }
+    out
+}
+
+/// Whether a declaration was merged in by the import resolver rather than
+/// written in the file being compiled.
+fn merged_decl(decl: &Decl) -> bool {
+    match decl {
+        Decl::Trait(t) => t.merged,
+        Decl::Object(o) => o.merged,
+        Decl::Function(_) | Decl::Value(_) => false,
+    }
+}
+
 fn overload_counts(component: &Component) -> HashMap<String, usize> {
     let mut counts: HashMap<String, usize> = HashMap::new();
     for decl in &component.decls {
@@ -635,6 +680,11 @@ impl Checker {
                             fields: Vec::new(),
                             param_count: o.params.as_ref().map_or(0, Vec::len),
                             singleton: o.params.is_none(),
+                            // Set LATER, at the emission decision: what this
+                            // flag means to the checker is NOT LOWERED, and
+                            // whether a merged object is lowered depends on its
+                            // layout rather than on where it came from.
+                            merged: false,
                         },
                     );
                 }
@@ -671,6 +721,65 @@ impl Checker {
         };
         let counts = overload_counts(component);
         checker.build_hierarchy(component)?;
+        // A MERGED OBJECT IS NEVER LOWERED, decided ONCE and here because three
+        // places need the same answer: the constructor overload set, the
+        // `construct` path, and the emission loop in `run`.
+        //
+        // LOWERING THEM WAS TRIED AND MEASURED AND IT IS WORSE THAN THE FILES IT
+        // BUYS. An api's `object O(s: String)` does carry a layout, so a
+        // constructor CAN be synthesised -- but then every component emits the
+        // whole core library's objects, takes a tag for each, and CONSTRUCTS
+        // EVERY LIBRARY SINGLETON IN ITS OWN `main`. generics-gate's ordering
+        // assertion caught it in one run: eighty library singletons ahead of the
+        // file's own two objects. That is the tag-and-singleton objection the
+        // component half was banned for, and it is still true.
+        //
+        // THE COST IS ONE FILE AND IT IS NAMED: `compiler_regressions/
+        // object_from_diff_component.fss` constructs an object it imported and
+        // is refused now. Its own comment calls cross-component construction
+        // "THE REGRESSION" -- it worked because a constructor was synthesised
+        // from the api's declaration, and the object that came out had the
+        // fields and NONE of the methods, because an api's members are
+        // bodiless. A whole-program compiler with no separate compilation
+        // cannot construct what it never compiled, and saying so is better than
+        // handing back a half-built object.
+        // WHAT THIS FILE ACTUALLY NAMES. A merged object is lowered ON DEMAND,
+        // and without this every component carries the core library's object
+        // layouts and constructors: a hello world went from 125 lines of IR to
+        // 205, with nine object types and nine constructors it never calls.
+        let demanded = demanded_names(component);
+        for decl in &component.decls {
+            let Decl::Object(o) = decl else { continue };
+            if !o.merged {
+                continue;
+            }
+            let name = intern(&o.name);
+            // A MERGED SINGLETON IS NEVER LOWERED, and a merged CONSTRUCTOR is
+            // lowered when this file NAMES it and its layout is buildable.
+            // Three conditions, three separate costs:
+            //
+            // A SINGLETON IS CONSTRUCTED IN `main`. Lowering the merged ones put
+            // eighty library singletons into every program's startup and ahead
+            // of the file's own objects -- generics-gate's ordering assertion
+            // caught it in one run. That is the objection the component half
+            // was banned for and it is still true.
+            //
+            // A CONSTRUCTOR IS NOT. An api's `object O(s: String)` carries its
+            // value parameters, which IS a layout, and nothing is emitted into
+            // `main` for it -- which is what keeps `compiler_regressions/
+            // object_from_diff_component.fss` working, a file whose own comment
+            // calls cross-component construction the thing it exists to assert.
+            // An api may still declare a field this backend cannot store, and
+            // that object has no layout at all: `field `x` has no storage type`
+            // out of codegen, 394 files' worth.
+            let lowerable = demanded.contains(o.name.as_str())
+                && checker.registry.objects.get(name).is_some_and(|info| {
+                    !info.singleton && info.fields.iter().all(|f| f.ty.has_storage())
+                });
+            if let Some(info) = checker.registry.objects.get_mut(name) {
+                info.merged = !lowerable;
+            }
+        }
         checker.build_signatures(component, &counts)?;
         checker.build_functional_signatures(component, &counts)?;
         checker.build_method_signatures(component)?;
@@ -901,8 +1010,17 @@ impl Checker {
                 // A value has no members to walk.
                 Decl::Function(_) | Decl::Value(_) => continue,
             };
+            // A MERGED DECLARATION'S ACCESSOR NAMES ARE NOT THE IMPORTER'S.
+            // `accessors` is a set of NAMES with no owner, so a merged trait
+            // declaring `getter id()` made every `o.id()` in the importing file
+            // an error -- measured on `objectTest3.fss` and `Compiled260.fss`,
+            // which call their OWN dotted methods of those names.
+            let merged_names_are_not_ours = merged_decl(decl) && !component.is_api;
             for member in members {
                 let Member::Method(m) = member else { continue };
+                if merged_names_are_not_ours {
+                    continue;
+                }
                 match m.accessor {
                     Some(Accessor::Getter) => {
                         self.accessors.insert(m.name.clone());
@@ -1030,6 +1148,22 @@ impl Checker {
         counts: &HashMap<String, usize>,
     ) -> Checked<()> {
         for decl in &component.decls {
+            // A MERGED TRAIT'S FUNCTIONAL METHODS ARE NOT LIFTED INTO A
+            // COMPONENT, and it is the resolver's own rule one level down.
+            // `traits.tex:484-494` makes a functional method a TOP-LEVEL
+            // declaration, and the resolver refuses to merge an api's top-level
+            // functions precisely because those are obligations the importer
+            // must SATISFY rather than names it may use. Lifting them here
+            // merges a function by the back door.
+            //
+            // MEASURED: without this, twenty-four files stop on
+            // `expected FlatString, found String` at `println("U" || x)`. `||`
+            // is the one builtin a user declaration beats -- deliberately,
+            // because it is an ordinary library operator -- and a MERGED
+            // declaration was beating it too, which is not the same thing.
+            if merged_decl(decl) && !component.is_api {
+                continue;
+            }
             let owner = match decl {
                 Decl::Trait(t) => intern(&t.name),
                 Decl::Object(o) => intern(&o.name),
@@ -1312,6 +1446,14 @@ impl Checker {
             if info.singleton {
                 continue;
             }
+            // NOT LOWERED, SO THERE IS NO SYMBOL TO CALL. Without this the
+            // constructor enters the overload set, `Pair(1)` routes to
+            // `user_call` instead of `construct`, and the diagnostic blames the
+            // ARGUMENT -- "an integer literal cannot be used where (ZZ32, ZZ32)
+            // is required" -- for an object that has no constructor at all.
+            if info.merged {
+                continue;
+            }
             let params: Vec<Type> = info
                 .fields
                 .iter()
@@ -1383,9 +1525,32 @@ impl Checker {
         // They go in the BOTTOM scope frame and are never popped.
         let values = self.component_values(component)?;
 
+        // A MERGED OBJECT IS LOWERED ONLY IF ITS LAYOUT IS BUILDABLE, and the
+        // two halves of that are both measured rather than chosen.
+        //
+        // LOWERING ALL OF THEM was what the component-side core import used to
+        // do, and it is why `ProjectFortress/compiler_regressions/
+        // object_from_diff_component.fss` works: an api's `object O(s: String)`
+        // carries its value parameters, which IS a layout, so the constructor
+        // can be synthesised from the declaration alone.
+        //
+        // LOWERING NONE OF THEM breaks that file with `unknown function `O$new``
+        // -- and lowering all of them breaks 394 others with `field `x` has no
+        // storage type`, because an api may declare a field whose type this
+        // backend cannot store: a `()` or a tuple.
+        //
+        // So the line is the layout. An object whose fields all have a
+        // representation is emitted and constructible; one that has a field
+        // this backend cannot store is not emitted, and CONSTRUCTING it is
+        // refused by name rather than handed to codegen. Either way its NAME
+        // resolves, because the registry entry, the tag and the hierarchy were
+        // built long before this point.
         let mut objects = Vec::new();
         for decl in &component.decls {
             if let Decl::Object(o) = decl {
+                if self.registry.is_merged(intern(&o.name)) {
+                    continue;
+                }
                 objects.push(self.object(o)?);
             }
         }
@@ -5003,6 +5168,23 @@ impl Checker {
         if self.object_init {
             return Err(TypeError::SingletonInitializerRestricted {
                 span,
+                name: name.to_owned(),
+            });
+        }
+        // ABOVE THE ARGUMENTS, because the reason is the OBJECT and not the
+        // call. Below them, a `Pair(1)` whose field is a tuple reports `an
+        // integer literal cannot be used where (ZZ32, ZZ32) is required` --
+        // true, and about the wrong thing: there is no constructor to call at
+        // any argument.
+        //
+        // A MERGED OBJECT THIS BACKEND COULD NOT LAY OUT HAS NO CONSTRUCTOR.
+        // The api declared a field whose type has no storage here, so the
+        // object was not lowered; reaching codegen with one came back `internal
+        // error: unknown function `O$new``, a link failure wearing a
+        // diagnostic's clothes.
+        if self.registry.is_merged(interned) {
+            return Err(TypeError::MergedObjectNotConstructible {
+                span: callee_span,
                 name: name.to_owned(),
             });
         }

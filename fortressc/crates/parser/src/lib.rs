@@ -1217,6 +1217,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         let members = self.members()?;
         let end = self.named_end(&Kind::KwTrait, &name)?;
         Ok(TraitDecl {
+            merged: false,
             modifiers,
             name,
             static_params,
@@ -1261,6 +1262,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         let members = self.members()?;
         let end = self.named_end(&Kind::KwObject, &name)?;
         Ok(ObjectDecl {
+            merged: false,
             modifiers,
             name,
             static_params,

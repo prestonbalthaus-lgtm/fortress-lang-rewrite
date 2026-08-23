@@ -274,7 +274,17 @@ import CompilerSystem.args       (* what most programs do instead: 15 files *) [
 
 ### Imports
 
-The `.` before `{` is part of the import syntax, not a field access. fortressc parses the brace group as a balanced token run and DISCARDS it: there is no module system yet, so an import compiles and has no effect. [fortressc]  ⚠ 2026-08-23: THERE IS A MODULE SYSTEM NOW. An import resolves apis off the source path -- the driver prints `resolved N api(s)` and names what it could not find -- and an imported TYPE is genuinely visible: with a `Shapes.fsi` declaring `trait Shape end`, `object Circle extends Shape end` compiles with the import and gives `unknown type `Shape`` without it. `.fsi` files are first-class and 125 corpus apis check. Only an api's TRAITS and OBJECTS merge; its function and value declarations are the importer's obligation, not its scope.
+The `.` before `{` is part of the import syntax, not a field access. fortressc parses the brace group as a balanced token run and DISCARDS it: there is no module system yet, so an import compiles and has no effect. [fortressc]  ⚠ 2026-08-23 (later): AND A COMPONENT GETS THE CORE APIS WITH NO WRITTEN IMPORT.
+`Generator`, `Maybe`, `Number` and the rest of `FortressLibrary`/`CompilerBuiltin`
+resolve in a `.fss` that imports nothing. TYPES only -- an api's functions and
+values are obligations the component must satisfy, so `gcd(4, 6)` is still
+`unknown name` -- and a merged declaration LOSES to a builtin of the same name,
+so the library's own `trait String` does not shadow `Type::String`. An object
+that came from an api can be named in a signature; CONSTRUCTING one is refused
+unless this file names it and its layout is buildable, and never if it is a
+singleton.
+
+⚠ 2026-08-23: THERE IS A MODULE SYSTEM NOW. An import resolves apis off the source path -- the driver prints `resolved N api(s)` and names what it could not find -- and an imported TYPE is genuinely visible: with a `Shapes.fsi` declaring `trait Shape end`, `object Circle extends Shape end` compiles with the import and gives `unknown type `Shape`` without it. `.fsi` files are first-class and 125 corpus apis check. Only an api's TRAITS and OBJECTS merge; its function and value declarations are the importer's obligation, not its scope.
 
 ```fortress
 import List.{...}                (* import every exported name - the dominant form *)

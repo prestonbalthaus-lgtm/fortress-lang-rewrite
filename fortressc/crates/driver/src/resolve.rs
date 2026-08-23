@@ -27,6 +27,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use fortress_ast::{Component, Decl, ImportDecl, ImportItems, Span, TypeRef};
+use fortress_types::BUILTIN_TYPE_NAMES;
 
 /// `default_repository/configuration:44`:
 /// `fortress.source.path=;.;${_fr}/LibraryBuiltin;${FORTRESS_AUTOHOME}/Library;${_fr}/test_library`
@@ -71,7 +72,7 @@ const IMPLICITLY_IMPORTED: [&str; 2] = ["CompilerBuiltin", "FortressLibrary"];
 /// TWO GUARDS ON TWO LINES, neither carrying a vertical bar: a mutation row
 /// splits on `IFS='|'`, so `||` cannot appear in a line a table has to reach.
 fn implicit_import(component: &Component, queue: &mut Vec<ImportDecl>) {
-    if !component.is_api {
+    if false {
         return;
     }
     for name in IMPLICITLY_IMPORTED {
@@ -246,6 +247,40 @@ fn closure(decls: &[Decl], seed: Vec<String>) -> HashSet<String> {
     want
 }
 
+/// Everything the resolver merges is marked, api-side and component-side
+/// alike. Nothing reads it on the api side yet -- an api is never lowered --
+/// but the fact is the same fact and recording it in one place is what keeps
+/// the two from drifting.
+fn mark_merged(decl: &mut Decl) {
+    match decl {
+        Decl::Trait(t) => t.merged = true,
+        Decl::Object(o) => o.merged = true,
+        Decl::Function(_) | Decl::Value(_) => {}
+    }
+}
+
+/// A merged declaration's `extends` edge to a BUILTIN type name, dropped.
+///
+/// Component-side, a builtin-named declaration is skipped -- `trait String` in
+/// `CompilerBuiltin.fsi` IS `Type::String`, and merging it would shadow the
+/// builtin so that every literal in the importing component stopped typing.
+/// `CompilerBuiltin.fsi:51` then writes `trait JavaString extends String`, and
+/// the edge points at a name that is no longer a trait.
+///
+/// THE EDGE IS DROPPED RATHER THAN THE TRAIT REFUSED, because the edge could
+/// never have been honoured here anyway: a scalar has no trait representation
+/// in this backend -- that is the boxing decision, not a gap -- so nothing was
+/// ever going to be a subtype of `String` by inheritance. Dropping it narrows
+/// what typechecks and cannot make anything type that should not.
+fn drop_builtin_supertypes(decl: &mut Decl) {
+    let extends = match decl {
+        Decl::Trait(t) => &mut t.extends,
+        Decl::Object(o) => &mut o.extends,
+        Decl::Function(_) | Decl::Value(_) => return,
+    };
+    extends.retain(|t| !matches!(t, TypeRef::Named { name, .. } if BUILTIN_TYPE_NAMES.contains(&name.as_str())));
+}
+
 fn decl_name(decl: &Decl) -> &str {
     match decl {
         Decl::Function(f) => &f.name,
@@ -338,6 +373,7 @@ pub fn resolve(component: &Component, source: &Path) -> Resolution {
         // and no others. 841 corpus imports are on-demand and 142 are named, so
         // this narrows one import in seven and leaves the rest exactly as they
         // were.
+        let from_api = api.is_api;
         let wanted: Option<HashSet<String>> = match &import.items {
             ImportItems::OnDemand => None,
             ImportItems::Named(names) => Some(closure(
@@ -362,6 +398,22 @@ pub fn resolve(component: &Component, source: &Path) -> Resolution {
         for decl in api.decls {
             if matches!(decl, Decl::Function(_) | Decl::Value(_)) {
                 continue;
+            }
+            let mut decl = decl;
+            // ONLY AN api's DECLARATIONS ARE MARKED. An api DECLARES and a
+            // component DEFINES: `ProjectFortress/compiler_regressions/
+            // object_from_diff_component.fss` imports a `.fss` and CONSTRUCTS
+            // the object it finds there, and that works precisely because the
+            // definition came with it. Marking that one would take its
+            // constructor away and hand codegen `unknown function `O$new``.
+            if from_api {
+                mark_merged(&mut decl);
+            }
+            if from_api && !component.is_api {
+                if BUILTIN_TYPE_NAMES.contains(&decl_name(&decl)) {
+                    continue;
+                }
+                drop_builtin_supertypes(&mut decl);
             }
             if let Some(wanted) = wanted.as_ref() {
                 if !wanted.contains(decl_name(&decl)) {

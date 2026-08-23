@@ -4446,9 +4446,17 @@ fn the_source_path_order_decides_which_of_a_duplicated_api_is_meant() {
 fn an_unresolvable_api_is_reported_rather_than_fatal() {
     let out = resolve_output("ProjectFortress/compiler_tests/RecursiveApiTest3a.fss");
     let message = String::from_utf8_lossy(&out.stderr);
+    // THE COUNT MOVED WHEN LINK 5 LANDED and the assertion is deliberately not
+    // pinned to it any more: a COMPONENT gets the core apis implicitly now, so
+    // this file resolves the two it writes plus everything the core drags in.
+    // What the test is for is that resolution REPORTS rather than dies.
     assert!(
-        message.contains("resolved 2 api(s)"),
+        message.contains("resolved ") && message.contains(" api(s)"),
         "resolution reports what it loaded:\n{message}"
+    );
+    assert!(
+        !message.contains("internal error"),
+        "and never as an internal error:\n{message}"
     );
     // `Library/GeneratorLibrary.fsi` imports `CompilerAlgebra` and four others;
     // whatever is not on the source path is NAMED rather than being fatal.
@@ -4593,7 +4601,7 @@ fn the_builtin_type_names_agree_across_the_passes() {
     )
     .expect("types.rs");
     assert!(
-        src.contains("pub(crate) const BUILTIN_TYPE_NAMES: [&str; 9]"),
+        src.contains("pub const BUILTIN_TYPE_NAMES: [&str; 9]"),
         "the shared list is what stops a fourth one being written"
     );
     for other in ["closure.rs", "mono.rs"] {

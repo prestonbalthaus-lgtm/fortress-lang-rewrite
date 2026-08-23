@@ -257,9 +257,17 @@ impl Pass {
         // argument went unlifted.
         for decl in &decls {
             match decl {
-                Decl::Trait(t) => collect_methods(&t.members, &mut self.methods),
-                Decl::Object(o) => collect_methods(&o.members, &mut self.methods),
-                Decl::Function(_) | Decl::Value(_) => {}
+                // A MERGED OWNER'S MEMBERS ARE NOT CONSULTED FOR ARROW LIFTING.
+                // `arrow_parameters` matches on the method NAME and its arity,
+                // so the merged `Generator[\E\]`'s `generate[\R\](r, body)`
+                // answered for `G[\E\]`'s own `generate[\R\](body, combine)`
+                // and `Compiled17d.fss` read `plus` at
+                // `(Reduction[\(Number,Number)\], ...) -> String`. The file's
+                // own declarations win, which is the resolver's rule and this
+                // is the pass that has to honour it too.
+                Decl::Trait(t) if !t.merged => collect_methods(&t.members, &mut self.methods),
+                Decl::Object(o) if !o.merged => collect_methods(&o.members, &mut self.methods),
+                Decl::Trait(_) | Decl::Object(_) | Decl::Function(_) | Decl::Value(_) => {}
             }
         }
 
@@ -308,6 +316,7 @@ impl Pass {
         // the emitted object file would depend on iteration order.
         for arrow in self.traits.values() {
             decls.push(Decl::Trait(fortress_ast::TraitDecl {
+                merged: false,
                 modifiers: Modifiers::default(),
                 name: arrow.name.clone(),
                 static_params: Vec::new(),
@@ -667,6 +676,7 @@ impl Pass {
         self.lambdas = self.lambdas.saturating_add(1);
         let object_name = format!("fn${index}${trait_name}");
         let object = ObjectDecl {
+            merged: false,
             modifiers: Modifiers::default(),
             name: object_name.clone(),
             static_params: Vec::new(),
@@ -796,6 +806,7 @@ impl Pass {
             span,
         };
         let object = ObjectDecl {
+            merged: false,
             modifiers: Modifiers::default(),
             name: object_name.clone(),
             static_params: Vec::new(),

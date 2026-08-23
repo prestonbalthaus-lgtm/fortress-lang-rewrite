@@ -153,7 +153,7 @@ impl Elem {
 /// died in expansion as `unknown type Thread`, before the registry ran.
 pub const BUILTIN_TYPE_CONSTRUCTORS: [&str; 2] = ["Array", "Thread"];
 
-pub(crate) const BUILTIN_TYPE_NAMES: [&str; 9] = [
+pub const BUILTIN_TYPE_NAMES: [&str; 9] = [
     "ZZ32", "ZZ64", "RR64", "Boolean", "String", "Array", "Any", "Object", "Char",
 ];
 
@@ -233,6 +233,16 @@ const fn assert_copy<T: Copy>() {}
 const _: () = assert_copy::<Type>();
 
 impl Type {
+    /// Whether a value of this type can be STORED -- in a field, a global or an
+    /// `alloca`. `()` has no value at all and a tuple has no representation in
+    /// this backend, and codegen's `basic_type` returns `None` for exactly
+    /// these two. Kept here so a decision about storage can be made in the
+    /// CHECKER, where it can still become a diagnostic.
+    #[must_use]
+    pub const fn has_storage(self) -> bool {
+        !matches!(self, Self::Void | Self::Tuple(_))
+    }
+
     /// NOT `const` any more, and that is the tuple variant's one real cost. A
     /// placeholder here -- one string for every tuple -- would give two
     /// different tuples the same SYMBOL below, which is a silent collision in

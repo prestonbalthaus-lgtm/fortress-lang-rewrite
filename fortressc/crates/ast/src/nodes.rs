@@ -262,6 +262,19 @@ pub struct TraitDecl {
     pub excludes: Vec<TypeRef>,
     pub members: Vec<Member>,
     pub span: Span,
+    /// MERGED IN BY THE IMPORT RESOLVER rather than written in this file, so it
+    /// is a SIGNATURE and not a definition. Its name has to resolve -- that is
+    /// the whole point of importing it -- and it must NOT be lowered: the
+    /// definition lives in the api's own component, which this whole-program
+    /// compiler never sees. Emitting one gives an object a layout built from
+    /// fields no api ever described, and a singleton constructed in a `main`
+    /// that has no business constructing it.
+    ///
+    /// It is a flag per declaration rather than a count on the component,
+    /// because monomorphization REORDERS `decls` -- it drops the generic
+    /// templates and splices the instances in -- so "the first N are merged"
+    /// does not survive `expand`.
+    pub merged: bool,
 }
 
 /// `object O(x: T) extends {A} ... end`, or without the parentheses, a
@@ -284,6 +297,19 @@ pub struct ObjectDecl {
     pub excludes: Vec<TypeRef>,
     pub members: Vec<Member>,
     pub span: Span,
+    /// MERGED IN BY THE IMPORT RESOLVER rather than written in this file, so it
+    /// is a SIGNATURE and not a definition. Its name has to resolve -- that is
+    /// the whole point of importing it -- and it must NOT be lowered: the
+    /// definition lives in the api's own component, which this whole-program
+    /// compiler never sees. Emitting one gives an object a layout built from
+    /// fields no api ever described, and a singleton constructed in a `main`
+    /// that has no business constructing it.
+    ///
+    /// It is a flag per declaration rather than a count on the component,
+    /// because monomorphization REORDERS `decls` -- it drops the generic
+    /// templates and splices the instances in -- so "the first N are merged"
+    /// does not survive `expand`.
+    pub merged: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
