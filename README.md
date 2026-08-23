@@ -129,9 +129,14 @@ time, which is what `--cc` selects. Run `tools/mpi-gate.sh` to check the whole
 path, including the ranks.
 
 M3a is done: memory is collected. Every heap allocation goes through
-`fortress_alloc` in `runtime/shims.c`, which now calls `GC_malloc_atomic`
-instead of `malloc`. A program doing a million string concatenations and one
-doing ten thousand use the same resident set:
+`runtime/shims.c`, and there are TWO allocators there because the distinction is
+load bearing: `fortress_alloc` is `GC_malloc_atomic` for pointer-free bytes such
+as strings, and `fortress_alloc_scanned` is `GC_malloc` for anything that stores
+a pointer, such as array storage and object blocks. Atomic memory is not
+scanned, so putting a pointer-holding block on the atomic path frees what it is
+still holding -- `runtime/tests/array_trace.c` measures that rather than
+assuming it. A program doing a million string concatenations and one doing ten
+thousand use the same resident set:
 
 ```
 $ ./tools/memory-gate.sh
@@ -165,10 +170,12 @@ run() = do
    ...
 ```
 
-`Array[\T\]` is one dimensional and homogeneous, subscripts are `ZZ64` so an
-array can be longer than 2^31, and every subscript is bounds checked: out of
-range prints `fortress: array index out of bounds (5, 3)` and exits 1 rather
-than faulting. Array storage is allocated scannable, so the collector can see
+Arrays are homogeneous and RANK IS PART OF THE TYPE: `Type::Array(Elem, u8)`,
+so `ZZ32[5]` and `ZZ32[2,3]` are different types, and the matrix aggregate
+`[3 4; 5 6]` builds the second. Subscripts are `ZZ64` so an array can be longer
+than 2^31, every dimension is bounds checked separately and the halt names which
+one: out of range prints `fortress: array index out of bounds (5, 3)` and exits
+1 rather than faulting. Array storage is allocated scannable, so the collector can see
 the strings an `Array[\String\]` holds; `tools/array-gate.sh` measures that
 rather than assuming it.
 
@@ -178,6 +185,9 @@ M3c is done: traits, objects and symmetric multiple dispatch.
 trait Ink end
 object Solid extends {Ink} end
 object Dotted(width: ZZ32) extends {Ink} end
+
+trait Face end
+object Round extends {Face} end
 
 draw(i: Ink, f: Face): ZZ32 = 1000
 draw(i: Solid, f: Face): ZZ32 = 2000
@@ -235,11 +245,39 @@ LLVM codegen. See `docs/superpowers/specs/` for the design of every milestone,
 each of which records why the rules are what they are -- including where a
 design turned out to be wrong.
 
-Still missing: `for` and generators, parallelism, `atomic`, dimensions and
-units, coercion, enclosing operators, and user definable syntax. The lexer takes
-1780 of the 1956 corpus files (91%) and the parser 168 of those. What blocks the
-parser now is tuple and arrow types, `getter`/`setter`, and `opr` declarations --
-not generics, which was measured before it was built.
+M3e through M5 are done too, and this section is a summary rather than the
+record -- `docs/superpowers/specs/` carries one design document per milestone.
+Landed since M3d: unit, tuple and arrow types; juxtaposition as application and
+chained comparison; getters, setters, `self` and top-level values; dotted
+methods; generic and functional methods; operators and the builtin set; the
+parallel `for` and `spawn`; `atomic` and reduction variables; multi-dimensional
+arrays and the matrix aggregate; `Char`; radix numerals; dimensions and units as
+far as declaration and checking; and `Object`/`Any` as real root traits.
+
+**Phase 7 has passed, and it is the reason the rewrite exists.** The JVM ceiling
+in "Why rewrite it" above was arrays capping at 2^31 elements. `tools/phase7-gate
+.sh` writes and reads index 2,999,999,999 of a three-billion-element
+`Array[\Boolean\]`, and runs a 10^9-element parallel reduction that goes from
+0.80 s at one worker to 0.09 s at fourteen.
+
+Where the numbers are, and every one is a ratchet in a test rather than
+commentary:
+
+| metric | today | floor | instrument |
+|---|---|---|---|
+| corpus files that LEX | 1845 of 1956 | 1845 | `crates/lexer/tests/corpus.rs` |
+| corpus files that PARSE | 839 | 839 | `crates/parser/tests/corpus.rs` |
+| `.fss` that compile and emit an object | 395 | 321 | `tools/apply-gate.sh` |
+| `.fsi` that check | 125 | 125 | `tools/apply-gate.sh` |
+| oracle cases that agree with 1.0 | 344 | 344 | `tools/oracle-gate.sh` |
+
+The headline metric is object emission plus api checking, split on purpose: an
+api emits no object, so one number stopped meaning one thing. Every compiling
+corpus file is also LINKED AND RUN under a signal sweep -- 402 binaries.
+
+Still missing: comprehensions, `at` and distributions, coercion (recorded but
+never applied), unit algebra above declaration, tuple VALUES, and user definable
+syntax.
 
 The legacy Sun implementation is kept as reference material:
 
@@ -276,23 +314,35 @@ With root, `dnf install llvm-devel gc-devel` does the same job.
 where the compiler is built: `runtime/shims.c` is compiled by the linking C
 compiler so that it matches the target's C library.
 
-Gates that cargo cannot run: fourteen shell scripts in `tools/`. **Read
-`docs/RUNNING-THE-GATES.md` before running any of them** — it carries the two
-rules that are not optional and the ten traps that are already paid for.
+Gates that cargo cannot run: twenty-three shell scripts in `tools/`, nineteen
+of them named `*-gate.sh`. **Read `docs/RUNNING-THE-GATES.md` before running any
+of them** — it carries the rules that are not optional and the ten traps that
+are already paid for.
 
-The two rules, because getting them wrong produces a wrong number silently:
+`tools/oracle-gate.sh` is the primary correctness instrument and the one to run
+first. The oracle is the 373 `.test` files the legacy implementation shipped, on
+disk, needing no JVM: 266 of them record the exact compile error 1.0 gave, which
+is a MUST-FAIL ratchet -- `tools/oracle-accepted-must-fail.txt` names every
+program we wrongly accept, a new acceptance outside the list is red, and a file
+that starts being refused comes out of the list in the same commit.
+
+Three rules, because getting them wrong produces a wrong number silently:
 
 1. **`export FORTRESSC=<pinned copy>` before any sweep.** `cargo build` rewrites
    `fortressc/target/debug/fortressc` in place, and a sweep that reads that path
-   while someone rebuilds mixes two compilers with no error and no warning. Only
-   `triage.sh`, `api-census.sh` and `oracle-gate.sh` honour it so far; for the
-   other ten, pinning means not rebuilding while they run.
-2. **Keep the pinned copy OUTSIDE `fortressc/build/`.** That directory is shared
-   scratch, thirteen of them write into it and seven `rm -rf` it. A pin was
+   while someone rebuilds mixes two compilers with no error and no warning.
+   Twenty-two of the twenty-three honour it; the exception is
+   `mpicc-in-image.sh`, which is a `cc` wrapper and never invokes the compiler.
+2. **`FORTRESSC` and `--mutate` MUST NOT be combined,** and this is the inverse
+   of rule 1 rather than a footnote to it. Every mutation rebuilds
+   `target/debug`, so a pin makes each one a silent no-op and the table reports
+   a clean escape. Sixteen gates refuse the combination and exit 2.
+3. **Keep the pinned copy OUTSIDE `fortressc/build/`.** That directory is shared
+   scratch: twenty-two of them write into it and sixteen `rm -rf` it. A pin was
    lost that way on 2026-08-21.
 
 Every gate takes `--selftest`, which proves its assertions can refuse without
-needing anything built. Seven take `--mutate`; a green gate is evidence only
+needing anything built. Sixteen take `--mutate`; a green gate is evidence only
 when its mutation table has run and its numbers are stated.
 
 The legacy interpreter builds with Ant against Java 6 era code. It has not been
@@ -300,5 +350,14 @@ verified to still work.
 
 ## License
 
-The legacy tree is under the Sun/Oracle terms in `LICENSE`. New code is
-unlicensed so far, pick something before the first release.
+The legacy tree is under the Sun/Oracle terms in `LICENSE`: BSD 3-clause, Sun
+2007. The Apache-2.0 text further down that file covers the bundled Ant and BCEL
+jars, not Fortress.
+
+**The new code's licence is UNDECIDED and the repository currently contradicts
+itself about it.** `fortressc/Cargo.toml:16` declares `license = "Apache-2.0"`
+and all six crates inherit it, so that metadata has been asserting Apache-2.0
+since the workspace was created. `docs/superpowers/specs/2026-08-21-d9-oracle-and-licence.md`
+lays the three-way problem out and is explicitly drafted, not adopted. Settle it
+before the first release; until then treat the `Cargo.toml` field as unreviewed
+rather than as the answer.

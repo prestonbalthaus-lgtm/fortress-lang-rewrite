@@ -1,11 +1,12 @@
 # Running the gates
 
-Fourteen shell scripts in `tools/` plus `peak-rss.py`. None runs automatically — there is no CI, no
+Twenty-three shell scripts in `tools/`, nineteen of them named `*-gate.sh`,
+plus `peak-rss.py` and `mutation-patterns.py`. None runs automatically — there is no CI, no
 git hook, no Makefile and no cargo alias — so every ratchet in this project fires
 only when a person runs it. This document is what a person or a CI job has to do.
 
-Written 2026-08-21 against master. If a count here disagrees with `tools/`,
-`tools/` is right and this file is stale.
+Written 2026-08-21 against master, counts refreshed 2026-08-23. If a count here
+disagrees with `tools/`, `tools/` is right and this file is stale.
 
 ---
 
@@ -32,17 +33,17 @@ combination.** Every mutation rebuilds `fortressc/target/debug` with
 `cargo build --workspace`; if `FORTRESSC` points at a pinned binary, the
 mutation rebuilds one compiler and the gate reads a different one, so the
 mutation has no effect, the assertion holds, and the table reports a **clean
-escape**. The nine gates whose mutations rebuild carry
+escape**. The sixteen gates whose mutations rebuild carry
 `mutate_needs_the_built_compiler` and exit 2 with an explanation. Unset
 `FORTRESSC` before `--mutate`; pin it for everything else.
 
 ### RULE 2 — KEEP THE PIN OUTSIDE `fortressc/build/`.
 
-**`fortressc/build/` is shared scratch and seven gates `rm -rf` it**:
-`apply-gate.sh:105`, `atomic-gate.sh:93`, `generics-gate.sh:89,319`,
-`memory-gate.sh:77`, `mpi-gate.sh:89`, `operator-gate.sh:105,303`,
-`parallel-gate.sh:111,290`. Thirteen of the fourteen write into it -- `mpicc-in-image.sh` is a `cc`
-wrapper and is the exception.
+**`fortressc/build/` is shared scratch and sixteen gates `rm -rf` it**, among
+them `apply-gate.sh`, `atomic-gate.sh`, `generics-gate.sh`, `memory-gate.sh`,
+`mpi-gate.sh`, `operator-gate.sh` and `parallel-gate.sh`. Twenty-two of the
+twenty-three write into it -- `mpicc-in-image.sh` is a `cc` wrapper and is the
+exception.
 
 This is not hypothetical. A pin was put at `fortressc/build/pinned/` on
 2026-08-21, another agent ran `parallel-gate.sh`, and the pin was gone — the
@@ -215,6 +216,8 @@ Recorded because "add a YAML file" understates it by an order of magnitude:
 - the job must **pin the compiler per rule 1** and stamp the sha256 into its
   output, or parallel jobs sharing a cache will report each other's numbers.
 
-The three ratchets a CI job exists to enforce are `COMPILE_FLOOR` (290,
-`apply-gate.sh:39`), the parser and lexer corpus floors (637 and 1780), and the
-oracle gate's three. Today all of them fire only when someone types the command.
+The ratchets a CI job exists to enforce are `OBJECT_FLOOR` and `API_FLOOR`
+(321 and 125, `apply-gate.sh`; the single `COMPILE_FLOOR` was SPLIT in two on
+2026-08-21, because an api emits no object and one number stopped meaning one
+thing), the parser and lexer corpus floors (839 and 1845), and the oracle gate's
+three. Today all of them fire only when someone types the command.

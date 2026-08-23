@@ -23,9 +23,9 @@
 #      compile metric ends up counting programs that print the wrong thing.
 #
 #   B. THE MUST-FAIL RATCHET. A case with a non-empty `compile_err_equals` is a
-#      program the legacy implementation REFUSED. We accept 47 of them today.
+#      program the legacy implementation REFUSED. We accept 38 of them today.
 #      The ratchet is a LIST and not a count: tools/oracle-accepted-must-fail.txt
-#      names all 47, a new acceptance outside the list is red, and a file that
+#      names all 38, a new acceptance outside the list is red, and a file that
 #      starts being refused must be removed from the list in the same commit.
 #
 #   C. THE SIGNAL SWEEP. Every corpus file that compiles is linked and RUN. Exit

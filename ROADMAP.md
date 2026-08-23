@@ -198,6 +198,13 @@ corpus percentages in phases 1 and 2 should be quoted against 1846, not 1956. An
 the specification still documents the feature, so v1 is a Fortress dialect rather
 than the whole language. Say so in the README when v1 ships.
 
+**THE 1846 DENOMINATOR WAS NEVER ADOPTED AND SHOULD NOT BE.** `grep -rn 1846`
+across `tools/` and `fortressc/crates` returns nothing: every instrument in the
+tree walks and quotes against 1956, and the syntax-abstraction files are counted
+like any other. Changing it now would move every recorded number in this repo
+against a denominator no gate uses. The 110 files ARE out of scope for v1
+conformance; they are not out of the corpus walk. Quote 1956.
+
 **2. Whitespace and newlines.** The grammar has dedicated `Spacing`,
 `NoSpaceLiteral`, `MayNewlineHeader` and `NoNewlineHeader` modules. Newlines are
 significant and spacing changes how expressions parse. The lexer needs an
@@ -287,5 +294,8 @@ arbitrary Unicode identifiers are not in v1.
 ## Out of scope for v1
 
 Eclipse and Emacs tooling, Fortify LaTeX rendering, the Vim files, and anything
-in `contrib/`. The legacy interpreter stays only as a differential oracle and
-gets deleted once phase 7 passes.
+in `contrib/`. The legacy interpreter stays as reference material and **IS NOT
+TO BE DELETED.** This line used to say it "gets deleted once phase 7 passes";
+phase 7 has passed, and executing that would destroy the measuring stick.
+`ProjectFortress/` holds all 373 `.test` files, `LibraryBuiltin/`, and most of
+the 1956-file corpus.
