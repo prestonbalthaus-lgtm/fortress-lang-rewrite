@@ -68,6 +68,15 @@ into `build_signatures` because that was its only remaining reader.
 
 ---
 
+> **SUPERSEDED THE SAME DAY, and only the second half.** The section below
+> describes `ConstructorOverloadUnsupported`, which is GONE:
+> `docs/superpowers/specs/2026-08-23-constructor-as-a-signature.md` put the
+> constructor into the overload set, so the pair TIES on its arguments instead
+> of being refused. Everything above this line still stands. The section is kept
+> because the reasoning in it -- that `construct` is reached by NAME above the
+> overload set, so the constructor takes every call -- is exactly what the
+> follow-up had to fix, and it is why the intermediate refusal was correct.
+
 ## 5-3 IS LEGAL TO DECLARE AND IS STILL REFUSED TO CALL
 
 Accepting the declaration is not the same as being able to compile a call, and
