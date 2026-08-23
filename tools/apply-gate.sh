@@ -450,6 +450,7 @@ traitfn|42|a top-level function beside a TRAIT of its own name
 selftypeparam|42\ntrue|`Self` is a static parameter, and the receiver is still the trait
 ctoroverload|107\n7|a constructor and a function of one name are ONE overload set
 setterfires|SETTER RAN\n105\n9\nBOX 7\nBASE 7|a declared setter FIRES and an ordinary method does not
+mergedaccessor|42|a merged getter name does not capture this file's own method
 CASES
 }
 

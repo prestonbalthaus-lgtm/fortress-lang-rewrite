@@ -1,0 +1,14 @@
+component mergedaccessor
+export Executable
+
+(* `reverse` is a GETTER on three merged core-api traits (`CompilerBuiltin.fsi
+   :591`, `:606`, `:615`). This file declares its own DOTTED METHOD of that name
+   and CALLS it, which a merged declaration must not turn into "`reverse` is a
+   getter and is READ as `.reverse`, not called as `.reverse()`". *)
+object Tag(n: ZZ32)
+    reverse(): ZZ32 = n + 1
+end
+
+run(): () = println(Tag(41).reverse())
+
+end
