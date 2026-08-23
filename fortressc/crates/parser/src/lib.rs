@@ -2807,9 +2807,9 @@ impl<'t, 'a> Parser<'t, 'a> {
     /// followed immediately by a character part of one token, and a spaced
     /// `a AND : b` is not this operator.
     fn at_conditional_word_op(&self, word: &str) -> bool {
-        self.at_word_op(word)
-            && self.glued_right(self.pos)
-            && matches!(self.peek_ahead(1), Some(Kind::Colon))
+        let colon_is_glued_on =
+            self.glued_right(self.pos) && matches!(self.peek_ahead(1), Some(Kind::Colon));
+        self.at_word_op(word) && colon_is_glued_on
     }
 
     /// One of the 66 words the lexer keeps out of the identifier namespace,

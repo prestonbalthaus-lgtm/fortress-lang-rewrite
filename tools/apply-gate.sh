@@ -780,7 +780,7 @@ MUTATIONS=(
   # `AND:` AND `OR:` ARE THE CONDITIONAL FORMS. The colon must be GLUED and it
   # must be CONSUMED -- left behind it is `expected an expression, found Colon`,
   # which is where 27 corpus files stopped.
-  'crates/parser/src/lib.rs|            && matches!(self.peek_ahead(1), Some(Kind::Colon))|            && matches!(self.peek_ahead(1), Some(Kind::Semi))|stop reading a glued colon as the conditional operator'
+  'crates/parser/src/lib.rs|        let colon_is_glued_on =|        let colon_is_glued_on = false; let _unused =|stop reading a glued colon as the conditional operator'
   # A COMPREHENSION PARSES. Two axes: the bare-`|` separator, and the static
   # arguments that go INSIDE the opener.
   'crates/parser/src/lib.rs|                if self.comprehension_bar_here() {|                if false {|stop reading the bare bar as a comprehension separator'
