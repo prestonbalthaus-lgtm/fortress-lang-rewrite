@@ -1,0 +1,14 @@
+(* A LOCAL FUNCTION WHOSE PARAMETERS ARE TYPED, refused BY NAME like the
+   untyped form beside it in `localfn.fss`. It used to die in the PARSER at the
+   `:` with `expected )`, which names the punctuation and not the feature, and
+   33 corpus files stopped there.
+
+   PARSING IT BUYS NO FILE AND THAT IS THE POINT: the construct is refused on
+   both paths, and putting these files in the local-function bucket is what
+   turned that milestone's first-blocker count from 7 into 36. A first-blocker
+   count becomes a CEILING the moment the construct parses. *)
+
+run(): () = do
+    go(n: ZZ32, m: ZZ32): ZZ32 = n + m
+    println(go(1, 2))
+end

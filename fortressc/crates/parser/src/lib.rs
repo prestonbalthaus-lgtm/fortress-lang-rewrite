@@ -388,6 +388,49 @@ impl<'t, 'a> Parser<'t, 'a> {
         )
     }
 
+    /// `f(w: ZZ32) = e` and `go(n: ZZ32): R = e` -- a local function
+    /// declaration whose parameters carry written types. Returns its span if
+    /// this is one, having consumed it; the caller restores `self.pos` either
+    /// way, which is all a speculative parse here has to undo because `params`
+    /// builds a local `Vec` and touches no shared state.
+    ///
+    /// PARSED IN ORDER TO BE REFUSED BY NAME, exactly as the untyped form
+    /// already is. It gains NOTHING that compiles -- the construct is refused
+    /// on both paths -- and that is the point: it moves those files into the
+    /// local-function bucket so the milestone can be PRICED rather than
+    /// guessed. This project's own rule: a first-blocker count becomes a
+    /// CEILING the moment the construct parses.
+    ///
+    /// `params` IS WHAT KEEPS THIS FROM EATING A CALL. It requires every
+    /// parameter to be `name: Type`, so a call whose argument list is an
+    /// expression -- `f(1:10)`, `assert(("A":"B":"C").toString, s)` -- fails
+    /// inside it and the caller falls through unchanged.
+    fn typed_local_function_here(&mut self) -> Option<Span> {
+        let start = self.span_here();
+        if !matches!(self.peek_kind(), Some(Kind::Ident(_))) {
+            return None;
+        }
+        self.pos += 1;
+        if !self.at(&Kind::LParen) {
+            return None;
+        }
+        self.pos += 1;
+        self.params(false).ok()?;
+        if !self.at(&Kind::RParen) {
+            return None;
+        }
+        self.pos += 1;
+        // An optional written result type: `go(n: ZZ32, h: Heap[\K,V\]): R =`.
+        if self.at(&Kind::Colon) {
+            self.pos += 1;
+            self.type_ref().ok()?;
+        }
+        if !self.definition_equals_at(self.pos) {
+            return None;
+        }
+        Some(Span::new(start.start, self.span_here().end))
+    }
+
     /// `...` after a parameter's type. `Symbol.rats:212` makes `ellipses` one
     /// lexical token; this parser has three `Dot`s, so the three must be glued
     /// to EACH OTHER -- the same trade `->`, `<-` and `+=` take, and no file in
@@ -4775,6 +4818,15 @@ impl<'t, 'a> Parser<'t, 'a> {
                 if matches!(*callee, Expr::Var { .. }) && self.definition_equals_at(self.pos) {
                     return Err(ParseError::LocalFunctionDeclarationUnsupported { span });
                 }
+            }
+            self.pos = probe;
+            // AND THE SAME DECLARATION WITH ITS PARAMETERS TYPED, which the
+            // probe above cannot see: it reads `f(x) = e` by parsing `f(x)` as
+            // a CALL, and `f(w: ZZ32)` is not a call. 33 corpus files stopped
+            // at that `:` reporting `expected )`, which names the punctuation
+            // and not the feature.
+            if let Some(span) = self.typed_local_function_here() {
+                return Err(ParseError::LocalFunctionDeclarationUnsupported { span });
             }
             self.pos = probe;
         }

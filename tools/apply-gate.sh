@@ -592,6 +592,7 @@ refusals() {
 juxtnary.fss|a juxtaposition of 3 elements led by a function is not implemented
 juxtsingleton.fss|neither multiplication nor concatenation
 localfn.fss|a local function declaration is not implemented
+badlocalfntyped.fss|a local function declaration is not implemented
 badchainsense.fss|chained ordering operators must have the same sense
 badarrowtype.fss|an arrow type is not implemented
 badvartuple.fsi|a parenthesised variable list declares a tuple of variables
@@ -1035,6 +1036,9 @@ MUTATIONS=(
   # AND THE OPERAND IS CHECKED AGAINST THE ASCRIBED TYPE. Without that the
   # ascription only RELABELS: `5 typed ZZ64` stays a ZZ32 constant.
   'crates/types/src/lib.rs|                let inner = self.expr(value, Some(want))?;|                let inner = self.expr(value, None)?;|check an ascription operand without the ascribed type'
+  # A LOCAL FUNCTION WITH TYPED PARAMETERS reaches the refusal the untyped one
+  # already reached. Without the probe it dies in the parser at the `:`.
+  'crates/parser/src/lib.rs|        self.params(false).ok()?;|        return None;|stop reading a typed parameter list as a local function header'
   'crates/types/src/comprises.rs|if r.is_own_static(sub) {|if false {|read a static parameter in a comprises clause as a type name'
   'crates/types/src/comprises.rs|if !r.clause_is_ours() {|if false {|report a merged comprises clause against the importing file'
   'crates/parser/src/lib.rs|if is_literal(operand) {|if true {|duplicate every chain operand instead of binding it'
