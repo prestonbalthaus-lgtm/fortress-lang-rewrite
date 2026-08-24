@@ -8,7 +8,13 @@ run(): () = do
   (* AN ORDINARY COMPARISON, and it must stay one: `<` and `-` are not glued,
      so this is not a generator arrow. *)
   if n < -3 then println(1) else println(2) end
-  (* And `then` on the line below, which nine corpus files write. *)
+  (* And `then` on the line below, which nine corpus files write.
+
+     THE REFUSAL MOVED WHEN THE LOWERING LANDED and this fixture moved with it.
+     It used to assert "the lowering is not implemented". What is refused NOW is
+     the SOURCE: a binding condition iterates a `Condition[\E\]`, which yields
+     zero or one element and declares `holds` and `get`, and a `ZZ32` declares
+     neither. That refusal is permanent, where the other one was temporary. *)
   if x <- maybe()
     then println(x) else println(0) end
 end

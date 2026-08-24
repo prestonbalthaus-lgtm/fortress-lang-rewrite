@@ -399,6 +399,19 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # way to have the first is to lower it into the second: a tuple-typed name
 # becomes SEVERAL names and no tuple is ever built. The RESULT direction stays
 # refused -- that needs the callee to hand back several values.
+# THE GENERATOR PROTOCOL, 2026-08-24: 432 objects and 126 apis, UNCHANGED, and
+# that was PREDICTED. 172 corpus files write a generator construct and 144 die
+# in the PARSER; almost all the rest import a Library module whose `.fss` does
+# not compile, so the protocol is NECESSARY for all 172 and SUFFICIENT for none.
+# It is a prerequisite three milestones stop on, not a lever, and it was built
+# with that written down first rather than discovered afterwards.
+# THREE ROWS OF THIS TABLE MOVED AND EVERY ONE WAS RIGHT TO. `listcomp` called
+# `.get(i)` on the minted `List`, which is `opr [i]` now -- 1.0's spelling, not
+# one this compiler invented. `badcompgenerator.fss` LEFT the refusal list and
+# became `compgenerator.fss`, a positive case, because the thing it refused now
+# works. And the two binding-condition rows kept their files: what is refused
+# MOVED from "the lowering is not implemented" to "a `ZZ32` is not a
+# `Condition`", which is permanent where the other was temporary.
 # A BINDING CONDITION, 2026-08-23: 432 objects and 126 apis, UNCHANGED, and
 # that is what the triage bucket predicted -- `generator-bindings` had 27 first
 # blockers and an `alone*` ceiling of ZERO. `expected `then`, found Lt` goes
@@ -504,6 +517,8 @@ meetrule|3|a bodiless meet makes a declaration SET valid, and a bodied one runs
 concatbeside|Ux\n5|concatenation survives an unrelated declaration of its name
 listcomp|5\n10\n16\n4\n7\n6\n32\n5\n36\nq\n40\n40|a list comprehension builds a real monomorphized `List` and it GROWS
 tupleflat|7\n30\nHello World!\n7\n7\n0.25|a tuple parameter, a tuple value and a written tuple are FLATTENED
+compgenerator|10\n20\n30\n11\n21\n31\n100\n101\n102\n2\n20|a comprehension walks a COLLECTION -- an array, a List and a user object
+bindingcond|7\n1\n2\n3\n2\n1\n99|a binding condition yields zero or one value, and `while` re-evaluates it
 CASES
 }
 
@@ -583,15 +598,14 @@ badnomeet.fss|is ambiguous for (O, O)
 badmergedfunctional.fss|where Cup is required
 badsetcomp.fss|only the list form
 badcompelement.fss|element type is not written anywhere
-badcompgenerator.fss|a generator over a collection rather than a range
 badcomplisttaken.fss|mints its own `List`, and this component already has one
 badtupleresult.fss|it cannot be the result of a function with a body
 badtuplevalue.fss|is a tuple and tuples are FLATTENED here
 badtuplemutable.fss|a mutable tuple binding is not flattened
 badtupleoverload.fss|`g` is declared twice on the same argument types (ZZ32, ZZ32)
 badtuplewhole.fss|a tuple expression is not implemented in this subset
-badbindingif.fss|`if x <- g` parses and its lowering is not implemented
-badbindingwhile.fss|`while x <- g` parses and its lowering is not implemented
+badbindingif.fss|is not a condition here
+badbindingwhile.fss|is not a condition here
 CASES
 
     # `badvaluebinding.fss` LEFT THIS LIST when component-level values landed,

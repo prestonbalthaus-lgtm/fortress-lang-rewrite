@@ -1,0 +1,47 @@
+component bindingcond
+export Executable
+
+(* THE BINDING CONDITION, both keywords, asserted BY VALUE.
+
+   THE NAMES AVOID `Just` AND `Nothing` ON PURPOSE: `FortressLibrary.fsi`
+   declares `value object Just[\T\]` and the implicit core import merges it, so
+   a file declaring its own non-generic `Just` reports `unknown type Just`.
+
+   `Condition[\E\]` (`Library/FortressLibrary.fsi:847`) is "a generator that
+   generates 0 or 1 element" and yielding IS the truth. 1.0 declares `holds`
+   and `get` as GETTERS; an object written without `getter` declares them as
+   plain methods. BOTH spellings are real Fortress and both are exercised
+   here, because a lowering that only reached one would work against the
+   library and not against ordinary source, or the reverse. *)
+
+object Held(v: ZZ64)
+  getter holds(): Boolean = true
+  getter get(): ZZ64 = v
+end
+
+object Empty1()
+  getter holds(): Boolean = false
+  getter get(): ZZ64 = 0
+end
+
+object Down(n: ZZ64)
+  holds(): Boolean = n > 0
+  get(): ZZ64 = n
+end
+
+run(): () = do
+  if x <- Held(7) then println(x) else println(0) end
+  if y <- Empty1() then println(y) else println(1) end
+  (* No `else` arm: the body is `()` and the whole thing is too. *)
+  if z <- Held(2) then println(z) end
+
+  (* THE SOURCE IS RE-EVALUATED ONCE PER ROUND, which is what makes this a
+     while-CONDITION. Binding it once would loop forever on 3. *)
+  k: ZZ64 := 3
+  while w <- Down(k) do
+    println(w)
+    k := k - 1
+  end
+  println(99)
+end
+end

@@ -7,28 +7,28 @@ repeat[\T\](x: T, n: ZZ64): List[\T\] = <| x | i <- 1:n |>
 run(): () = do
   written = <|[\ZZ64\] 2 x | x <- 1:5 |>
   println(written.size())
-  println(written.get(4))
+  println(written[4])
 
   slotted: List[\ZZ64\] = <| x x | x <- 1:4 |>
-  println(slotted.get(3))
+  println(slotted[3])
 
   filtered = <|[\ZZ64\] x | x <- 1:10, x > 6 |>
   println(filtered.size())
-  println(filtered.get(0))
+  println(filtered[0])
 
   paired = <|[\ZZ64\] 10 x + y | x <- 1:3, y <- 1:2 |>
   println(paired.size())
-  println(paired.get(5))
+  println(paired[5])
 
   extent = <|[\ZZ64\] x | x <- 2#4 |>
-  println(extent.get(3))
+  println(extent[3])
 
-  println(squares(6).get(5))
-  println(repeat[\String\]("q", 2).get(1))
+  println(squares(6)[5])
+  println(repeat[\String\]("q", 2)[1])
 
   (* Past the initial capacity, so `reserve` runs several times. *)
   grown = <|[\ZZ64\] x | x <- 1:40 |>
   println(grown.size())
-  println(grown.get(39))
+  println(grown[39])
 end
 end

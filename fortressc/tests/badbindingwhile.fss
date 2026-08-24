@@ -4,6 +4,8 @@ export Executable
 maybe(): ZZ32 = 3
 
 run(): () = do
+  (* Same refusal as `badbindingif.fss` and for the same reason: a scalar is
+     not a `Condition`. The `while` keyword takes the same protocol. *)
   while x <- maybe() do println(x) end
 end
 end

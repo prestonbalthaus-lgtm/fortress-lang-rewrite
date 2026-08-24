@@ -1,0 +1,29 @@
+component compgenerator
+export Executable
+
+(* A COMPREHENSION OVER A COLLECTION, which is what the indexed generator
+   protocol bought. This file was `badcompgenerator.fss` and asserted the
+   refusal; it is a positive case now, and the VALUES are the assertion --
+   an exit code cannot tell an ordered walk from a shuffled one. *)
+
+object Row(n: ZZ64)
+  size(): ZZ64 = n
+  opr [i: ZZ64]: ZZ64 = 100 + i
+end
+
+run(): () = do
+  a: ZZ64[3] = [1 2 3]
+  fromArray = <|[\ZZ64\] 10 x | x <- a |>
+  for v <- fromArray do println(v) end
+
+  chained = <|[\ZZ64\] x + 1 | x <- fromArray |>
+  for v <- chained do println(v) end
+
+  fromObject = <|[\ZZ64\] x | x <- Row(3) |>
+  for v <- fromObject do println(v) end
+
+  guarded = <|[\ZZ64\] x | x <- fromArray, x > 15 |>
+  println(guarded.size())
+  println(guarded[0])
+end
+end
