@@ -1,0 +1,13 @@
+(* AN UNTYPED PARAMETER, and it is NOT the elided NAME beside it in
+   `badelidedbody.fss`. `Parameter.rats:96` is
+   `Param ::= BindId (w IsTypeOrPattern)?`, so a CONCRETE declaration may omit
+   a parameter's TYPE -- legal 1.0, and what it needs is INFERENCE.
+
+   Calling it an elision blamed `functions.tex:384-385`, a rule about ABSTRACT
+   declarations, for a program not attempting elision at all. 35 corpus files
+   were told that. A BARE IDENTIFIER is the only shape the two readings share;
+   the message is chosen on it. *)
+
+f(v) = 2
+
+run(): () = println(f(1))

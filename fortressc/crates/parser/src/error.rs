@@ -82,6 +82,24 @@ pub enum ParseError {
         /// What the parameter list actually is here, for the message.
         position: &'static str,
     },
+    /// A parameter or field written as a BARE NAME with no type. This is
+    /// LEGAL 1.0 and is not the elision above: `Parameter.rats:96` is
+    /// `Param ::= BindId (w IsTypeOrPattern)?`, and `TraitObject.rats:185`
+    /// sends an object's value parameters through that same `Params`. So a
+    /// bare identifier here is a NAME whose TYPE was omitted, which needs
+    /// INFERENCE -- and there is none, in this compiler or in the frozen
+    /// specification.
+    ///
+    /// THE SHAPE IS WHAT TELLS THE TWO APART. A bare identifier could be read
+    /// either way; anything structured (`List[\T\]`, an arrow, a tuple)
+    /// cannot be a `BindId` and IS an attempted elision.
+    ParameterTypeInferred {
+        span: Span,
+        /// `parameter` or `field` -- an object's value parameters ARE its
+        /// fields, and a reader wants to be told which one is unwritten.
+        role: &'static str,
+        name: String,
+    },
     LocalFunctionDeclarationUnsupported {
         span: Span,
     },
@@ -217,6 +235,7 @@ impl ParseError {
         match self {
             Self::UnexpectedToken { span, .. }
             | Self::ParameterTypeOmitted { span, .. }
+            | Self::ParameterTypeInferred { span, .. }
             | Self::PostfixOperatorUnsupported { span }
             | Self::ReservedWord { span, .. }
             | Self::StaticParameterKindUnsupported { span, .. }
@@ -258,6 +277,15 @@ impl core::fmt::Display for ParseError {
                 "a parameter's type may not be omitted, and {position}, so the name cannot be \
                  elided here either. `functions.tex:384-385` allows an elided NAME only in an \
                  ABSTRACT declaration -- one with no body"
+            ),
+            Self::ParameterTypeInferred { role, name, .. } => write!(
+                f,
+                "the {role} `{name}` has no written type, and this compiler cannot infer one. \
+                 An omitted type is legal 1.0 -- `Parameter.rats:96` is \
+                 `Param ::= BindId (w IsTypeOrPattern)?` -- but \
+                 `components/type-inference.tex:15-16` runs inference over a WHOLE COMPONENT at \
+                 once, and `basic/inference.tex` is a 27-line stub whose entire chapter is a \
+                 note that the mechanism is still to be described. Write the type"
             ),
             Self::UnexpectedEndOfInput { expected } => {
                 write!(f, "unexpected end of input, expected {expected}")

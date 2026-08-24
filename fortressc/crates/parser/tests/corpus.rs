@@ -92,6 +92,9 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
                     fortress_parser::ParseError::ParameterTypeOmitted { .. } => {
                         "a parameter's type is omitted".to_owned()
                     }
+                    fortress_parser::ParseError::ParameterTypeInferred { role, .. } => {
+                        format!("an untyped {role}")
+                    }
                     fortress_parser::ParseError::ReservedWord { word, .. } => {
                         format!("reserved word `{word}`")
                     }

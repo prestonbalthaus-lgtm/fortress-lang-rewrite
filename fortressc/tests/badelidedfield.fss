@@ -1,6 +1,7 @@
 (* AN OBJECT'S VALUE PARAMETERS ARE ITS FIELDS, and a field needs a name to be
-   read by, so elision is refused there whether or not anything has a body. *)
+   read by. `List[\ZZ32\]` cannot be one, so this is the elision case; a bare
+   identifier is the untyped-FIELD case and is in `baduntypedfield.fss`. *)
 
-object O(x) end
+object O(List[\ZZ32\]) end
 
 run(): () = ()

@@ -598,6 +598,8 @@ localfnspaced.fss|a local function declaration is not implemented
 localfnspaceduntyped.fss|a local function declaration is not implemented
 badelidedbody.fss|this declaration has a BODY
 badelidedfield.fss|an object's value parameters are its FIELDS
+baduntypedparam.fss|the parameter `v` has no written type
+baduntypedfield.fss|the field `x` has no written type
 badchainsense.fss|chained ordering operators must have the same sense
 badarrowtype.fss|an arrow type is not implemented
 badvartuple.fsi|a parenthesised variable list declares a tuple of variables
@@ -1050,6 +1052,16 @@ MUTATIONS=(
   # elision is refused where it is not licensed.
   'crates/parser/src/lib.rs|            if !named && mutable_allowed {|            if false {|let an object elide a FIELD name'
   'crates/parser/src/lib.rs|        if body.is_none() {|        if true {|let a declaration WITH A BODY elide a parameter name'
+  # AND WHICH RULE IT BROKE IS DECIDED BY THE SHAPE. A bare identifier is an
+  # untyped PARAMETER needing inference (`Parameter.rats:96`); only something
+  # structured, which cannot be a `BindId`, is an attempted elision. Inverting
+  # the test swaps both messages at once, so both fixtures speak.
+  'crates/parser/src/lib.rs|            TypeRef::Named { name, args, .. } if args.is_empty() => Some(name.clone()),|            TypeRef::Named { name, args, .. } if !args.is_empty() => Some(name.clone()),|swap the untyped-parameter and elided-name diagnostics'
+  # THE SAME SPLIT ON AN OBJECT'S VALUE PARAMETERS, where elision is not even a
+  # possible reading -- `TraitObject.rats:185` routes them through the same
+  # `Params`. Without the bare-name reading every untyped FIELD is called an
+  # elision again.
+  'crates/parser/src/lib.rs|        Some((*n).to_owned())|        None|stop reading a bare identifier as an untyped field'
   'crates/types/src/comprises.rs|if r.is_own_static(sub) {|if false {|read a static parameter in a comprises clause as a type name'
   'crates/types/src/comprises.rs|if !r.clause_is_ours() {|if false {|report a merged comprises clause against the importing file'
   'crates/parser/src/lib.rs|if is_literal(operand) {|if true {|duplicate every chain operand instead of binding it'

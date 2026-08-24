@@ -1,0 +1,9 @@
+(* THE SAME RULE ON AN OBJECT'S VALUE PARAMETERS, and elision is not even a
+   possible reading here: `TraitObject.rats:185` sends them through the SAME
+   `Params` a function's go through, so there is no `AbsParam` alternative in
+   reach and a bare identifier is an untyped FIELD and nothing else. The
+   message says `field`, because that is what has no type. *)
+
+object O(x) end
+
+run(): () = ()

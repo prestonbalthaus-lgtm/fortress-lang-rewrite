@@ -2239,13 +2239,56 @@ impl<'t, 'a> Parser<'t, 'a> {
         if body.is_none() {
             return Ok(());
         }
-        match params.iter().find(|p| p.name.starts_with('$')) {
-            None => Ok(()),
-            Some(p) => Err(ParseError::ParameterTypeOmitted {
-                span: p.span,
+        let Some(p) = params.iter().find(|p| p.name.starts_with('$')) else {
+            return Ok(());
+        };
+        Err(Self::untyped_or_elided(&p.ty, p.span, "parameter"))
+    }
+
+    /// WHICH RULE A TYPELESS PARAMETER BROKE, decided by the SHAPE of what was
+    /// written, because the two readings are only ambiguous for one shape.
+    ///
+    /// A BARE IDENTIFIER IS AN UNTYPED PARAMETER. `Parameter.rats:96` is
+    /// `Param ::= BindId (w IsTypeOrPattern)?`, so a concrete declaration may
+    /// omit a parameter's TYPE, and that is legal 1.0 needing INFERENCE.
+    /// Reading it as an elided NAME instead blames `functions.tex:384-385`, a
+    /// rule about ABSTRACT declarations, for a program that is not attempting
+    /// elision at all -- and 35 corpus files were told that.
+    ///
+    /// ANYTHING STRUCTURED IS AN ELISION. `List[\T\]`, an arrow and a tuple
+    /// are not `BindId`s, so nothing can read them as a name, and a
+    /// declaration that writes one where a name belongs IS eliding.
+    fn untyped_or_elided(ty: &TypeRef, span: Span, role: &'static str) -> ParseError {
+        let bare = match ty {
+            TypeRef::Named { name, args, .. } if args.is_empty() => Some(name.clone()),
+            _ => None,
+        };
+        match bare {
+            Some(name) => ParseError::ParameterTypeInferred { span, role, name },
+            None => ParseError::ParameterTypeOmitted {
+                span,
                 position: "this declaration has a BODY",
-            }),
+            },
         }
+    }
+
+    /// A field written as a BARE NAME: an identifier with nothing after it but
+    /// the end of its entry in the list.
+    ///
+    /// TOLD APART ON THE TOKEN SHAPE and not by parsing a `type_ref`, so that
+    /// `object O(3)` still reaches the FIELDS message instead of a failure
+    /// inside the type.
+    fn bare_field_name_here(&self) -> Option<String> {
+        let Some(Kind::Ident(n)) = self.peek_kind() else {
+            return None;
+        };
+        if !matches!(
+            self.peek_ahead(1),
+            Some(Kind::Comma | Kind::RParen | Kind::Newline)
+        ) {
+            return None;
+        }
+        Some((*n).to_owned())
     }
 
     fn params(&mut self, mutable_allowed: bool) -> Parsed<Vec<Param>> {
@@ -2314,10 +2357,27 @@ impl<'t, 'a> Parser<'t, 'a> {
             // AN OBJECT'S VALUE PARAMETERS ARE ITS FIELDS, and a field needs a
             // name to be read by. `mutable_allowed` is true for exactly that
             // list and for nothing else, so it is the discriminator.
+            //
+            // AND ELISION IS NOT EVEN A POSSIBLE READING HERE.
+            // `TraitObject.rats:185` sends an object's value parameters
+            // through the SAME `Params` a function's go through, so
+            // `Param ::= BindId (w IsTypeOrPattern)?` and there is no
+            // `AbsParam` alternative in reach: a bare identifier is an untyped
+            // FIELD and nothing else. Told apart on the token shape rather
+            // than by parsing a `type_ref`, because `object O(3)` must still
+            // reach the message below and not a failure inside the type.
             if !named && mutable_allowed {
-                return Err(ParseError::ParameterTypeOmitted {
-                    span: self.span_here(),
-                    position: "an object's value parameters are its FIELDS",
+                let span = self.span_here();
+                return Err(match self.bare_field_name_here() {
+                    Some(name) => ParseError::ParameterTypeInferred {
+                        span,
+                        role: "field",
+                        name,
+                    },
+                    None => ParseError::ParameterTypeOmitted {
+                        span,
+                        position: "an object's value parameters are its FIELDS",
+                    },
                 });
             }
             if !named && !mutable {
