@@ -312,7 +312,16 @@ written import. `unknown type` as a first blocker went from 93 corpus files to
 
 Still missing: SET and MAP comprehensions (the list form landed), `at` and
 distributions, coercion (recorded but never applied), unit algebra above
-declaration, a tuple RESULT, and user definable syntax.
+declaration, a NESTED tuple, and user definable syntax.
+
+**The tuple calling convention is complete in both directions.** A tuple
+PARAMETER flattens -- `overloading.tex:125` makes `f(x:(A,B))` and `f(a:A,b:B)`
+one declaration, so the first is lowered into the second and nothing is ever
+whole. A tuple RESULT is an LLVM aggregate return, `insertvalue` into a struct
+and `extractvalue` at the call, and it is still non-materialising: the value
+lives in SSA registers, so there is no allocation, no tag and no `alloca`, and
+LLVM's own ABI lowering decides whether the fields travel in registers or
+through a hidden pointer.
 
 The legacy Sun implementation is kept as reference material:
 

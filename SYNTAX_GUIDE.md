@@ -3958,7 +3958,20 @@ cross[\G\](g: Generator[\G\]): Generator[\(E,G)\] =   (* a tuple type as a stati
 indexAndMask(i:ZZ32) : (ZZ32,ZZ64) = (i RSHIFT 6, widen(1) LSHIFT (i BITAND 63))
 ```
 
-`(T)` with one element is just a parenthesised type, not a one-tuple, and `()` is void rather than a zero-tuple. fortressc answers `a tuple type is not implemented in this subset`.  ⚠ 2026-08-23: TUPLE TYPES AND TUPLE DESTRUCTURING WORK -- `(a, b) = (1, 2)` then `a + b` prints 3 -- and an api may NAME a tuple freely. What is still refused is a tuple VALUE in a position needing a representation, and the message changed: `a tuple value is not implemented in this subset, so it cannot be the result of a function with a body`.  ⚠ 2026-08-23 (later): ARITY FLATTENING IS IN. `overloading.tex:125` -- a functional has a SINGLE parameter, which may be a tuple -- so `f(x: (A,B))` and `f(a: A, b: B)` are ONE declaration, and the compiler now says so: writing both is `g is declared twice on the same argument types`. A tuple-typed name becomes SEVERAL names and no tuple is ever built: parameters, component-level values, local bindings, `(a, b) = x`, `f(t)` and `f((p, q))` all flatten, under a static parameter too. A whole tuple is spread into a call only where a declaration of that ARITY exists; otherwise it is written back out and refused as a tuple expression. STILL REFUSED BY NAME: a tuple RESULT, a MUTABLE tuple local, a nested tuple, an object's tuple-typed value parameter or field, and a flattened name used as anything but a whole argument or a destructuring's right-hand side (`t.f()` says "`t` is a tuple and tuples are FLATTENED here").
+`(T)` with one element is just a parenthesised type, not a one-tuple, and `()` is void rather than a zero-tuple. fortressc answers `a tuple type is not implemented in this subset`.  ⚠ 2026-08-23: TUPLE TYPES AND TUPLE DESTRUCTURING WORK -- `(a, b) = (1, 2)` then `a + b` prints 3 -- and an api may NAME a tuple freely. What is still refused is a tuple VALUE in a position needing a representation, and the message changed: `a tuple value is not implemented in this subset, so it cannot be the result of a function with a body`.  ⚠ 2026-08-23 (later): ARITY FLATTENING IS IN. `overloading.tex:125` -- a functional has a SINGLE parameter, which may be a tuple -- so `f(x: (A,B))` and `f(a: A, b: B)` are ONE declaration, and the compiler now says so: writing both is `g is declared twice on the same argument types`. A tuple-typed name becomes SEVERAL names and no tuple is ever built: parameters, component-level values, local bindings, `(a, b) = x`, `f(t)` and `f((p, q))` all flatten, under a static parameter too. A whole tuple is spread into a call only where a declaration of that ARITY exists; otherwise it is written back out and refused as a tuple expression. STILL REFUSED BY NAME: a tuple RESULT, a MUTABLE tuple local, a nested tuple, an object's tuple-typed value parameter or field, and a flattened name used as anything but a whole argument or a destructuring's right-hand side (`t.f()` says "`t` is a tuple and tuples are FLATTENED here").  ⚠ 2026-08-24: **A TUPLE RESULT WORKS.** It is an LLVM aggregate return -- `insertvalue` into a struct, `extractvalue` at the call -- and still non-materialising, so nothing is allocated:
+
+```fortress
+split(): (ZZ64, ZZ64) = (3, 4)
+tagged(): (ZZ32, String) = (7, "hi")
+again(): (ZZ64, ZZ64) = split()            (* the aggregate passes straight through *)
+dup[\T\](x: T): (T, T) = (x, x)             (* stamped per instantiation *)
+run(): () = do
+  (a, b) = split()                         (* the call happens ONCE *)
+  println(a + b)                           (* 7 *)
+end
+```
+
+What is refused NOW is narrower: a NESTED tuple result (`(ZZ32, (ZZ32, ZZ32))` -- "an element of another tuple -- that would nest an aggregate"), a `()` element, a binder whose arity disagrees with the result, and a whole tuple held by ONE name (`t = split()` -- "held by one name; write `(a, b) = ...` to destructure it").
 
 *Seen in: SpecData/examples/preliminaries/Overview.Expression.tuple.fss:20, Library/Map.fss:41, Library/ChunkedSparseArray.fss:75*
 

@@ -297,8 +297,8 @@ binaries and the instrument self-tested both ways first.
 
 REFUSED BY NAME, each because it needs the half this milestone does not build:
 a tuple RESULT (the callee would have to hand back several values -- an
-aggregate return, and `(left, right) = split()` is its two corpus witnesses); a
-MUTABLE tuple local; a tuple binding whose initialiser is neither a written
+aggregate return, and `(left, right) = split()` is its two corpus witnesses;
+**LANDED 2026-08-24, two sections below**); a MUTABLE tuple local; a tuple binding whose initialiser is neither a written
 tuple nor another flattened name; a NESTED tuple type; an object's tuple-typed
 value parameter or field, because those decide a layout; and a flattened name
 used as anything but a whole argument or a destructuring's right-hand side.
@@ -407,6 +407,58 @@ index position, an integer literal fell back to `ZZ32`, and `r[0]` reported
 path and nowhere else. The hint pool is narrowed by the RECEIVER now, which is
 already typed and can only make a hint more specific.
 See docs/superpowers/specs/2026-08-24-generator-protocol-indexed.md.
+
+**MULTI-VALUE RETURN, LANDED 2026-08-24. THE OTHER HALF OF THE CALLING
+CONVENTION.** `f(): (ZZ64, ZZ64)` lowers to `{i64, i64} @f()`, built with
+`insertvalue` and taken apart with `extractvalue` at the call.
+
+IT IS STILL NON-MATERIALISING, and that distinction is the whole milestone: the
+aggregate lives in SSA registers. No `fortress_alloc`, no GC block, no 32-bit
+tag, no `alloca`. The allocation rule -- one path, through `fortress_alloc` --
+is not touched, because nothing is allocated. LLVM's own ABI lowering decides
+whether the pair travels in two registers or through a hidden pointer, and that
+decision belongs to the target rather than to this compiler. `tuple-gate` reads
+both facts off the emitted IR rather than taking them from a comment.
+
+`Specification/basic/types-vals-vars.tex:246-284` is what the shape follows: a
+tuple type is "a parenthesized, comma-separated list of TWO OR MORE types",
+tuple types are COVARIANT, and a tuple type "excludes every tuple type that does
+not have the same number of element types" -- which is why an arity disagreement
+between a result and its binder is a refusal and not a truncation.
+
+THREE TOUCHPOINTS, EACH NARROW ON PURPOSE:
+
+  * `Expr::Tuple` is taken only where a tuple is EXPECTED, and there is exactly
+    one such position -- the result of a function whose declared result is a
+    tuple. `println(t)`, `t.m()` and `typecase (x,y)` keep the refusal they had,
+    because the expectation is the gate: with no written tuple result nothing
+    hands one down.
+  * the result-side `tuple_free` becomes `representable_tuple`. A NESTED tuple
+    is refused rather than lowered to a nested struct -- it would make the ABI
+    decision depend on a type's shape two levels down -- and a `()` element
+    keeps `VoidNotStorable`'s own wording, as it does at every other boundary.
+  * `(a, b) = f(...)` gets its own typed variant, `TupleDestructure`, and NOT
+    `TupleBinding`. That one carries one expression per name, which is right when
+    the source WROTE a tuple; here the call must happen ONCE. It is also why
+    this cannot be done in `tuple.rs`: that pass has no types, so splitting the
+    binder there would either duplicate the call or need a whole-tuple
+    temporary, and a temporary is the representation this backend does not have.
+
+AND A REFUSAL THIS MILESTONE HAD TO ADD RATHER THAN REMOVE. `t = split()` bound
+a whole aggregate to one local and COMPILED -- nothing on the plain-binding path
+asked, and it was inert only as long as nothing read `t`. An accidental
+capability is exactly what a subset boundary exists to keep out, so it is refused
+by name with the destructuring spelled out.
+
+434 objects and 126 apis, +2 and nothing lost: `tupleTypeParam.fss` and
+`Expr.VarRef.fss`. THE ESTIMATE WAS "ROUGHLY TEN" AND THE ANSWER IS TWO, and
+that was said in the design document before the build rather than discovered
+after it. The other named witnesses walk onto later walls -- a missing `DIV`, a
+generic `split` whose result type disagrees with its declaration, and `only a
+variable or an array element can be assigned to`. The tuple first-blocker list
+went 53 -> 32, so 21 files came off it and two onto the compile list: a
+wall-unstacking milestone. ALL 432 PRE-EXISTING OBJECTS EMIT BYTE-IDENTICAL IR.
+See docs/superpowers/specs/2026-08-24-multi-value-return.md.
 
 **EXCEPTIONS, PARKED 2026-08-23.** `throw` is built -- an uncaught throw halts,
 naming the exception, with no unwinding and no cost on the path that does not
