@@ -241,15 +241,27 @@ RULES = [
  ('non-type-static-params',  'type',  r'`(nat|int|bool|unit|dim)` static parameters are not implemented'),
 
  ('function-types',          'parse', r'reserved word `fn`|an arrow type is not implemented'),
- # `f(v) = 2` and `object O(x)` -- a parameter with no type annotation.
- ('untyped-parameters',      'parse', r'expected `:`, found RParen'),
+ # `f(v) = 2` and `object O(x)` -- a parameter or FIELD with no written type.
+ #
+ # THIS PATTERN WAS DEAD FOR TWO MILESTONES AND THE BUCKET READ ZERO, which is
+ # the failure mode a triage rule has: it does not go red, it goes quiet. G7
+ # refused the construct BY NAME and the punctuation message stopped being
+ # emitted; nothing re-grounded the rule, so a 42-file bucket reported nothing
+ # at all. Regenerate with --raw after any milestone that renames a diagnostic.
+ #
+ # THE PARAMETER'S NAME IS IN THE MESSAGE, so match the invariant half only --
+ # keying on `the parameter `x`` would split one bucket into sixteen.
+ ('untyped-parameters',      'parse', r'has no written type, and this compiler cannot infer one'),
  # THE `expected `)`, found Colon` ALTERNATIVE CAME OUT, and the reason is that
  # it was a PROXY that stopped being true. A typed local function used to die in
  # the parser at the `:`, so that message stood in for the feature; it now
  # reaches `a local function declaration is not implemented` on its own. What is
- # left under that message is 20 files and NONE of them is a local function --
- # 4 typecase pattern arms, 4 typed tuple binders, 8 extent ranges, 2 nested
- # tuple patterns, one spaced declaration `glued_left` misses, and one `:OP:`
+ # left under that message is 20 files, re-derived 2026-08-24 by reading the
+ # reported line of each, and NONE of them is a local function -- 4 typecase
+ # pattern arms, 4 typed tuple binders, 8 extent ranges, 2 nested tuple
+ # patterns, one `:OP:` and one `run((): () = do`. The `one spaced declaration
+ # `glued_left` misses` this list used to carry was `funny.fss` and it is GONE:
+ # the parameter list no longer has to be glued to the name.
  # lexer item. Leaving it in made this bucket report 20 files it does not own.
  ('local-functions',         'parse', r'a local function declaration'),
 

@@ -391,7 +391,7 @@ var z: RR64 = 0      (*) Local variable declaration (mutable)
 
 *Seen in: Fortify/example/buffons.fss:16, Documentation/Specification/Code/Block1.fss:22-25, ProjectFortress/compiler_tests/patternMatching1.fss:47*
 
-Only the `(*)` markers are the point there: the declarations are Block1.fss's own, and inside a `do` fortressc takes `y = x+1` but refuses the local function declaration, "expected `)`, found Colon", and `var`, "expected an expression, found KwVar".
+Only the `(*)` markers are the point there: the declarations are Block1.fss's own, and inside a `do` fortressc takes `y = x+1` and `var z: RR64 = 0.0`, and refuses the local function declaration by name, "a local function declaration is not implemented; declare it at component level". ⚠ 2026-08-24: it used to quote "expected `)`, found Colon" for the local function and "expected an expression, found KwVar" for `var`; both are stale. A typed local function reaches the named refusal since G6, and `var` with an initializer compiles -- what is refused is `var z: RR64` with NO initializer, and that too is refused by name.
 
 `//` is NOT a comment in Fortress, it is an operator (`r := r // "["`), and `#` is the range operator (`1#3000`). Neither ever introduces a comment.
 
@@ -1375,7 +1375,9 @@ ProjectFortress/compiler_tests/Compiled5.bt.fss writes those two branches as `tr
 
 ### Local functions and closures
 
-Inside a `do ... end` block a function is declared with exactly the top-level syntax and is visible only there. The untyped spelling reaches the checker, which refuses it: `a local function declaration is not implemented; declare it at component level`. [parses] A TYPED parameter is a parse error before that check ever runs, `expected ')', found Colon`, so the mutually recursive pair below never gets as far as the local-function message. [legacy]
+Inside a `do ... end` block a function is declared with exactly the top-level syntax and is visible only there. Every spelling reaches the same refusal: `a local function declaration is not implemented; declare it at component level`. [parses] 
+
+⚠ 2026-08-24: **the second half of this paragraph was wrong twice over and both halves are fixed.** It said a TYPED parameter was a parse error, `expected ')', found Colon`; G6 gave the typed form its own probe and it now reaches the local-function message, which is what took that bucket's first-blocker count from 7 to 36. It also implied the parameter list must be GLUED to the name; `LocalDecl.rats:75` is `Id (w StaticParams)? w ValParam` with `w = Whitespace*`, so `g (x: ZZ32): ZZ32 = e` is one declaration and it reaches the refusal too. The mutually recursive pair below now gets as far as the local-function message. A NEWLINE still ends the header: `g` and `(x: ZZ32) = e` on two lines are two block elements.
 
 ```fortress
 run(): () = do
@@ -1387,7 +1389,7 @@ blah(b:ZZ32, one:ZZ32):Boolean = do
     myOdd(x:ZZ32, one': ZZ32):Boolean = if x = 1 then true else myEven(x-one',one') end
     myEven(x:ZZ32, one':ZZ32):Boolean = if x = 0 then true else myOdd(x-one',one') end
     myOdd(b,one)            (* mutually recursive locals work only when ADJACENT *)
-  end                       (* fortressc stops at the colon in myOdd's parameter list [legacy] *)
+  end                       (* fortressc refuses at myOdd, naming the feature [parses] *)
 ```
 *Seen in: fortressc/tests/localfn.fss:4-7, ProjectFortress/compiler_tests/Compiled9.m.fss:18-22*
 
@@ -1550,7 +1552,7 @@ end
 ```
 *Seen in: SpecData/examples/basic/Object.Decl.Cons.fss:22-26, ProjectFortress/demos/BirdCount1u.fss:58-59*
 
-The corpus writes that header over two lines with `extends` starting the second, and leaves the parameters of `cons` and `append` untyped. Both are [legacy]. A line break before `extends` ends the header and the keyword is then read as a member name, "expected a field or method name, found KwExtends"; 182 object headers in the corpus break there, and a `&` at the end of the head line restores the layout. An untyped parameter gives "expected `:`, found RParen".
+The corpus writes that header over two lines with `extends` starting the second, and leaves the parameters of `cons` and `append` untyped. Both are [legacy]. A line break before `extends` ends the header and the keyword is then read as a member name, "expected a field or method name, found KwExtends"; 182 object headers in the corpus break there, and a `&` at the end of the head line restores the layout. An untyped parameter is refused by name: "the field `first` has no written type, and this compiler cannot infer one". ⚠ 2026-08-24: it used to give "expected `:`, found RParen", which named the punctuation. `Parameter.rats:96` makes an omitted parameter type legal 1.0 -- what it needs is INFERENCE, and `basic/inference.tex` is a 27-line stub.
 
 `object O` and `object O()` are different declarations. The second is a nullary constructor you must apply. It is uncommon: 43 lines in 32 files.
 
@@ -2706,11 +2708,13 @@ This one compiles, and it is the corpus's only do-while equivalent. The cited fi
 
 ```fortress
 do
-  f(w: ZZ32) = w+1     (*) [parses] local function: "expected `)`, found Colon" at the typed
-                       (*)   parameter, then "declare it at component level" once it parses
+  f(w: ZZ32) = w+1     (*) [parses] local function: "a local function declaration is not
+                       (*)   implemented; declare it at component level". The parameter list may
+                       (*)   be spaced off the name -- `g (w: ZZ32) = e` reaches the same refusal.
   y = x+1              (*) Local variable declaration (immutable)
-  var z: RR64 = 0      (*) [parses] var: "expected an expression, found KwVar"; write z: RR64 := 0.0
-  z += f(y)            (*) [legacy] compound assignment: "expected an expression, found Eq"
+  var z: RR64 = 0.0    (*) [fortressc] mutable local. WITHOUT the initializer it is refused by
+                       (*)   name: "`z` is declared with no initializer".
+  z += f(y)            (*) [fortressc] compound assignment
   |z|                  (*) [legacy] size bars: "expected an expression, found Bar"
 end
 ```

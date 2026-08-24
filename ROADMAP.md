@@ -140,9 +140,22 @@ stable across runs.
 `.rats` modules under `ProjectFortress/src/com/sun/fortress/parser/`.
 *Exit:* parses 90% of the corpus to an AST. The remaining 10% is catalogued with
 a reason each.
-*Where it is:* 1845 of 1956 lex (94%), 839 of those parse. Both numbers are
-ratchets in the corpus tests rather than commentary, so a regression fails the
-build.
+*Where it is, re-measured 2026-08-24:* 1909 of 1956 lex (98%), 1161 of those
+parse (61%). Both numbers are ratchets in the corpus tests rather than
+commentary, so a regression fails the build. This line read "1845 lex, 839
+parse" until it was re-run; a `.rats` port advances in small named steps and the
+prose does not follow on its own.
+
+*What is left is a PARSER queue and not a type-system one.* The 1382 files that
+do not parse are catalogued by `tools/triage.sh`, and the top buckets are all
+grammar: an all-caps operator word used as a name, `grammar` and the other
+syntax-abstraction reserved words, trait value parameters, untyped parameters.
+Two traps this phase has now paid for twice. A first-blocker count is not a
+ceiling -- it says what the compiler hit FIRST, and this project's counts have
+been wrong by up to 20x in both directions -- so the cheapest way to turn one
+into a ceiling is to PARSE the construct and refuse it BY NAME, then re-measure.
+And a feature that makes an INVALID program compile shows up as a gain, so read
+what a gained file compiles TO, never just the count.
 
 **3. Names and modules.** Component and API resolution, imports, scoping.
 *Exit:* `Library/` resolves clean with no unresolved references.
