@@ -215,8 +215,14 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
     // Import and export names -- dotted and braced exports, the import list
     // recorded rather than skipped, qualified type names, and a foreign import
     // refused BY NAME -- took it 815 -> 839.
+    // THE FLOOR THEN WENT UNRATCHETED THROUGH EVERYTHING FROM `Self` TO THE
+    // GENERATOR PROTOCOL, and the real number is 1113 at 2026-08-24. It is
+    // re-pinned here rather than left at 839, because a floor 274 below the
+    // measurement cannot catch a regression. Two of those 274 are datable: the
+    // binding-condition lookahead, and the wrapped value-parameter list, which
+    // is the last one and took it 1112 -> 1113.
     assert!(
-        parsed >= 839,
-        "parser corpus regressed: {parsed} files parse, floor is 839"
+        parsed >= 1113,
+        "parser corpus regressed: {parsed} files parse, floor is 1113"
     );
 }

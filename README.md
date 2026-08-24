@@ -281,10 +281,10 @@ commentary:
 
 | metric | today | floor | instrument |
 |---|---|---|---|
-| corpus files that LEX | 1845 of 1956 | 1845 | `crates/lexer/tests/corpus.rs` |
-| corpus files that PARSE | 839 | 839 | `crates/parser/tests/corpus.rs` |
-| `.fss` that compile and emit an object | 432 | 321 | `tools/apply-gate.sh` |
-| `.fsi` that check | 126 | 126 | `tools/apply-gate.sh` |
+| corpus files that LEX | 1909 of 1956 | 1845 | `crates/lexer/tests/corpus.rs` |
+| corpus files that PARSE | 1113 | 1113 | `crates/parser/tests/corpus.rs` |
+| `.fss` that compile and emit an object | 435 | 321 | `tools/apply-gate.sh` |
+| `.fsi` that check | 134 | 134 | `tools/apply-gate.sh` |
 | oracle cases that agree with 1.0 | 356 | 356 | `tools/oracle-gate.sh` |
 
 The headline metric is object emission plus api checking, split on purpose: an
