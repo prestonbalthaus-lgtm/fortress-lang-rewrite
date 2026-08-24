@@ -1,0 +1,6 @@
+(* AN OBJECT'S VALUE PARAMETERS ARE ITS FIELDS, and a field needs a name to be
+   read by, so elision is refused there whether or not anything has a body. *)
+
+object O(x) end
+
+run(): () = ()

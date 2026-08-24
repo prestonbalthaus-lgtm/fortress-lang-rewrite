@@ -1,0 +1,17 @@
+(* AN ELIDED PARAMETER NAME. `basic/functions.tex:384-385`, of an ABSTRACT
+   function declaration: "Parameter names may be elided but parameter types
+   cannot be omitted." `take(ZZ32)` declares a parameter of type ZZ32 with no
+   name, which is exactly right for a declaration with no body to refer to it
+   from. The implementing method names its own. *)
+
+trait Sink
+    take(ZZ32): ZZ32
+end
+
+object Box extends Sink
+    take(x: ZZ32): ZZ32 = x + x
+end
+
+run(): () = do
+    println(Box.take(21))
+end

@@ -71,6 +71,17 @@ pub enum ParseError {
     /// `f(x) = e` in block position. `=` is an equality operator in expression
     /// position, so without this the declaration would parse as a discarded
     /// comparison rather than fail.
+    /// `basic/functions.tex:384-385`, of an ABSTRACT function declaration:
+    /// "Parameter names may be elided but parameter types cannot be omitted."
+    /// Both halves are enforced. The NAME may go, and `params` takes the bare
+    /// type. The TYPE may not, and a bare identifier where a type is required
+    /// IS the omitted-type case whenever elision is not licensed -- an object's
+    /// value parameters, which are its FIELDS, and any declaration WITH A BODY.
+    ParameterTypeOmitted {
+        span: Span,
+        /// What the parameter list actually is here, for the message.
+        position: &'static str,
+    },
     LocalFunctionDeclarationUnsupported {
         span: Span,
     },
@@ -205,6 +216,7 @@ impl ParseError {
     pub const fn span(&self) -> Option<Span> {
         match self {
             Self::UnexpectedToken { span, .. }
+            | Self::ParameterTypeOmitted { span, .. }
             | Self::PostfixOperatorUnsupported { span }
             | Self::ReservedWord { span, .. }
             | Self::StaticParameterKindUnsupported { span, .. }
@@ -241,6 +253,12 @@ impl core::fmt::Display for ParseError {
             } => {
                 write!(f, "expected {expected}, found {found}")
             }
+            Self::ParameterTypeOmitted { position, .. } => write!(
+                f,
+                "a parameter's type may not be omitted, and {position}, so the name cannot be \
+                 elided here either. `functions.tex:384-385` allows an elided NAME only in an \
+                 ABSTRACT declaration -- one with no body"
+            ),
             Self::UnexpectedEndOfInput { expected } => {
                 write!(f, "unexpected end of input, expected {expected}")
             }

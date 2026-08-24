@@ -529,6 +529,7 @@ setterfires|SETTER RAN\n105\n9\nBOX 7\nBASE 7|a declared setter FIRES and an ord
 mergedaccessor|42|a merged getter name does not capture this file's own method
 seqvoperator|true\nfalse|`===` reaches the overload set and is not a spelling of `=`
 prefixopword|6\n16\n12\nfalse\n10|a prefix operator word binds tighter than every infix
+elidedparam|42|an abstract declaration may elide a parameter NAME
 typedascription|5\n10\n3|`e typed T` pins the literal and takes the whole expression
 bigoperator|7\n42\n10|`BIG` folds into the operator NAME at the use site too
 conditionalops|false\ntrue\ntrue\nfalse|`AND:` and `OR:` are the conditional forms and SHORT CIRCUIT
@@ -593,6 +594,8 @@ juxtnary.fss|a juxtaposition of 3 elements led by a function is not implemented
 juxtsingleton.fss|neither multiplication nor concatenation
 localfn.fss|a local function declaration is not implemented
 badlocalfntyped.fss|a local function declaration is not implemented
+badelidedbody.fss|this declaration has a BODY
+badelidedfield.fss|an object's value parameters are its FIELDS
 badchainsense.fss|chained ordering operators must have the same sense
 badarrowtype.fss|an arrow type is not implemented
 badvartuple.fsi|a parenthesised variable list declares a tuple of variables
@@ -1039,6 +1042,12 @@ MUTATIONS=(
   # A LOCAL FUNCTION WITH TYPED PARAMETERS reaches the refusal the untyped one
   # already reached. Without the probe it dies in the parser at the `:`.
   'crates/parser/src/lib.rs|        self.params(false).ok()?;|        return None;|stop reading a typed parameter list as a local function header'
+  # THE ELIDED PARAMETER NAME. Three claims, three rows.
+  'crates/parser/src/lib.rs|            if !named && !mutable {|            if false {|stop taking a bare TYPE as a parameter whose name is elided'
+  # AND BOTH HALVES OF THE SPEC SENTENCE. The type may NOT be omitted, so
+  # elision is refused where it is not licensed.
+  'crates/parser/src/lib.rs|            if !named && mutable_allowed {|            if false {|let an object elide a FIELD name'
+  'crates/parser/src/lib.rs|        if body.is_none() {|        if true {|let a declaration WITH A BODY elide a parameter name'
   'crates/types/src/comprises.rs|if r.is_own_static(sub) {|if false {|read a static parameter in a comprises clause as a type name'
   'crates/types/src/comprises.rs|if !r.clause_is_ours() {|if false {|report a merged comprises clause against the importing file'
   'crates/parser/src/lib.rs|if is_literal(operand) {|if true {|duplicate every chain operand instead of binding it'

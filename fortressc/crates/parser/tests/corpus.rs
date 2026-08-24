@@ -89,6 +89,9 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
                     fortress_parser::ParseError::PostfixOperatorUnsupported { .. } => {
                         "postfix operator".to_owned()
                     }
+                    fortress_parser::ParseError::ParameterTypeOmitted { .. } => {
+                        "a parameter's type is omitted".to_owned()
+                    }
                     fortress_parser::ParseError::ReservedWord { word, .. } => {
                         format!("reserved word `{word}`")
                     }
@@ -233,8 +236,14 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
     // and TWO features: `typed` is an ascription and is implemented, `asif` is
     // an ASSUMPTION and the checker refuses it BY NAME. Parsing both is what
     // moves the count; only one of them is lowered.
+    // THE ELIDED PARAMETER NAME took it 1152 -> 1161. `functions.tex:384-385`,
+    // of an ABSTRACT declaration: "Parameter names may be elided but parameter
+    // types cannot be omitted." BOTH halves are enforced -- the bare TYPE is
+    // taken, and the omitted-type case is refused BY NAME wherever elision is
+    // not licensed: an object's value parameters, which are its FIELDS, and any
+    // declaration with a BODY.
     assert!(
-        parsed >= 1152,
-        "parser corpus regressed: {parsed} files parse, floor is 1152"
+        parsed >= 1161,
+        "parser corpus regressed: {parsed} files parse, floor is 1161"
     );
 }

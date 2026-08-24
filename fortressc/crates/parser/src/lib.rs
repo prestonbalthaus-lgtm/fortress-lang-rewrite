@@ -1652,6 +1652,7 @@ impl<'t, 'a> Parser<'t, 'a> {
             // and this one was reading only `where`.
             self.skip_throws()?;
             let body = self.optional_definition()?;
+            Self::reject_elided_name(&params, body.as_ref())?;
             let end = body.as_ref().map_or(rparen, Expr::span);
             return Ok(Member::Method(MethodDecl {
                 modifiers,
@@ -1866,6 +1867,7 @@ impl<'t, 'a> Parser<'t, 'a> {
                 return Err(self.error("`=`"));
             }
         };
+        Self::reject_elided_name(&params, body.as_ref())?;
         let end = body.as_ref().map_or(rparen, Expr::span);
         let span = Span::new(name_span.start, end.end);
         Ok(FnDecl {
@@ -2201,6 +2203,29 @@ impl<'t, 'a> Parser<'t, 'a> {
         Ok(())
     }
 
+    /// A declaration WITH A BODY may not elide a parameter name.
+    /// `functions.tex:384-385` licenses elision for an ABSTRACT declaration
+    /// only, and `params` cannot see the body -- it is read afterwards -- so
+    /// the check belongs at each site that attaches one. The synthesised name
+    /// begins with `$`, which no source file can write, so this is exact.
+    ///
+    /// IT IS WHAT KEEPS `f(v) = 2` IN ITS OWN BUCKET. Read as an elided name it
+    /// is a parameter of type `v` and reports `unknown type v`, which is
+    /// TRUE and useless: 26 corpus files moved from a named bucket to that one
+    /// before this guard existed.
+    fn reject_elided_name(params: &[Param], body: Option<&Expr>) -> Parsed<()> {
+        if body.is_none() {
+            return Ok(());
+        }
+        match params.iter().find(|p| p.name.starts_with('$')) {
+            None => Ok(()),
+            Some(p) => Err(ParseError::ParameterTypeOmitted {
+                span: p.span,
+                position: "this declaration has a BODY",
+            }),
+        }
+    }
+
     fn params(&mut self, mutable_allowed: bool) -> Parsed<Vec<Param>> {
         let mut params = Vec::new();
         self.skip_newlines();
@@ -2245,6 +2270,57 @@ impl<'t, 'a> Parser<'t, 'a> {
             let mutable = mutable_allowed && self.at(&Kind::KwVar);
             if mutable {
                 self.pos += 1;
+            }
+            // AN ELIDED PARAMETER NAME. `basic/functions.tex:384-385`, of an
+            // ABSTRACT function declaration -- one without a body: "Parameter
+            // names may be elided but parameter types cannot be omitted." So a
+            // parameter is `name: Type`, or just a TYPE.
+            //
+            // ONE TOKEN TELLS THEM APART and nothing more is needed: a written
+            // NAME is followed by `:`. `bar(T): ZZ64` is a parameter of type
+            // `T`; `bar(x: T): ZZ64` is one called `x`. A type is not always an
+            // identifier -- `append(List[\T\])` is in the corpus -- so the
+            // elided branch parses a whole `type_ref`.
+            //
+            // THE SYNTHESISED NAME IS UNWRITABLE, the same way
+            // `SELF_TYPE_PLACEHOLDER` is: `$` lexes as an operator character
+            // and never as part of an identifier. Nothing can refer to the
+            // parameter, which is exactly right -- the declaration that elides
+            // a name has no body to refer to it from.
+            let named = matches!(self.peek_kind(), Some(Kind::Ident(_)))
+                && matches!(self.peek_ahead(1), Some(Kind::Colon));
+            // AN OBJECT'S VALUE PARAMETERS ARE ITS FIELDS, and a field needs a
+            // name to be read by. `mutable_allowed` is true for exactly that
+            // list and for nothing else, so it is the discriminator.
+            if !named && mutable_allowed {
+                return Err(ParseError::ParameterTypeOmitted {
+                    span: self.span_here(),
+                    position: "an object's value parameters are its FIELDS",
+                });
+            }
+            if !named && !mutable {
+                let ty = self.type_ref()?;
+                let mut end = ty.span().end;
+                let start = ty.span().start;
+                let varargs = self.at_ellipsis();
+                if varargs {
+                    self.pos += 3;
+                    end = self.previous_span().end;
+                }
+                params.push(Param {
+                    name: format!("${}", params.len()),
+                    ty,
+                    varargs,
+                    mutable: false,
+                    span: Span::new(start, end),
+                });
+                self.skip_newlines();
+                if !self.at(&Kind::Comma) {
+                    break;
+                }
+                self.pos += 1;
+                self.skip_newlines();
+                continue;
             }
             let (name, name_span) = self.identifier("a parameter name")?;
             self.expect(&Kind::Colon, "`:`")?;

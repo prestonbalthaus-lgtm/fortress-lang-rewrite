@@ -1,0 +1,12 @@
+(* ELISION IS AN ABSTRACT-DECLARATION FEATURE. `functions.tex:384-385` licenses
+   an elided NAME only where there is no body, and says in the same sentence
+   that a TYPE may not be omitted -- so `f(v) = 2` is the omitted-TYPE case and
+   is refused BY NAME.
+
+   READ AS AN ELIDED NAME IT WOULD SAY `unknown type v`, which is true and
+   useless: 26 corpus files moved from a named bucket into that one before this
+   guard existed. *)
+
+f(v) = 2
+
+run(): () = println(f(1))
