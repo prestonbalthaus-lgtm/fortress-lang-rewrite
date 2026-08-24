@@ -243,7 +243,15 @@ RULES = [
  ('function-types',          'parse', r'reserved word `fn`|an arrow type is not implemented'),
  # `f(v) = 2` and `object O(x)` -- a parameter with no type annotation.
  ('untyped-parameters',      'parse', r'expected `:`, found RParen'),
- ('local-functions',         'parse', r'a local function declaration|expected `\)`, found Colon'),
+ # THE `expected `)`, found Colon` ALTERNATIVE CAME OUT, and the reason is that
+ # it was a PROXY that stopped being true. A typed local function used to die in
+ # the parser at the `:`, so that message stood in for the feature; it now
+ # reaches `a local function declaration is not implemented` on its own. What is
+ # left under that message is 20 files and NONE of them is a local function --
+ # 4 typecase pattern arms, 4 typed tuple binders, 8 extent ranges, 2 nested
+ # tuple patterns, one spaced declaration `glued_left` misses, and one `:OP:`
+ # lexer item. Leaving it in made this bucket report 20 files it does not own.
+ ('local-functions',         'parse', r'a local function declaration'),
 
  ('exceptions',              'parse', r'reserved word `(try|catch|throw|throws|finally)`|unknown type `\w*Exception`'),
  ('control-flow-extras',     'parse', r'reserved word `(typecase|case|label|exit|spawn|also|at|goto)`'),
