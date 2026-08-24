@@ -1,0 +1,43 @@
+component wrappedparams
+export Executable
+
+(* A WRAPPED VALUE-PARAMETER LIST: the list begins on the line AFTER the
+   header. `Library/GeneratorLibrary.fsi:131`, `Random.fsi:211` and
+   `Sparse.fsi:28` all write it, because the static parameters make the first
+   line long.
+
+   Newlines are significant in Fortress, so this is a deliberate exception --
+   the same one the static parameter list already had. *)
+
+object Pair[\A, B\]
+    (left: A, right: B)
+  first(): A = left
+  second(): B = right
+end
+
+(* And with `var` parameters, which is how `ParametricTree.fss:23` writes it. *)
+object Cell[\T\]
+    (var held: T)
+  get(): T = held
+  put(x: T): () = do
+    held := x
+  end
+end
+
+(* THE ONE THAT MUST STILL BE A MEMBER AND NOT A PARAMETER LIST: a body whose
+   first declaration does not begin with `(`. Nothing about this changed and
+   the fixture says so. *)
+object Plain
+  answer(): ZZ64 = 42
+end
+
+run(): () = do
+  p = Pair[\ZZ64, String\](7, "hi")
+  println(p.first())
+  println(p.second())
+  c = Cell[\ZZ64\](1)
+  c.put(9)
+  println(c.get())
+  println(Plain.answer())
+end
+end

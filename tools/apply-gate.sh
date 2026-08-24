@@ -399,6 +399,17 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # way to have the first is to lower it into the second: a tuple-typed name
 # becomes SEVERAL names and no tuple is ever built. The RESULT direction stays
 # refused -- that needs the callee to hand back several values.
+# A WRAPPED VALUE-PARAMETER LIST, 2026-08-24: 435 objects and 134 apis, +9 and
+# NOTHING LOST, from ONE `skip_newlines_before(&Kind::LParen)`. API_FLOOR moves
+# 126 -> 134 with it.
+# EIGHT OF THE NINE ARE `BirdyLib/*.fsi` AND THAT IS THE FINDING. They were
+# first-blocked on `unknown type DefaultGeneratorImplementation`, which is
+# declared in `Library/GeneratorLibrary.fsi` -- a file that did not PARSE. The
+# resolver takes an imported api's declarations after PARSING it, so a CHECK
+# error in an imported api does not block its importer and a PARSE error does.
+# `GeneratorLibrary.fsi` still fails to check; its importers no longer care.
+# A diagnostic naming a missing type is not always about the type: ask whether
+# the file declaring it parsed.
 # MULTI-VALUE RETURN, 2026-08-24: 434 objects and 126 apis, +2 and nothing lost.
 # `tupleTypeParam.fss` and `Expr.VarRef.fss`, and the second is the file the
 # state file named. THE ESTIMATE WAS "ROUGHLY TEN" AND THE MEASUREMENT IS TWO:
@@ -427,7 +438,7 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # 26 walk on to a later wall. This is a wall-unstacking milestone, and the
 # assertions are `badbindingif`, `badbindingwhile` and three mutation rows.
 OBJECT_FLOOR=321
-API_FLOOR=126
+API_FLOOR=134
 
 passed=0
 failed=0
@@ -528,6 +539,7 @@ tupleflat|7\n30\nHello World!\n7\n7\n0.25|a tuple parameter, a tuple value and a
 compgenerator|10\n20\n30\n11\n21\n31\n100\n101\n102\n2\n20|a comprehension walks a COLLECTION -- an array, a List and a user object
 bindingcond|7\n1\n2\n3\n2\n1\n99|a binding condition yields zero or one value, and `while` re-evaluates it
 tupleresult|3\n4\n7\nhi\n10\n20\n30\n7\n16\n41\n42\nmade\n11\n3|a tuple RESULT is an LLVM aggregate, and the source is evaluated ONCE
+wrappedparams|7\nhi\n9\n42|an object's value-parameter list may begin on the NEXT line
 CASES
 }
 
@@ -860,6 +872,10 @@ CASES
 }
 
 MUTATIONS=(
+  # A WRAPPED VALUE-PARAMETER LIST. One line, +9 corpus files, and the risk it
+  # carries is the opposite one: skipping newlines before `(` must not swallow a
+  # MEMBER. `wrappedparams.fss`'s third object exists for exactly that.
+  'crates/parser/src/lib.rs|        self.skip_newlines_before(&Kind::LParen);|        let _ = Kind::LParen;|stop reading a value-parameter list that begins on the next line'
   # `AND:` AND `OR:` ARE THE CONDITIONAL FORMS. The colon must be GLUED and it
   # must be CONSUMED -- left behind it is `expected an expression, found Colon`,
   # which is where 27 corpus files stopped.

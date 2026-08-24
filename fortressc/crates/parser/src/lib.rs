@@ -1238,6 +1238,20 @@ impl<'t, 'a> Parser<'t, 'a> {
         let (name, _) = self.identifier("an object name")?;
         self.skip_newlines_before(&Kind::LGeneric);
         let mut static_params = self.static_params()?;
+        // A WRAPPED VALUE-PARAMETER LIST. The list may begin on the line AFTER
+        // the header, which is what `Library/GeneratorLibrary.fsi:131`,
+        // `Random.fsi:211` and `Sparse.fsi:28` write once the static parameters
+        // have made the first line long. Newlines are significant here, so this
+        // is a deliberate exception and not an accident -- the same one
+        // `skip_newlines_before(&Kind::LGeneric)` above already makes for the
+        // static parameter list.
+        //
+        // IT CANNOT SWALLOW A MEMBER. `at_across_newlines` looks past newlines
+        // ONLY, so a body whose first declaration begins with anything else --
+        // `extends`, a name, `opr`, `getter` -- is untouched; and a member
+        // cannot begin with `(` today, which is precisely the error this
+        // removes ("expected a field or method name, found LParen").
+        self.skip_newlines_before(&Kind::LParen);
         let params = if self.at(&Kind::LParen) {
             self.pos += 1;
             let params = self.params(true)?;
