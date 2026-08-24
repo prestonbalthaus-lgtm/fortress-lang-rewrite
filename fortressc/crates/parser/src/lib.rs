@@ -4629,9 +4629,54 @@ impl<'t, 'a> Parser<'t, 'a> {
         })
     }
 
+    /// `if.tex:71-73`: "The reserved word `end` may be elided if the `if`
+    /// expression is immediately enclosed by parentheses. In such a case, an
+    /// `else` clause is required." 1.0 carries it as its OWN production,
+    /// `DelimitedExpr.rats:40`, and makes `Else` mandatory there while only
+    /// `end` is optional -- the prose's second sentence written into the
+    /// grammar.
+    ///
+    /// IMMEDIATELY ENCLOSED IS DECIDABLE FROM HERE and needs no threading
+    /// through the expression parser: look BACKWARD from this `if`'s own token,
+    /// past any newline, for an `LParen`. That covers BOTH sites at once -- the
+    /// parenthesised atom and a glued CALL's argument list, which are ONE
+    /// production in 1.0 and two in this parser -- and it correctly refuses
+    /// `(x + if b then 1 else 2)`, whose `if` is preceded by `Plus`, and
+    /// `(if a then 1 else if b then 2)`, whose inner `if` is preceded by
+    /// `else` and so still needs its own `end`.
+    fn if_end_may_be_elided(&self) -> bool {
+        let mut index = self.pos;
+        while index > 0 {
+            index -= 1;
+            match self.tokens.get(index).map(|t| &t.kind) {
+                Some(Kind::Newline) => continue,
+                Some(Kind::LParen) => return true,
+                _ => return false,
+            }
+        }
+        false
+    }
+
+    /// The terminator set for a block inside an `if`. `RParen` joins it when
+    /// the `end` may be elided, and it has to join EVERY one of them, not just
+    /// the `else` arm: without it `(if b then 1)` runs the THEN block onto the
+    /// closing parenthesis and reports `expected a newline or `;``, which is
+    /// the generic message all nineteen corpus files were already giving -- and
+    /// the named refusal below becomes unreachable.
+    fn if_arms(base: &[Kind<'a>], paren: bool) -> Vec<Kind<'a>> {
+        let mut arms = base.to_vec();
+        if paren {
+            arms.push(Kind::RParen);
+        }
+        arms
+    }
+
     fn if_expr(&mut self) -> Parsed<Expr> {
+        let paren = self.if_end_may_be_elided();
         let start = self.expect(&Kind::KwIf, "`if`")?.span;
         self.skip_newlines();
+        let arms = Self::if_arms(&[Kind::KwElse, Kind::KwElif, Kind::KwEnd], paren);
+        let tail = Self::if_arms(&[Kind::KwEnd], paren);
         if let Some(binders) = self.binding_condition_here(&Kind::KwThen) {
             let source = self.generator_source(&binders)?;
             // `then` IS OPTIONAL after a generator clause -- 1.0's grammar
@@ -4640,48 +4685,76 @@ impl<'t, 'a> Parser<'t, 'a> {
             // line below, and nine corpus files do; without the skip the body
             // starts at `then` and reports `expected an expression`.
             self.then_keyword();
-            let body = self.block_body(&[Kind::KwElse, Kind::KwElif, Kind::KwEnd])?;
+            let body = self.block_body(&arms)?;
+            let mut saw_else = false;
             let otherwise = if self.at(&Kind::KwElse) {
                 self.pos += 1;
-                Some(Box::new(self.block_body(&[Kind::KwEnd])?))
+                saw_else = true;
+                Some(Box::new(self.block_body(&tail)?))
             } else if self.at(&Kind::KwElif) {
                 self.pos += 1;
-                Some(Box::new(self.elif_tail()?))
+                let (chain, chain_else) = self.elif_tail(paren)?;
+                saw_else = chain_else;
+                Some(Box::new(chain))
             } else {
                 None
             };
-            let end = self.expect(&Kind::KwEnd, "`end`")?.span;
+            let end = self.if_end(start, paren, saw_else)?;
             return Ok(Expr::BindingCondition {
                 binders,
                 source: Box::new(source),
                 body: Box::new(body),
                 loops: false,
                 otherwise,
-                span: Span::new(start.start, end.end),
+                span: Span::new(start.start, end),
             });
         }
         let cond = self.expr()?;
         self.skip_newlines();
         self.expect(&Kind::KwThen, "`then`")?;
-        let then_branch = self.block_body(&[Kind::KwElse, Kind::KwElif, Kind::KwEnd])?;
+        let then_branch = self.block_body(&arms)?;
 
+        let mut saw_else = false;
         let else_branch = if self.at(&Kind::KwElse) {
             self.pos += 1;
-            Some(Box::new(self.block_body(&[Kind::KwEnd])?))
+            saw_else = true;
+            Some(Box::new(self.block_body(&tail)?))
         } else if self.at(&Kind::KwElif) {
             self.pos += 1;
-            Some(Box::new(self.elif_tail()?))
+            let (chain, chain_else) = self.elif_tail(paren)?;
+            saw_else = chain_else;
+            Some(Box::new(chain))
         } else {
             None
         };
 
-        let end = self.expect(&Kind::KwEnd, "`end`")?.span;
+        let end = self.if_end(start, paren, saw_else)?;
         Ok(Expr::If {
             cond: Box::new(cond),
             then_branch: Box::new(then_branch),
             else_branch,
-            span: Span::new(start.start, end.end),
+            span: Span::new(start.start, end),
         })
+    }
+
+    /// Consume the closing `end`, or accept its absence where the spec licenses
+    /// it. Returns where the expression ends.
+    ///
+    /// `saw_else` IS TRACKED DURING THE PARSE AND NOT READ OFF THE TREE, and
+    /// that is load bearing: an `elif` chain fills `else_branch` with the
+    /// nested `if`, so "does this node have an else_branch" is Some for
+    /// `(if a then 1 elif b then 2)` -- which has no `else` at all and is
+    /// exactly the program this refusal exists to catch.
+    fn if_end(&mut self, start: Span, paren: bool, saw_else: bool) -> Parsed<usize> {
+        if paren && self.at(&Kind::RParen) {
+            if !saw_else {
+                return Err(ParseError::IfEndElidedWithoutElse {
+                    span: Span::new(start.start, self.span_here().end),
+                });
+            }
+            return Ok(self.previous_span().end);
+        }
+        Ok(self.expect(&Kind::KwEnd, "`end`")?.span.end)
     }
 
     /// `if x <- g then` and `while (a,b) <- g do`. 1.0's condition here is a
@@ -4752,51 +4825,65 @@ impl<'t, 'a> Parser<'t, 'a> {
 
     /// `elif` is `else if` without its own `end`, so the tail reuses the
     /// enclosing `end`.
-    fn elif_tail(&mut self) -> Parsed<Expr> {
+    /// Returns the chain and WHETHER A REAL `else` CLOSED IT, which is what
+    /// `if_end` needs and what the tree cannot answer.
+    fn elif_tail(&mut self, paren: bool) -> Parsed<(Expr, bool)> {
         self.skip_newlines();
         let start = self.span_here();
+        let arms = Self::if_arms(&[Kind::KwElse, Kind::KwElif, Kind::KwEnd], paren);
+        let tail = Self::if_arms(&[Kind::KwEnd], paren);
         if let Some(binders) = self.binding_condition_here(&Kind::KwThen) {
             let source = self.generator_source(&binders)?;
             self.then_keyword();
-            let body = self.block_body(&[Kind::KwElse, Kind::KwElif, Kind::KwEnd])?;
+            let body = self.block_body(&arms)?;
+            let mut saw_else = false;
             let otherwise = if self.at(&Kind::KwElse) {
                 self.pos += 1;
-                Some(Box::new(self.block_body(&[Kind::KwEnd])?))
+                saw_else = true;
+                Some(Box::new(self.block_body(&tail)?))
             } else if self.at(&Kind::KwElif) {
                 self.pos += 1;
-                Some(Box::new(self.elif_tail()?))
+                let (chain, chain_else) = self.elif_tail(paren)?;
+                saw_else = chain_else;
+                Some(Box::new(chain))
             } else {
                 None
             };
-            return Ok(Expr::BindingCondition {
+            let node = Expr::BindingCondition {
                 binders,
                 source: Box::new(source),
                 body: Box::new(body),
                 loops: false,
                 otherwise,
                 span: Span::new(start.start, self.span_here().end),
-            });
+            };
+            return Ok((node, saw_else));
         }
         let cond = self.expr()?;
         self.skip_newlines();
         self.expect(&Kind::KwThen, "`then`")?;
-        let then_branch = self.block_body(&[Kind::KwElse, Kind::KwElif, Kind::KwEnd])?;
+        let then_branch = self.block_body(&arms)?;
+        let mut saw_else = false;
         let else_branch = if self.at(&Kind::KwElse) {
             self.pos += 1;
-            Some(Box::new(self.block_body(&[Kind::KwEnd])?))
+            saw_else = true;
+            Some(Box::new(self.block_body(&tail)?))
         } else if self.at(&Kind::KwElif) {
             self.pos += 1;
-            Some(Box::new(self.elif_tail()?))
+            let (chain, chain_else) = self.elif_tail(paren)?;
+            saw_else = chain_else;
+            Some(Box::new(chain))
         } else {
             None
         };
         let end = self.span_here();
-        Ok(Expr::If {
+        let node = Expr::If {
             cond: Box::new(cond),
             then_branch: Box::new(then_branch),
             else_branch,
             span: Span::new(start.start, end.end),
-        })
+        };
+        Ok((node, saw_else))
     }
 
     fn block(&mut self) -> Parsed<Expr> {

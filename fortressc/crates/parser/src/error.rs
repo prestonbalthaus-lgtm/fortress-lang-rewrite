@@ -103,6 +103,18 @@ pub enum ParseError {
     LocalFunctionDeclarationUnsupported {
         span: Span,
     },
+    /// `(if c then e)`. `if.tex:71-73` licenses eliding `end` only when the
+    /// `if` is immediately enclosed by parentheses, AND requires an `else`
+    /// clause in that case. 1.0's grammar says the same thing structurally:
+    /// `DelimitedExpr.rats:40`'s parenthesised production makes `Else`
+    /// mandatory and only `end` optional.
+    ///
+    /// WITHOUT THIS THE ELISION WOULD ACCEPT PROGRAMS 1.0 REFUSES, and silently:
+    /// an `if` with no `else` has type `()`, so a missing branch would read as
+    /// a void statement rather than as the error it is.
+    IfEndElidedWithoutElse {
+        span: Span,
+    },
     /// A `where` clause form outside v1. The clause used to be a TOKEN SKIP --
     /// brace-matched and thrown away -- so `where { this is total garbage }`
     /// compiled, linked and ran, and a bound written in a where clause was a
@@ -236,6 +248,7 @@ impl ParseError {
             Self::UnexpectedToken { span, .. }
             | Self::ParameterTypeOmitted { span, .. }
             | Self::ParameterTypeInferred { span, .. }
+            | Self::IfEndElidedWithoutElse { span }
             | Self::PostfixOperatorUnsupported { span }
             | Self::ReservedWord { span, .. }
             | Self::StaticParameterKindUnsupported { span, .. }
@@ -336,6 +349,11 @@ impl core::fmt::Display for ParseError {
                 f,
                 "the static argument `{digits}` does not fit a 64 bit integer; \
                  arbitrary-precision `ZZ` is a separate milestone"
+            ),
+            Self::IfEndElidedWithoutElse { .. } => f.write_str(
+                "an `if` whose `end` is elided must have an `else`. `if.tex:71-73` allows the \
+                 `end` to go only when the `if` is immediately enclosed by parentheses, and \
+                 requires an `else` clause in that case -- write the `end`, or write the `else`",
             ),
             Self::LocalFunctionDeclarationUnsupported { .. } => f.write_str(
                 "a local function declaration is not implemented; declare it at component level",

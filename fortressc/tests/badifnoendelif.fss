@@ -1,0 +1,9 @@
+(* AND AN `elif` CHAIN DOES NOT SATISFY IT. This is why the check is a bool
+   tracked during the PARSE and not a question asked of the tree: an `elif`
+   fills `else_branch` with the nested `if`, so "does this node have an
+   else_branch" is Some here -- and no `else` was ever written. *)
+
+run(): () = do
+    x: ZZ32 = (if 1 = 2 then 1 elif 1 = 1 then 2)
+    println(x)
+end

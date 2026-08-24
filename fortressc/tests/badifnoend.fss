@@ -1,0 +1,14 @@
+(* THE SECOND HALF OF THE SAME SPEC SENTENCE. `if.tex:71-73` licenses eliding
+   `end` "if the `if` expression is immediately enclosed by parentheses. In
+   such a case, an `else` clause is required." 1.0's grammar agrees
+   structurally: `DelimitedExpr.rats:40` makes `Else` MANDATORY in the
+   parenthesised production and only `end` optional.
+
+   WITHOUT THIS THE ELISION ACCEPTS A PROGRAM 1.0 REFUSES, and quietly: an `if`
+   with no `else` has type `()`, so the missing branch reads as a void
+   statement rather than as the error it is. *)
+
+run(): () = do
+    x: ZZ32 = (if 1 = 1 then 2)
+    println(x)
+end

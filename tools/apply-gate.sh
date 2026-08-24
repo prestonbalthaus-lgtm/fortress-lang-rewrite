@@ -518,6 +518,7 @@ juxtapply|Hello\n42|`println "Hello"` and `double 21` are applications
 juxtshadow|12|a parameter shadowing a function name stays multiplication
 juxtnullary|42|`answer ()` is the zero-argument call
 chainmixed|YES|a chain mixes equivalence with one ordering sense
+ifnoend|a pass\nb pass\nthen taken\nelse taken\nc pass|`end` is elided from an `if` enclosed by parentheses, both branch directions
 rr64literal|1.75|an integer literal in RR64 position is a float constant
 varvalue|15\n101\n7|a `var` top-level value is storage and an assignment target
 anyreturn|7|a trait-typed result still travels through the dispatch table
@@ -596,6 +597,8 @@ localfn.fss|a local function declaration is not implemented
 badlocalfntyped.fss|a local function declaration is not implemented
 localfnspaced.fss|a local function declaration is not implemented
 localfnspaceduntyped.fss|a local function declaration is not implemented
+badifnoend.fss|an `if` whose `end` is elided must have an `else`
+badifnoendelif.fss|an `if` whose `end` is elided must have an `else`
 badelidedbody.fss|this declaration has a BODY
 badelidedfield.fss|an object's value parameters are its FIELDS
 baduntypedparam.fss|the parameter `v` has no written type
@@ -1062,6 +1065,13 @@ MUTATIONS=(
   # `Params`. Without the bare-name reading every untyped FIELD is called an
   # elision again.
   'crates/parser/src/lib.rs|        Some((*n).to_owned())|        None|stop reading a bare identifier as an untyped field'
+  # `end` MAY BE ELIDED FROM AN `if` IMMEDIATELY ENCLOSED BY PARENTHESES,
+  # `if.tex:71-73`. THREE CLAIMS, THREE ROWS: the licensing test, the terminator
+  # set that lets the block reach the closing parenthesis at all, and the
+  # `else` the same spec sentence requires.
+  'crates/parser/src/lib.rs|                Some(Kind::LParen) => return true,|                Some(Kind::LParen) => return false,|stop licensing the elided `end` inside parentheses'
+  'crates/parser/src/lib.rs|            arms.push(Kind::RParen);|            let _unused = Kind::RParen;|run an if-block onto the closing parenthesis instead of stopping at it'
+  'crates/parser/src/lib.rs|            if !saw_else {|            if false {|let an elided `end` go without the `else` the spec requires'
   'crates/types/src/comprises.rs|if r.is_own_static(sub) {|if false {|read a static parameter in a comprises clause as a type name'
   'crates/types/src/comprises.rs|if !r.clause_is_ours() {|if false {|report a merged comprises clause against the importing file'
   'crates/parser/src/lib.rs|if is_literal(operand) {|if true {|duplicate every chain operand instead of binding it'

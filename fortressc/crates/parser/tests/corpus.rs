@@ -95,6 +95,9 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
                     fortress_parser::ParseError::ParameterTypeInferred { role, .. } => {
                         format!("an untyped {role}")
                     }
+                    fortress_parser::ParseError::IfEndElidedWithoutElse { .. } => {
+                        "an elided `end` with no `else`".to_owned()
+                    }
                     fortress_parser::ParseError::ReservedWord { word, .. } => {
                         format!("reserved word `{word}`")
                     }
@@ -245,8 +248,17 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
     // taken, and the omitted-type case is refused BY NAME wherever elision is
     // not licensed: an object's value parameters, which are its FIELDS, and any
     // declaration with a BODY.
+    // THE ELIDED `end` took it 1161 -> 1174. `if.tex:71-73`: the reserved word
+    // `end` may be elided when the `if` is immediately enclosed by parentheses,
+    // and an `else` is REQUIRED in that case. Both halves are enforced, and the
+    // second is what stops the first accepting programs 1.0 refuses.
+    // THIRTEEN, NOT NINETEEN, AND NOT SEVENTEEN EITHER. 19 was the
+    // first-blocker count of `expected a newline or `;`, found RParen`; TWO of
+    // those were never `if` files at all -- `Compiled2.j.fss` and
+    // `Compiled2.p.fss` have an unbalanced closing parenthesis -- and of the 17
+    // that were, 4 move from one PARSE error to another. Three compile and run.
     assert!(
-        parsed >= 1161,
-        "parser corpus regressed: {parsed} files parse, floor is 1161"
+        parsed >= 1174,
+        "parser corpus regressed: {parsed} files parse, floor is 1174"
     );
 }

@@ -1,0 +1,23 @@
+(* `end` MAY BE ELIDED FROM AN `if` IMMEDIATELY ENCLOSED BY PARENTHESES.
+   `if.tex:71-73`, and 1.0 carries it as its own production at
+   `DelimitedExpr.rats:40`: `( w if ... w Else (w end)? w )`.
+
+   BOTH BRANCH DIRECTIONS ARE EXERCISED. A fixture that only ever takes the
+   `then` arm would pass with the `else` arm parsed into the wrong place, and
+   `ifTest.fss` -- the corpus file this gains -- is written the same way for the
+   same reason.
+
+   AND BOTH SITES. `println(...)` is a glued CALL's argument list and
+   `(if ...)` is a parenthesised atom; they are ONE production in 1.0 and two
+   in this parser, which is why the licensing test looks BACKWARD from the `if`
+   rather than being threaded down from either one. *)
+
+pick(b: Boolean): String = (if b then "then taken" else "else taken")
+
+run(): () = do
+    println(if 1 = 1 then "a pass" else "a fail")
+    println(if 0 = 1 then "b fail" else "b pass")
+    println(pick(true))
+    println(pick(false))
+    println(if 1 = 2 then "c fail" elif 1 = 1 then "c pass" else "c fail")
+end
