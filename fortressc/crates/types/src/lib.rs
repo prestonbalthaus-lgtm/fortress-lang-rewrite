@@ -3478,10 +3478,16 @@ impl Checker {
         let mut parts = Vec::with_capacity(items.len());
         for (item, want) in items.iter().zip(elems) {
             let typed = self.expr(item, Some(*want))?;
-            // ELEMENTWISE AND EXPLICIT. `require` has already rejected a
-            // mismatch through the pushed-down expectation for everything that
-            // reads one; this catches the expressions that ignore it, the way
-            // the range bounds' own `!= ZZ64` loop does.
+            // ELEMENTWISE AND EXPLICIT, AND A BACKSTOP WITH NO REACHABLE
+            // EXERCISER -- measured, not assumed. `require` rejects a mismatch
+            // through the pushed-down expectation for everything that reads
+            // one, and six shapes were probed looking for an expression that
+            // ignores it: a name, a call, a `throw`, an `if`, a `do` block and
+            // a literal at the wrong type. `require` refuses all six FIRST.
+            // Kept anyway, for the reason the range bounds keep their own
+            // `!= ZZ64` loop: the day an expression computes its own type and
+            // ignores the hint, this is a diagnostic instead of a bitcast.
+            // Its mutation row was written, SURVIVED, and taken back out.
             if typed.ty != *want {
                 return Err(TypeError::Mismatch {
                     span: typed.span,

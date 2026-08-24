@@ -51,9 +51,17 @@
 #                                      gate refuses each one
 #
 # THE "NO --mutate" PARAGRAPH IS GONE. It was true while the variant was
-# unconstructable; there are ten rows now, and four of them are SILENT WRONG
+# unconstructable; there are eight rows now, and two of them are SILENT WRONG
 # ANSWERS -- a swapped field index in either direction exits 0 with the wrong
 # number, which only a VALUE assertion catches.
+#
+# ONE ROW WAS WRITTEN AND TAKEN BACK OUT, and it is worth saying which. The
+# element check in `tuple_value` -- `typed.ty != *want` -- is a BACKSTOP with no
+# reachable exerciser: six shapes were probed for an expression that ignores its
+# expected type (a name, a call, a `throw`, an `if`, a `do` block, a literal at
+# the wrong type) and `require` refuses every one of them FIRST. A mutation row
+# that can never fail reports SURVIVED forever, which is worse than not having
+# one, so the row came out and the reason is written at the check.
 #
 # FORTRESSC pins the binary. KEEP THE PINNED COPY OUTSIDE fortressc/build/.
 set -uo pipefail
@@ -238,6 +246,18 @@ run(): () = println(1)'
 run(): () = do
   t = split()
   println(1)
+end'
+
+    # AND THE ARITY BETWEEN A RESULT AND ITS BINDER. A tuple type excludes every
+    # tuple type of a different arity (`types-vals-vars.tex:274`), so this is a
+    # refusal and not a truncation -- and taking two of three fields silently
+    # would exit 0. THIS PROBE EXISTS BECAUSE ITS MUTATION ROW SURVIVED: nothing
+    # in the gate reached the check.
+    probe 'a binder whose arity disagrees with a tuple RESULT' 'names 3 value(s)' \
+'split(): (ZZ32, ZZ32) = (3, 4)
+run(): () = do
+  (a, b, c) = split()
+  println(a)
 end'
 
     probe 'a tuple EXPRESSION whose value is USED' 'a tuple expression' \
@@ -432,7 +452,6 @@ MUTATIONS=(
   'crates/codegen/src/lib.rs|.build_insert_value(aggregate, value, index as u32, "tuple")|.build_insert_value(aggregate, value, 0, "tuple")|build the aggregate with every element in FIELD 0'
   'crates/types/src/lib.rs|if elems.len() != b.names.len() {|if false {|drop the arity check between a tuple RESULT and its binder'
   'crates/types/src/lib.rs|if Self::is_a_whole_tuple(ty) {|if false {|let one name hold a whole tuple again'
-  'crates/types/src/lib.rs|if typed.ty != *want {|if false {|stop checking a tuple element against its declared type'
 )
 
 mutate_needs_the_built_compiler() {
