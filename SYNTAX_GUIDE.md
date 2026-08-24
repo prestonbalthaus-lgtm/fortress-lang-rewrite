@@ -2622,6 +2622,22 @@ z = if x < 0 then 0                       (* if is an expression: bind it, pass 
 
 *Seen in: Library/Set.fss:262-265, Documentation/Specification/Code/If4.fss:21-24*
 
+⚠ **2026-08-24: THE `end` MAY BE ELIDED WHEN THE `if` IS IMMEDIATELY ENCLOSED BY PARENTHESES**, and an `else` is REQUIRED when it is. `if.tex:71-73` says both halves in one sentence and 1.0 carries the rule as its own grammar production, `DelimitedExpr.rats:40`, where `Else` is mandatory and only `end` is optional.
+
+```fortress
+println(if 1 = 1 then "a pass" else "a fail")   (* [fortressc] no end -- the `(` licenses it *)
+x: ZZ32 = (if b then 2 else 3)                  (* [fortressc] a parenthesised atom, same rule *)
+println (if b then "pass" else "fail")          (* [fortressc] spaced juxtaposition, same rule *)
+
+x: ZZ32 = (if b then 2)                (* REFUSED BY NAME: "an `if` whose `end` is elided *)
+                                       (*   must have an `else`" *)
+x: ZZ32 = (1 + if b then 2 else 3)     (* end still REQUIRED: the `if` follows `+`, not `(` *)
+println(f(1, if b then 2 else 3))      (* end still REQUIRED: the `if` follows `,` *)
+(if a then 1 else if b then 2)         (* the INNER end is required: it follows `else` *)
+```
+
+"Immediately enclosed" is exactly `openparen w if` and nothing looser, which is what makes the last three lines refusals rather than accidents. 19 corpus files first-blocked on the missing `end`; two of those turned out to have an unbalanced parenthesis instead, and of the 17 real ones **three compile and run** -- `ifTest.fss`, `genericTest4.fss`, `genericTest5.fss` -- while the rest walk on to a further wall.
+
 ```fortress
 if right > left
 then pivotIndex = (left+right) DIV 2      (* a branch is BlockElems, not one expression: *)

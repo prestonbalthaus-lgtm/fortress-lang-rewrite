@@ -112,3 +112,66 @@ Adding `ParameterTypeInferred` forced exactly one arm, in
 `crates/parser/tests/corpus.rs`. `cargo build` does not build tests, so the
 E0004 is invisible to it. Run `cargo clippy --workspace --all-targets` and
 `cargo test`, not `cargo build`, before believing a variant addition is done.
+
+---
+
+# Addendum: phase J, `end` elided from a parenthesised `if`
+
+**Landed 2026-08-24**, commit `5e9f5d5bc`. Filed here because it is the same
+session and the same lesson: the bucket said 19 and the answer is 3.
+
+`if.tex:71-73`: "The reserved word `end` may be elided if the `if` expression is
+immediately enclosed by parentheses. In such a case, an `else` clause is
+required." 1.0 carries it as its own production, `DelimitedExpr.rats:40`:
+
+    ( w if w GeneratorClause w then w BlockElems (w Elifs)? w Else (w end)? w )
+
+`Else` is mandatory there and only `end` is optional -- the prose's second
+sentence written into the grammar. Both halves are implemented, and the second
+is what stops the first accepting programs 1.0 refuses: an `if` with no `else`
+has type `()`, so the missing branch would read as a void statement.
+
+## Three things this cost that the design did not predict
+
+**The `19` was not one feature and was not even all `if`.** Two of the nineteen
+files under `expected a newline or `;`, found RParen` -- `Compiled2.j.fss:17` and
+`Compiled2.p.fss:17` -- have an UNBALANCED closing parenthesis and are correctly
+still refused. Of the 17 that were `if` files, 3 compile and run, 10 reach a
+checker error, 4 move from one parse error to another. Hence parse moves 13 and
+objects move 3.
+
+**Every block inside the if-parse needs `RParen`, not just the `else` arm.** The
+first design added it to the else sets only. `(if b then 1)` then runs the THEN
+block onto the closing parenthesis and reports the generic `expected a newline or
+`;``, which is *the message these files already gave* -- so the named refusal is
+unreachable and its fixture would have been written around the generic message,
+losing the point entirely. Caught by probing the no-`else` shape before writing
+the fixture.
+
+**`saw_else` must be tracked during the parse, not read off the tree.** An `elif`
+chain fills `else_branch` with the nested `if`, so "does this node have an
+`else_branch`" is `Some` for `(if a then 1 elif b then 2)` -- which has no `else`
+at all and is exactly the program the refusal exists to catch.
+`badifnoendelif.fss` is that program and is a separate fixture for that reason.
+
+## The licensing test
+
+"Immediately enclosed" is decidable at `if_expr` itself: look backward from the
+`if`'s own token, past any newline, for an `LParen`. No threading through the
+expression parser, and it covers both sites at once -- the parenthesised atom and
+a glued CALL's argument list, which are one production in 1.0 and two here.
+
+It correctly refuses `(1 + if c then 2 else 3)` (the `if` follows `Plus`),
+`f(1, if ...)` (follows `Comma`), and `(if a then 1 else if b then 2)`, whose
+inner `if` follows `else` and so still needs its own `end`. That last case falls
+out of the test rather than being special-cased.
+
+## What was read rather than counted
+
+`ifTest.fss` is the corpus's own test for this construct and it exercises both
+branch directions: `1=1` takes the `then` arm, `0=1` takes the `else` arm. It
+prints `a pass` / `b pass` and never a `fail`. All three gained binaries were
+built and run before the gain was reported, which is G7's rule.
+
+The 579 files that already compiled emit **byte-identical IR** against the
+pre-H baseline across all three of H, I and J.

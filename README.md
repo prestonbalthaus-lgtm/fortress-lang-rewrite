@@ -282,8 +282,8 @@ commentary:
 | metric | today | floor | instrument |
 |---|---|---|---|
 | corpus files that LEX | 1909 of 1956 | 1845 | `crates/lexer/tests/corpus.rs` |
-| corpus files that PARSE | 1161 | 1161 | `crates/parser/tests/corpus.rs` |
-| `.fss` that compile and emit an object | 443 | 321 | `tools/apply-gate.sh` |
+| corpus files that PARSE | 1174 | 1174 | `crates/parser/tests/corpus.rs` |
+| `.fss` that compile and emit an object | 446 | 321 | `tools/apply-gate.sh` |
 | `.fsi` that check | 136 | 135 | `tools/apply-gate.sh` |
 | oracle cases that agree with 1.0 | 359 | 356 | `tools/oracle-gate.sh` |
 
@@ -293,7 +293,7 @@ slack, which is the one to watch.
 
 The headline metric is object emission plus api checking, split on purpose: an
 api emits no object, so one number stopped meaning one thing. Every compiling
-corpus file is also LINKED AND RUN under a signal sweep -- 451 binaries.
+corpus file is also LINKED AND RUN under a signal sweep -- 454 binaries.
 
 **THE MODULE SYSTEM REACHES COMPONENTS.** `source-code.tex:305` says every
 component implicitly imports the Fortress core APIs, and as of 2026-08-23 it

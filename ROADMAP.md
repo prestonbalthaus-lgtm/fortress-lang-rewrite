@@ -140,8 +140,8 @@ stable across runs.
 `.rats` modules under `ProjectFortress/src/com/sun/fortress/parser/`.
 *Exit:* parses 90% of the corpus to an AST. The remaining 10% is catalogued with
 a reason each.
-*Where it is, re-measured 2026-08-24:* 1909 of 1956 lex (98%), 1161 of those
-parse (61%). Both numbers are ratchets in the corpus tests rather than
+*Where it is, re-measured 2026-08-24:* 1909 of 1956 lex (98%), 1174 of those
+parse (62%). Both numbers are ratchets in the corpus tests rather than
 commentary, so a regression fails the build. This line read "1845 lex, 839
 parse" until it was re-run; a `.rats` port advances in small named steps and the
 prose does not follow on its own.
