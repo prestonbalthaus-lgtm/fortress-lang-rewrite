@@ -1,0 +1,15 @@
+(* `e typed T` is a TYPE ASCRIPTION -- `type-annotation.tex:4-18`, "the static
+   type of the expression is the ascribed type", and it "does not affect the
+   dynamic type". Here that is exactly what `expected` already does: the
+   ascription PINS the literal, so `5 typed ZZ64` is a 64-bit constant and not
+   a ZZ32 relabelled. *)
+
+wide(x: ZZ64): ZZ64 = x + x
+
+run(): () = do
+    println(5 typed ZZ32)
+    println(wide(5 typed ZZ64))
+    (* The production is at the OUTERMOST Expr level, so the annotation takes
+       the whole sum: `(1 + 2) typed ZZ32`, which is 3 and not a pin on `2`. *)
+    println(1 + 2 typed ZZ32)
+end

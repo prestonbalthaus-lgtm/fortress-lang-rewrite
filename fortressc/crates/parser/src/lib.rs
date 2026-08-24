@@ -2753,8 +2753,40 @@ impl<'t, 'a> Parser<'t, 'a> {
 
     // --------------------------------------------------------- expressions
 
+    /// `concrete-syntax.tex:906-907` puts BOTH type annotations at the
+    /// OUTERMOST `Expr` level, which is here and is the loosest binding there
+    /// is: `a + b typed T` is `(a + b) typed T`. Every corpus site bounds the
+    /// operand with a delimiter anyway -- `(1 asif N)`, `f(anA() asif A)`,
+    /// `<|0 asif ZZ32, 1, 2|>`, `(self asif Generator[\E\]).asString`.
+    ///
+    /// ONE PRODUCTION, TWO KEYWORDS, TWO FEATURES. `typed` is an ASCRIPTION and
+    /// is implemented; `asif` is an ASSUMPTION and the checker refuses it by
+    /// name. The parser does not decide that -- it records WHICH WORD WAS
+    /// WRITTEN and lets the checker say what it means, so both land in their
+    /// own bucket instead of one `expected )` for the pair.
+    ///
+    /// A LOOP AND NOT A SINGLE STEP: the production is left-recursive, so
+    /// `e typed T asif U` is legal shape. No corpus file writes one; the loop
+    /// costs one line and refusing it would need a reason.
     fn expr(&mut self) -> Parsed<Expr> {
-        Ok(self.disjunction()?.0)
+        let mut value = self.disjunction()?.0;
+        loop {
+            let assumption = match self.peek_kind() {
+                Some(Kind::Reserved("typed")) => false,
+                Some(Kind::Reserved("asif")) => true,
+                _ => return Ok(value),
+            };
+            self.pos += 1;
+            self.skip_newlines();
+            let ty = self.type_ref()?;
+            let span = Span::new(value.span().start, ty.span().end);
+            value = Expr::Annotated {
+                value: Box::new(value),
+                ty,
+                assumption,
+                span,
+            };
+        }
     }
 
     /// `precedence.tex:20-31`: Fortress precedence is a PARTIAL relation --

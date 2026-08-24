@@ -193,6 +193,7 @@ impl Pass {
             }
             Expr::Prefix { operand: inner, .. }
             | Expr::Throw { value: inner, .. }
+            | Expr::Annotated { value: inner, .. }
             | Expr::Field { base: inner, .. }
             | Expr::Atomic { body: inner, .. }
             | Expr::Spawn { body: inner, .. }

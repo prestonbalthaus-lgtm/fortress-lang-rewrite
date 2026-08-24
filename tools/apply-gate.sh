@@ -529,6 +529,7 @@ setterfires|SETTER RAN\n105\n9\nBOX 7\nBASE 7|a declared setter FIRES and an ord
 mergedaccessor|42|a merged getter name does not capture this file's own method
 seqvoperator|true\nfalse|`===` reaches the overload set and is not a spelling of `=`
 prefixopword|6\n16\n12\nfalse\n10|a prefix operator word binds tighter than every infix
+typedascription|5\n10\n3|`e typed T` pins the literal and takes the whole expression
 bigoperator|7\n42\n10|`BIG` folds into the operator NAME at the use site too
 conditionalops|false\ntrue\ntrue\nfalse|`AND:` and `OR:` are the conditional forms and SHORT CIRCUIT
 objectexpr|8\n100\n42|an anonymous `object` captures a local and gets a tag of its own
@@ -618,6 +619,8 @@ badmutablecapture.fss|is mutable, and a closure captures it BY VALUE here
 badimmutableparam.fss|field `w` is immutable
 badnomeet.fss|is ambiguous for (O, O)
 badprefixand.fss|expected an expression, found OpWord("AND")
+badasif.fss|is a type ASSUMPTION
+badtypedsubtype.fss|an integer literal cannot be used where Boolean is required
 badmergedfunctional.fss|where Cup is required
 badsetcomp.fss|only the list form
 badcompelement.fss|element type is not written anywhere
@@ -1024,6 +1027,14 @@ MUTATIONS=(
   # AND `AND`/`OR`/`NOT` HAVE REAL CODEGEN. Taken as prefix words they become a
   # call to a function nobody declared.
   'crates/parser/src/lib.rs|        if CODEGEN_OPERATOR_WORDS.contains(&word) {|        if false {|let AND and OR be taken as prefix operator words'
+  # THE TYPE ANNOTATIONS. One production, two keywords, THREE claims.
+  'crates/parser/src/lib.rs|                Some(Kind::Reserved("typed")) => false,|                Some(Kind::Reserved("nonesuch")) => false,|stop reading `typed` as a type ascription'
+  # `asif` IS NOT `typed`. Treating the assumption as the ascription is a SILENT
+  # WRONG ANSWER for a dispatching receiver, so the refusal is the invariant.
+  'crates/types/src/lib.rs|                if *assumption {|                if false {|let `asif` be treated as the static ascription'
+  # AND THE OPERAND IS CHECKED AGAINST THE ASCRIBED TYPE. Without that the
+  # ascription only RELABELS: `5 typed ZZ64` stays a ZZ32 constant.
+  'crates/types/src/lib.rs|                let inner = self.expr(value, Some(want))?;|                let inner = self.expr(value, None)?;|check an ascription operand without the ascribed type'
   'crates/types/src/comprises.rs|if r.is_own_static(sub) {|if false {|read a static parameter in a comprises clause as a type name'
   'crates/types/src/comprises.rs|if !r.clause_is_ours() {|if false {|report a merged comprises clause against the importing file'
   'crates/parser/src/lib.rs|if is_literal(operand) {|if true {|duplicate every chain operand instead of binding it'

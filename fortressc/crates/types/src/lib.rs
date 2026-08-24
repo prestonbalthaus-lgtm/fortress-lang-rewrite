@@ -3171,6 +3171,35 @@ impl Checker {
                 span: *span,
                 bracket: bracket.clone(),
             }),
+            // `e typed T` IS IMPLEMENTED AND `e asif T` IS REFUSED BY NAME, and
+            // one production carries both. `typed` is a type ASCRIPTION --
+            // `type-annotation.tex:4-18`, "the static type of the expression is
+            // the ascribed type" and it "does not affect the dynamic type" --
+            // which is exactly what `expected` already does here, so the whole
+            // lowering is: resolve the written type, check the operand AGAINST
+            // it, and hand the annotated type outward.
+            //
+            // THE REFUSAL COMES BEFORE THE RESOLUTION on purpose. Resolving
+            // first would report `unknown type` for an `asif` naming a type
+            // this compiler cannot see, and put the file in the wrong bucket.
+            Expr::Annotated {
+                value,
+                ty,
+                assumption,
+                span,
+            } => {
+                if *assumption {
+                    return Err(TypeError::TypeAssumptionUnsupported { span: *span });
+                }
+                let want = self.registry.resolve(ty)?;
+                let inner = self.expr(value, Some(want))?;
+                self.require(want, expected, *span)?;
+                Ok(TypedExpr {
+                    kind: inner.kind,
+                    ty: want,
+                    span: *span,
+                })
+            }
             // `try ... catch ... end`. PARSED AND REFUSED BY NAME. The shape
             // is kept whole in the AST -- body, binder, arms, `forbid` list,
             // `finally` -- so the lowering can be built on it without going
@@ -4076,6 +4105,7 @@ impl Checker {
             }
             Expr::Prefix { operand, .. } => self.reads_shared(operand, floor),
             Expr::Throw { value, .. } => self.reads_shared(value, floor),
+            Expr::Annotated { value, .. } => self.reads_shared(value, floor),
             // Hoisted by `closure.rs` before this pass, so it never carries a
             // read into a loop body; conservative anyway.
             Expr::ObjectExpr { .. } => false,

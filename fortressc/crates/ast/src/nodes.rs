@@ -998,6 +998,32 @@ pub enum Expr {
         args: Vec<TypeRef>,
         span: Span,
     },
+    /// `e typed T` and `e asif T`, ONE NODE FOR TWO KEYWORDS because
+    /// `concrete-syntax.tex:906-907` gives them one production at the outermost
+    /// `Expr` level. `assumption` is which keyword was written and it is NOT
+    /// cosmetic:
+    ///
+    /// `type-annotation.tex:4-18` -- `typed` is a type ASCRIPTION. "The static
+    /// type of the expression is the ascribed type" and it "does not affect the
+    /// dynamic type". That is exactly what `expected: Option<Type>` already
+    /// does in this checker.
+    ///
+    /// `type-annotation.tex:36-53` -- `asif` is a type ASSUMPTION, and it
+    /// "considers both the static AND THE DYNAMIC type ... for the purposes of
+    /// the immediately enclosing function, method, or operator invocation or
+    /// field access". The spec says outright that it is a richer `super`.
+    /// Dispatch here is SYMMETRIC, WHOLE-PROGRAM and keyed on a concrete TAG,
+    /// so honouring the dynamic half means selecting a declaration the tag
+    /// alone would not select. That is a milestone, and it is REFUSED BY NAME
+    /// rather than quietly treated as the ascription -- which would compile
+    /// `(self asif Generator[\E\]).asString` to the object's OWN method and
+    /// print the wrong thing.
+    Annotated {
+        value: Box<Expr>,
+        ty: TypeRef,
+        assumption: bool,
+        span: Span,
+    },
     /// `atomic do ... end`, and `atomic <statement>`, which the parser wraps
     /// into the same one-item block so there is one node here rather than two.
     Atomic {
@@ -1244,6 +1270,7 @@ impl Expr {
             | Self::FloatLit { span, .. }
             | Self::ObjectExpr { span, .. }
             | Self::Comprehension { span, .. }
+            | Self::Annotated { span, .. }
             | Self::BindingCondition { span, .. }
             | Self::Try { span, .. }
             | Self::Throw { span, .. }

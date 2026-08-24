@@ -1,0 +1,16 @@
+(* `asif` PARSES AND IS REFUSED BY NAME, and it shares its production with
+   `typed`, which is implemented. `type-annotation.tex:36-53` makes `asif` a
+   type ASSUMPTION: it "considers both the static AND THE DYNAMIC type ... for
+   the purposes of the immediately enclosing function, method, or operator
+   invocation or field access", and the spec calls it a richer `super`.
+
+   TREATING IT AS THE ASCRIPTION WOULD BE A SILENT WRONG ANSWER, not a missing
+   feature: dispatch here is symmetric, whole-program and keyed on a concrete
+   TAG, so `(self asif Generator).asString` would compile to the object's OWN
+   method and print the wrong string. Refusing is the only honest reading until
+   the dispatch half is built. *)
+
+run(): () = do
+    x: ZZ32 = (5 asif ZZ32)
+    println(x)
+end

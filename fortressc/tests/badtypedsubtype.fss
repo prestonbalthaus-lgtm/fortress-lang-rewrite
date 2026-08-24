@@ -1,0 +1,9 @@
+(* AN ASCRIPTION IS CHECKED, NOT ASSERTED. `type-annotation.tex:14`: "the type
+   of the subexpression must be a subtype of the ascribed type". The operand is
+   checked AGAINST the written type, so a literal that cannot be that type is
+   refused rather than relabelled. *)
+
+run(): () = do
+    x: Boolean = (5 typed Boolean)
+    println(x)
+end

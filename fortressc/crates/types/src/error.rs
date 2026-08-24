@@ -871,6 +871,17 @@ pub enum TypeError {
         span: Span,
         name: String,
     },
+    /// `e asif T`, PARSED AND REFUSED BY NAME. `typed` is implemented beside
+    /// it; the two share one production and are NOT the same feature.
+    /// `type-annotation.tex:36-53` makes `asif` a type ASSUMPTION -- it
+    /// "considers both the static AND THE DYNAMIC type ... for the purposes of
+    /// the immediately enclosing function, method, or operator invocation or
+    /// field access", and the spec calls it a richer `super`. Treating it as
+    /// the ascription would compile `(self asif Generator[\E\]).asString` to
+    /// the object's OWN method: a SILENT WRONG ANSWER, not a missing feature.
+    TypeAssumptionUnsupported {
+        span: Span,
+    },
     NotGeneric {
         span: Span,
         name: String,
@@ -1036,6 +1047,7 @@ impl TypeError {
             | Self::GenericFunctionalMethodUnsupported { span, .. }
             | Self::ValueBindingUnsupported { span, .. }
             | Self::StaticArgumentsRequired { span, .. }
+            | Self::TypeAssumptionUnsupported { span }
             | Self::NotGeneric { span, .. }
             | Self::StaticArgumentCountMismatch { span, .. }
             | Self::TooManyInstantiations { span, .. }
@@ -1758,6 +1770,12 @@ impl core::fmt::Display for TypeError {
             Self::NotPrintable { found, .. } => {
                 write!(f, "`println` does not accept {}", found.name())
             }
+            Self::TypeAssumptionUnsupported { .. } => write!(
+                f,
+                "`asif` is a type ASSUMPTION: it changes the DYNAMIC type for the enclosing \
+                 call, which is dispatch this compiler decides from a concrete tag. Write \
+                 `typed` for the static-only reading, which is implemented"
+            ),
             Self::StaticArgumentsRequired { name, .. } => write!(
                 f,
                 "`{name}` is generic; write its static arguments, as in `{name}[\\ZZ64\\]`. \

@@ -228,8 +228,13 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
     // TWENTY is the honest number and 54 was the first-blocker count: the
     // bucket held at least six features, and the `opr` STATIC PARAMETER ones
     // (SIM, ODOT, QQ_NE, INTERSECTION) stay refused by design, D7 §4.
+    // THE TYPE ANNOTATIONS took it 1133 -> 1152. `typed` and `asif` are ONE
+    // production at the outermost `Expr` level (`concrete-syntax.tex:906-907`)
+    // and TWO features: `typed` is an ascription and is implemented, `asif` is
+    // an ASSUMPTION and the checker refuses it BY NAME. Parsing both is what
+    // moves the count; only one of them is lowered.
     assert!(
-        parsed >= 1133,
-        "parser corpus regressed: {parsed} files parse, floor is 1133"
+        parsed >= 1152,
+        "parser corpus regressed: {parsed} files parse, floor is 1152"
     );
 }

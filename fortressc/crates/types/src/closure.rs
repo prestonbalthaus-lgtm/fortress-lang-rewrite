@@ -1079,6 +1079,9 @@ impl Pass {
             // A `throw` inside an outlined body still evaluates its operand,
             // so the operand's captures are rewritten like any other.
             Expr::Throw { value, .. } => self.rewrite_expr(value, scope),
+            // AN ANNOTATION IS ITS OPERAND, for every pass that walks. The
+            // written TYPE is not an expression and carries no free name.
+            Expr::Annotated { value, .. } => self.rewrite_expr(value, scope),
             Expr::For {
                 binder,
                 lo,
@@ -1527,6 +1530,7 @@ pub(crate) fn free_names(e: &Expr, bound: &mut Vec<BTreeSet<String>>, out: &mut 
         }
         Expr::Field { base, .. } => free_names(base, bound, out),
         Expr::Throw { value, .. } => free_names(value, bound, out),
+        Expr::Annotated { value, .. } => free_names(value, bound, out),
         Expr::BindingCondition {
             binders,
             source,

@@ -1102,6 +1102,22 @@ impl<'a> Expander<'a> {
                 value: Box::new(self.expr(value, subst)?),
                 span: *span,
             },
+            // THE WRITTEN TYPE IS SUBSTITUTED TOO, and that is the whole reason
+            // this arm is not a plain recursion: `(1 asif N)` inside a generic
+            // means the INSTANTIATED `N`, so an annotation that survived
+            // expansion unsubstituted would name a static parameter that no
+            // longer exists.
+            Expr::Annotated {
+                value,
+                ty,
+                assumption,
+                span,
+            } => Expr::Annotated {
+                value: Box::new(self.expr(value, subst)?),
+                ty: self.ty(ty, subst)?,
+                assumption: *assumption,
+                span: *span,
+            },
             // Substitution walks INTO a spawned body. It is ordinary code and a
             // static parameter mentioned inside one has to be replaced like any
             // other -- returning `e.clone()` here would leave the parameter
