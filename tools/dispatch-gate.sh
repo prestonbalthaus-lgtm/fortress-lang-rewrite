@@ -430,6 +430,46 @@ m3j() {
         bad 'an arity nothing demands takes no stamp' 'Spare was stamped'
     fi
 
+    # A WITHDRAWN STAMP'S BODY IS NOT EMITTED, read off the IR rather than
+    # inferred from the program's output.
+    #
+    # THIS ASSERTION REPLACED AN ACCIDENTAL ONE, and the story is worth the
+    # lines. `prunedstamp.fss`'s own comment says a pruned stamp "has to leave
+    # the candidate set entirely, not merely stop being a dispatch target" --
+    # because a stale candidate made `agreed` find no agreement at parameter 1
+    # and the literal `5` defaulted to ZZ32. On 2026-08-24 `dispatch_method`
+    # started NARROWING its hint pool by the RECEIVER, which excludes another
+    # type's stamp whether or not it is pruned, and TWO mutation rows went from
+    # refused to SURVIVED as a result: the program they broke now compiles
+    # either way. Measured, not guessed -- the mutated and unmutated compilers
+    # emit byte-identical IR for one of them.
+    #
+    # So the invariant MOVED to the read of `pruned` that is still load
+    # bearing: `pruned_method` gates whether the stamp's BODY IS EMITTED. Both
+    # rows are caught here, by two different mechanisms -- one stops the
+    # pruning, one stops the body check reading it -- and either way a body
+    # instantiated at a type its own declaration forbids appears in the object.
+    local pruned_ir
+    pruned_ir=$("$fortressc" "$repo/fortressc/tests/prunedstamp.fss" --emit-ir 2>/dev/null)
+    if [[ $pruned_ir == *'@"B$m$m$String$e"'* && $pruned_ir == *'@"D$m$n$String$e"'* ]]; then
+        ok 'the stamps that HOLD are emitted'
+    else
+        bad 'the stamps that hold are emitted' \
+            'the fixture no longer demands them; the two negatives below prove nothing'
+    fi
+    if [[ $pruned_ir != *'@"A$m$m$String$e"'* ]]; then
+        ok 'a withdrawn stamp emits NO BODY (A.m at String)'
+    else
+        bad 'a withdrawn stamp emits no body' \
+            'A.m was instantiated at String, which A own bound forbids'
+    fi
+    if [[ $pruned_ir != *'@"C$m$n$String$e"'* ]]; then
+        ok 'a withdrawn stamp emits NO BODY (C.n at String)'
+    else
+        bad 'a withdrawn stamp emits no body' \
+            'C.n was instantiated at String, which C own bound forbids'
+    fi
+
     # A generic functional method is refused BY ITS OWN NAME. The name exists;
     # the lifting does not, and `unknown name` would file it under the wrong
     # blocker -- which is how the wrong milestone gets chosen.
@@ -476,7 +516,7 @@ MUTATIONS=(
   # available to make it more specific.
   'crates/types/src/mono.rs|    for (param, arg) in params.iter().zip(args) {|    for (param, arg) in params.iter().skip(1).zip(args) {|drop the first static argument of every stamp'
   'crates/types/src/lib.rs|self.prune_stamp(owner, method);|let _ = (owner, method);|refuse the component instead of withdrawing a wrong stamp'
-  'crates/types/src/lib.rs|!signature.pruned && signature.params.len() == arity|signature.params.len() == arity|leave a withdrawn stamp in the candidate set'
+  'crates/types/src/lib.rs|if self.pruned_method(owner, index) {|if false {|emit the BODY of a withdrawn stamp, at a type its own bound forbids'
   'crates/types/src/lib.rs|if targets.is_empty() {|if false {|let a requirement tie with an implementation'
 )
 

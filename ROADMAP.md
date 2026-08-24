@@ -271,6 +271,10 @@ none onto the compile list, because every corpus comprehension is a set or map
 one or ranges over a collection. Set, map and array comprehensions, and a
 generator over a collection, are refused by name.
 
+**A GENERATOR OVER A COLLECTION LANDED 2026-08-24**, one section below. The
+last sentence above is superseded for that one case and still true for set, map
+and array comprehensions.
+
 **ARITY FLATTENING AND THE NON-MATERIALISING CALLING CONVENTION, LANDED
 2026-08-23.** `overloading.tex:125` -- "Recall that a functional has a single
 parameter, which may be a tuple". So `f(x: (A,B))` and `f(a: A, b: B)` ARE ONE
@@ -307,14 +311,102 @@ LOOKAHEAD -- a `<-` at depth zero before the closing keyword -- and without it
 27 corpus files were doing. `then` is OPTIONAL and MAY SIT ON THE NEXT LINE;
 nine of the 27 write it there. `elif` takes one too.
 
-THE LOWERING IS REFUSED BY NAME: the generator yields zero or one value and
-YIELDING IS THE TRUTH, which is the generator protocol.
+THE LOWERING WAS REFUSED BY NAME AND LANDED ON 2026-08-24; see the next
+section. What is refused now is the SOURCE, not the construct: a binding
+condition iterates a `Condition[\E\]`, and a `ZZ32` is not one.
 
 432 objects and 126 apis, UNCHANGED, and the triage bucket predicted exactly
 that -- `generator-bindings` had 27 first blockers and an `alone*` ceiling of
 ZERO. `expected then, found Lt` goes from 27 files to NONE and exactly ONE
 lands on the lowering; the other 26 walk on to a later wall, as far as
 `println does not accept Just$Boolean$e`.
+
+**THE GENERATOR PROTOCOL, LANDED 2026-08-24. `Indexed`, EXTERNALLY.**
+`for x <- someCollection`, a comprehension over a collection, and the binding
+condition's lowering -- the three milestones that all stopped here.
+
+IT IS NOT 1.0's `generate`, AND THAT IS MEASURED RATHER THAN CHOSEN.
+`Specification/advanced/parallelism-locality/defining-generators.tex` makes the
+protocol `generate[\R\](r: Reduction[\R\], body: E->R): R`, with
+`loop(f) = generate[\()\](VoidReduction, f)` as the specialisation a `for`
+desugars through. Three things block that form here:
+
+  * there is no first-class `Reduction`. `TypedReduction` and
+    `fortress_reduction_alloc` are a compiler-recognised SHAPE over ZZ32/ZZ64/
+    RR64 accumulators, not an object a program can pass, so `generate` cannot
+    be given its first argument
+  * a `()` arrow CODOMAIN is refused by name, and that is the arrow `loop`
+    takes -- not an edge case for this protocol but the whole of it
+  * a COMPONENT cannot name `Generator`, `Indexed` or `Condition`: the implicit
+    core-api import is api-side only and Link 5 is architecturally out. So
+    NOMINAL membership in the protocol is unavailable from a `.fss` whatever
+    the protocol is, which is the decisive one -- it forces a structural check.
+
+THE MEMBERS ARE 1.0's OWN. `Library/FortressLibrary.fsi:1205`'s
+`trait Indexed[\E, I\]` declares `getter size()` and `opr [i: I]: E`, and its
+own doc comment is the licence for walking it by index: "`self[i] = v`",
+"stripping away the `i` yields exactly the results of `v <- self`". Both
+spellings of `size` are accepted because both are real Fortress -- 1.0 declares
+the getter, the minted `List[\T\]` declares the plain method -- and the checker
+reads `accessors` to know which this component wrote. The extent is ZZ64 and
+not `Indexed`'s ZZ32, for the reason array subscripts are: the JVM's 2^31
+ceiling is why this rewrite exists.
+
+CUTTING THE PROTOCOL DOWN IS 1.0's OWN PRECEDENT, in this repository.
+`Library/CompilerLibrary.fsi` is 1.0's NATIVE-compiler library, as opposed to
+the interpreter's `Library/FortressLibrary.*`. It throws the generic
+`Generator[\E\]` away and declares a MONOMORPHIC `trait GeneratorZZ32` whose
+`generate` is overloaded at two ground result types instead of generic in `R`,
+with no `map`, `nest`, `cross`, `mapReduce`, `reduce` or `reverse`; `Reduction`
+collapses to two ground traits carrying only `empty` and `join`.
+
+`opr []` NOW DISPATCHES ON AN OBJECT, and that one change makes the element half
+free. The declaration already parsed -- registered as `[_]`, with `[_]:=` as its
+sibling -- and only the USE was refused. Every desugar below writes `src[i]`,
+which means the array subscript on an array and the object's own declaration on
+an object, with nothing choosing between them.
+
+ONE RESOLVER, `generator_extent`, WITH EXACTLY TWO CALLERS:
+
+  * `for x <- g`. The ARRAY path is unchanged byte for byte -- 432 pre-existing
+    objects, identical IR, instrument self-tested both ways. Rank above one
+    keeps its refusal.
+  * a comprehension over a collection. `comprehension.rs` runs before there are
+    any types, so it emits `Expr::SeqIterate` and the CHECKER lowers it -- a
+    `while` and NOT a `for`, because a `for` body is outlined and may run on
+    several workers and a comprehension appends to one shared `List`.
+
+THE BINDING CONDITION IS A DIFFERENT AND SMALLER PROTOCOL. `Condition[\E\]`
+(`Library/FortressLibrary.fsi:847`) is "a generator that generates 0 or 1
+element" and declares `holds` and `get`. 1.0 desugars through
+`__cond(e, fn (binds) => B, thunk(C))`, whose arrows both have the refused `()`
+codomain; the direct lowering needs no arrow at all. The `while` form
+RE-EVALUATES its source once per round, which is what makes it a
+while-CONDITION rather than a walk over one value.
+
+432 objects and 126 apis, UNCHANGED, AND THAT WAS PREDICTED. 172 corpus files
+write a generator construct and 144 of them die in the PARSER; almost all the
+rest import a `Library` module whose `.fss` does not compile, and an imported
+object is declared by an api and never defined. So the protocol is NECESSARY
+for all 172 and SUFFICIENT for none: it is a prerequisite behind Link 5, not a
+lever, and it was built with that written down first. Three corpus files walked
+off the comprehension refusal onto `ComprehensionListTaken`, which is the next
+wall and is named in the state file.
+
+`tools/generator-gate.sh`, 44 checks and 6 mutation rows. THE ORDER IS THE
+ASSERTION throughout: an exit code cannot tell an ordered walk from a shuffled
+one, and one mutation row makes the minted `List`'s `opr []` ignore its index --
+a silent wrong answer only a value assertion catches.
+
+AND A DEFECT THE GATE FOUND THAT NO SCRATCH-DIRECTORY PROBE COULD HAVE.
+`dispatch_method` took its argument hints from every candidate of the right
+ARITY. Inside the repo the core apis resolve, so `opr [i: ZZ64]` on an object is
+one `[_]` among every `[_]` they declare, `agreed` found no agreement at the
+index position, an integer literal fell back to `ZZ32`, and `r[0]` reported
+`no declaration of [_] applies to (Row, ZZ32)` -- in any component ON the source
+path and nowhere else. The hint pool is narrowed by the RECEIVER now, which is
+already typed and can only make a hint more specific.
+See docs/superpowers/specs/2026-08-24-generator-protocol-indexed.md.
 
 **EXCEPTIONS, PARKED 2026-08-23.** `throw` is built -- an uncaught throw halts,
 naming the exception, with no unwinding and no cost on the path that does not

@@ -2922,6 +2922,27 @@ end outer typed IntLiteral   (* both: label name, then ascription *)
 
 Fortress has exactly one generator-driven iteration statement and a generator is the only thing it can iterate: there is no C-style `for(init;test;step)` anywhere in the corpus. `while` is the other loop, 157 uses in 90 files, and it belongs to the control-flow section. The body runs in parallel by default. The rewrite compiles the core loop, the `#` and `:` ranges, `seq` in a header and the bare `_` binder; everything else in this section is [legacy], present in the corpus but not yet accepted by fortressc.
 
+⚠ **2026-08-24: `for x <- <a collection>` COMPILES, and so does a comprehension over one.**
+The generator protocol landed, and it is `Indexed[\E,I\]` walked EXTERNALLY rather than 1.0's
+`generate[\R\](r: Reduction[\R\], body: E->R): R`. A source is iterable here when its type
+declares BOTH members `Library/FortressLibrary.fsi:1205` declares on `Indexed`:
+
+```fortress
+object Row(n: ZZ64)
+  size(): ZZ64 = n              (* or `getter size(): ZZ64` -- BOTH spellings work *)
+  opr [i: ZZ64]: ZZ64 = 100 + i (* `opr []` now DISPATCHES on an object *)
+end
+for x <- Row(4) do println(x) end          (* 100 101 102 103 *)
+ys = <|[\ZZ64\] 10 y | y <- Row(3) |>      (* a comprehension over a collection *)
+```
+
+The extent is `ZZ64`, not `Indexed`'s `ZZ32` -- array subscripts are ZZ64 because the JVM's
+2^31 ceiling is why the rewrite exists, so a `size()` returning `ZZ32` gets the ordinary
+`a ZZ32 value is not implicitly converted to ZZ64` refusal. An object missing either member is
+refused BY NAME, naming the one it lacks. `generate` and `Reduction` are still out: there is no
+first-class `Reduction` object, and a `()` arrow codomain -- which is the arrow `loop` takes --
+is refused.
+
 ```fortress
 for i <- 0#n do          (* bind i to each element the generator produces *)
    a[i] := steps(i + 1)

@@ -252,7 +252,23 @@ chained comparison; getters, setters, `self` and top-level values; dotted
 methods; generic and functional methods; operators and the builtin set; the
 parallel `for` and `spawn`; `atomic` and reduction variables; multi-dimensional
 arrays and the matrix aggregate; `Char`; radix numerals; dimensions and units as
-far as declaration and checking; and `Object`/`Any` as real root traits.
+far as declaration and checking; `Object`/`Any` as real root traits; list
+comprehensions on a monomorphized `List[\T\]`; arity flattening; and the
+GENERATOR PROTOCOL.
+
+**The generator protocol is `Indexed`, walked EXTERNALLY, and that is a named
+deviation with three measured reasons.** 1.0's protocol is
+`generate[\R\](r: Reduction[\R\], body: E->R): R`; there is no first-class
+`Reduction` here, a `()` arrow codomain -- the arrow `loop` takes -- is refused
+by name, and a COMPONENT cannot name `Generator`, `Indexed` or `Condition`
+because the implicit core-api import is api-side only. That last one is
+decisive: nominal membership in the protocol is unavailable from a `.fss`, so
+the check has to be structural. The members are still 1.0's own --
+`Library/FortressLibrary.fsi:1205` declares `getter size()` and `opr [i: I]: E`
+on `Indexed`, and `opr []` now dispatches on an object -- and 1.0's own NATIVE
+compiler library, `Library/CompilerLibrary.fsi`, cuts the protocol the same way
+down to a monomorphic `GeneratorZZ32`. So `for x <- aCollection`, a comprehension
+over one, and `if x <- g then` / `while x <- g do` all compile.
 
 **Phase 7 has passed, and it is the reason the rewrite exists.** The JVM ceiling
 in "Why rewrite it" above was arrays capping at 2^31 elements. `tools/phase7-gate
@@ -294,9 +310,9 @@ written import. `unknown type` as a first blocker went from 93 corpus files to
   library singletons into every program's `main` and took a hello world from
   125 lines of IR to 205.
 
-Still missing: comprehensions, `at` and distributions, coercion (recorded but
-never applied), unit algebra above declaration, tuple VALUES, and user definable
-syntax.
+Still missing: SET and MAP comprehensions (the list form landed), `at` and
+distributions, coercion (recorded but never applied), unit algebra above
+declaration, a tuple RESULT, and user definable syntax.
 
 The legacy Sun implementation is kept as reference material:
 
