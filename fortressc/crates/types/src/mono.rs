@@ -1392,6 +1392,15 @@ impl<'a> Expander<'a> {
 /// Injective by construction: the terminator is what distinguishes
 /// `Foo[\Bar[\X\]\]` from `Foo[\Bar, X\]`, and `$` cannot appear in an
 /// identifier, so no source name can collide with a mangled one.
+///
+/// THE RESOLVER NOW MAKES `$` NAMES TOO, and the argument survives on a
+/// different footing. `resolve::scoped_name` builds `$<api>$<name>` for a
+/// merged declaration that lost a collision on static arity, and that is not a
+/// SOURCE name -- but it is a `name` this function can be handed. Injectivity
+/// holds because a scoped name always carries TWO `$` and this function never
+/// emits a LEADING one: `mangle_static("$A", &[Foo, ZZ32])` would collide with
+/// `mangle_static("$A$Foo", &[ZZ32])`, and a declaration named `$A` is not
+/// producible by either party.
 #[must_use]
 pub fn mangle_static(name: &str, args: &[TypeRef]) -> String {
     if args.is_empty() {

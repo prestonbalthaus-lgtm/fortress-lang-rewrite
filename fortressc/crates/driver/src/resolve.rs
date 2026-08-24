@@ -26,7 +26,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use fortress_ast::{Component, Decl, ImportDecl, ImportItems, Span, TypeRef};
+use fortress_ast::{Component, Decl, ImportDecl, ImportItems, Member, Span, StaticParam, TypeRef};
 use fortress_types::BUILTIN_TYPE_NAMES;
 
 /// `default_repository/configuration:44`:
@@ -281,6 +281,199 @@ fn drop_builtin_supertypes(decl: &mut Decl) {
     extends.retain(|t| !matches!(t, TypeRef::Named { name, .. } if BUILTIN_TYPE_NAMES.contains(&name.as_str())));
 }
 
+/// How many static parameters a declaration takes, for a declaration that can
+/// take any. A function or a value has none to compare, and `None` says so
+/// rather than pretending it has zero.
+fn static_arity(decl: &Decl) -> Option<usize> {
+    match decl {
+        Decl::Trait(t) => Some(t.static_params.len()),
+        Decl::Object(o) => Some(o.static_params.len()),
+        Decl::Function(_) | Decl::Value(_) => None,
+    }
+}
+
+/// The private name a merged declaration keeps its identity under when it loses
+/// a collision it cannot legitimately lose. UNWRITABLE, the same way
+/// `SELF_TYPE_PLACEHOLDER` is: `$` lexes as an operator character and never as
+/// part of an identifier, so no source file can name one of these and no
+/// source file can be shadowed by one. LEADING, because `mangle_static` builds
+/// `Name$Arg$e` -- a name that starts with `$` is one this function made.
+fn scoped_name(api: &str, name: &str) -> String {
+    format!("${api}${name}")
+}
+
+fn set_decl_name(decl: &mut Decl, to: String) {
+    match decl {
+        Decl::Trait(t) => t.name = to,
+        Decl::Object(o) => o.name = to,
+        Decl::Function(f) => f.name = to,
+        Decl::Value(v) => v.name = to,
+    }
+}
+
+/// A STATIC PARAMETER'S NAME SHADOWS A TYPE OF THAT NAME, and the rewrite has to
+/// honour it or it CAPTURES. `rename_in_static_params` rewrites a parameter's
+/// BOUNDS and never the parameter's own name, so without `bound` the two come
+/// apart: `[\Comprehension\]` keeps its name while every use of it in a
+/// signature becomes `$FortressLibrary$Comprehension`, `mono`'s `Subst` is keyed
+/// by `param.name`, and the reference stops binding to the static argument and
+/// silently resolves to the renamed trait instead.
+///
+/// THIS PROJECT HAS BEEN BURNED BY THIS EXACT SHAPE TWICE. `comprises.rs`
+/// carries `Row::statics` and `is_own_static` because
+/// `Library/CompilerAlgebra.fsi:24` writes `trait Equality[\T\] comprises T`
+/// while `test_library/Compiled3.f.fsi` declares a real `trait T`; and
+/// `SELF_TYPE_PLACEHOLDER` became `$Self` for the mirror image. Measured at ZERO
+/// live instances -- the contested names are `ReductionWithZeroes`,
+/// `BigOperator`, `BigReduction`, `Comprehension` and `List`, and the static
+/// parameters in those files are `R`, `L`, `I`, `O`, `E` and `F` -- so this is a
+/// guard against a shape, not a fix for a symptom.
+fn rename_in_type(t: &mut TypeRef, map: &HashMap<String, String>, bound: &HashSet<String>) {
+    match t {
+        TypeRef::Named { name, args, .. } => {
+            if !bound.contains(name.as_str()) {
+                if let Some(to) = map.get(name.as_str()) {
+                    name.clone_from(to);
+                }
+            }
+            for a in args {
+                rename_in_type(a, map, bound);
+            }
+        }
+        TypeRef::Tuple { elems, .. } => {
+            elems.iter_mut().for_each(|e| rename_in_type(e, map, bound));
+        }
+        TypeRef::Arrow { from, to, .. } => {
+            rename_in_type(from, map, bound);
+            rename_in_type(to, map, bound);
+        }
+        // THE ELEMENT ONLY, AND THE EXTENT DELIBERATELY NOT, which is the same
+        // cut `references` makes ten lines up and for the same reason: an
+        // extent is a static ARGUMENT and names no type. A name written there
+        // is a `nat` parameter or a literal, and rewriting one would point a
+        // VALUE at a trait.
+        TypeRef::Shaped { base, .. } => rename_in_type(base, map, bound),
+        TypeRef::Unit { .. } | TypeRef::Static { .. } => {}
+    }
+}
+
+/// The parameters' own names are already in `bound` when this is called: an
+/// F-bound (`[\T extends Comparable[\T\]\]`) names the parameter inside its
+/// own bound, so the bounds are read in the scope the parameters create.
+fn rename_in_static_params(
+    params: &mut [StaticParam],
+    map: &HashMap<String, String>,
+    bound: &HashSet<String>,
+) {
+    for p in params {
+        for b in &mut p.bounds {
+            rename_in_type(b, map, bound);
+        }
+    }
+}
+
+fn static_param_names(params: &[StaticParam]) -> impl Iterator<Item = String> + '_ {
+    params.iter().map(|p| p.name.clone())
+}
+
+fn rename_in_members(
+    members: &mut [Member],
+    map: &HashMap<String, String>,
+    bound: &HashSet<String>,
+) {
+    for m in members {
+        match m {
+            Member::Field(f) => rename_in_type(&mut f.ty, map, bound),
+            Member::Method(md) => {
+                // A METHOD OPENS ITS OWN SCOPE. `map[\G3\](f: E2->G3)` binds
+                // `G3` for the whole signature and for nothing outside it.
+                let mut inner = bound.clone();
+                inner.extend(static_param_names(&md.static_params));
+                rename_in_static_params(&mut md.static_params, map, &inner);
+                for p in &mut md.params {
+                    rename_in_type(&mut p.ty, map, &inner);
+                }
+                if let Some(r) = &mut md.return_type {
+                    rename_in_type(r, map, &inner);
+                }
+            }
+            Member::Coercion { from, .. } => {
+                from.iter_mut().for_each(|t| rename_in_type(t, map, bound));
+            }
+        }
+    }
+}
+
+/// Every TYPE POSITION a merged trait or object has, rewritten.
+///
+/// BODIES ARE NOT WALKED, AND `scopeable` IS WHAT EARNS THAT. Nine `Expr`
+/// variants can carry a `TypeRef` -- `ObjectExpr`, `Comprehension`, `Try`,
+/// `Instantiate`, `Lambda`, `TypeCaseArm`, `Binding` and friends -- so walking
+/// type positions only is complete EXACTLY WHEN there are no bodies, and that
+/// is now a checked precondition rather than a property of `.fsi` files that
+/// nothing enforces. Every type position IS here.
+fn rename_types(decl: &mut Decl, map: &HashMap<String, String>) {
+    let (static_params, extends, comprises, excludes, members) = match decl {
+        Decl::Trait(t) => (
+            &mut t.static_params,
+            &mut t.extends,
+            &mut t.comprises,
+            &mut t.excludes,
+            &mut t.members,
+        ),
+        Decl::Object(o) => (
+            &mut o.static_params,
+            &mut o.extends,
+            &mut o.comprises,
+            &mut o.excludes,
+            &mut o.members,
+        ),
+        Decl::Function(_) | Decl::Value(_) => return,
+    };
+    let bound: HashSet<String> = static_param_names(static_params).collect();
+    rename_in_static_params(static_params, map, &bound);
+    for t in extends.iter_mut().chain(comprises).chain(excludes) {
+        rename_in_type(t, map, &bound);
+    }
+    rename_in_members(members, map, &bound);
+    // AN OBJECT'S VALUE PARAMETERS ARE ITS FIELDS, so they are read in the
+    // scope its static parameters create, exactly like its members.
+    if let Decl::Object(o) = decl {
+        for p in o.params.iter_mut().flatten() {
+            rename_in_type(&mut p.ty, map, &bound);
+        }
+    }
+}
+
+/// Does this declaration carry a MEMBER BODY or a field INITIALIZER?
+///
+/// `rename_types` walks type positions and not bodies, and the reason it is
+/// allowed to is that an api DECLARES. THAT PREMISE IS NOT ENFORCED BY THE
+/// PARSER: `member()` takes no signature-only flag -- that reaches `fn_decl`
+/// and `opr_decl`, top-level functions -- so a member method reads a body and a
+/// field reads an initializer identically in an `api` and a `component`. The
+/// only enforcement is checker-side (`error.rs`, "an `api` is a set of
+/// declarations"), and AN IMPORTED api IS PARSED AND MERGED AND NEVER CHECKED.
+/// `ProjectFortress/parser_tests/XXXDefinitions.fsi:19` is the existence proof:
+/// `api XXXDefinitions` with `m(): () = ()` inside a trait.
+///
+/// So the precondition is CHECKED rather than assumed, and it is checked over
+/// the WHOLE api rather than the one declaration: a rename rewrites every
+/// declaration that api contributed, so one body anywhere in it would make the
+/// rewrite partial. An api with a body scopes nothing and keeps today's drop.
+fn has_member_body(decl: &Decl) -> bool {
+    let members = match decl {
+        Decl::Trait(t) => &t.members,
+        Decl::Object(o) => &o.members,
+        Decl::Function(_) | Decl::Value(_) => return false,
+    };
+    members.iter().any(|m| match m {
+        Member::Field(f) => f.init.is_some(),
+        Member::Method(md) => md.body.is_some(),
+        Member::Coercion { .. } => false,
+    })
+}
+
 fn decl_name(decl: &Decl) -> &str {
     match decl {
         Decl::Function(f) => &f.name,
@@ -324,7 +517,20 @@ pub fn resolve(component: &Component, source: &Path) -> Resolution {
         .iter()
         .map(|d| decl_name(d).to_owned())
         .collect();
+    // WHAT EACH TAKEN NAME IS SHAPED LIKE, which is what separates a collision
+    // between two COPIES of one declaration from a collision between two
+    // genuinely different types. See `scoped` below.
+    let mut shapes: HashMap<String, Option<usize>> = component
+        .decls
+        .iter()
+        .map(|d| (decl_name(d).to_owned(), static_arity(d)))
+        .collect();
     let mut merged: Vec<Decl> = Vec::new();
+    // Which api each merged declaration came out of, so a rename can follow
+    // that api's own references and nobody else's.
+    let mut origins: Vec<String> = Vec::new();
+    // Per api, the names that api's declarations must now spell differently.
+    let mut renames: HashMap<String, HashMap<String, String>> = HashMap::new();
 
     // WHAT EACH IMPORT ASKED FOR, carried alongside it. `ImportItems` is on the
     // declaration and was read by nothing -- so `import FortressLibrary.{
@@ -374,6 +580,9 @@ pub fn resolve(component: &Component, source: &Path) -> Resolution {
         // this narrows one import in seven and leaves the rest exactly as they
         // were.
         let from_api = api.is_api;
+        // See `has_member_body`. Computed over the WHOLE api and before the
+        // loop below moves `api.decls`.
+        let scopeable = from_api && !api.decls.iter().any(has_member_body);
         let wanted: Option<HashSet<String>> = match &import.items {
             ImportItems::OnDemand => None,
             ImportItems::Named(names) => Some(closure(
@@ -420,12 +629,84 @@ pub fn resolve(component: &Component, source: &Path) -> Resolution {
                     continue;
                 }
             }
-            if taken.insert(decl_name(&decl).to_owned()) {
+            let written = decl_name(&decl).to_owned();
+            if taken.insert(written.clone()) {
+                shapes.insert(written, static_arity(&decl));
+                origins.push(name.clone());
                 merged.push(decl);
+                continue;
             }
+            // A LOST COLLISION IS NORMALLY THE RIGHT ANSWER AND STAYS ONE. The
+            // shipped libraries are LAYERED COPIES -- `CompilerBuiltin` and
+            // `FortressLibrary` declare 25615 of the corpus's 25639 colliding
+            // names at the SAME arity, and identifying them is what the
+            // layering is for. What follows fires on the other 24.
+            //
+            // TWO DECLARATIONS TAKING A DIFFERENT NUMBER OF STATIC PARAMETERS
+            // ARE NOT COPIES. No substitution makes `[\R\]` and `[\R,L\]`
+            // one declaration, so the loser is a DIFFERENT TYPE that happens to
+            // share a name, and dropping it silently re-points its own api's
+            // references at something that cannot accept them:
+            // `Library/GeneratorLibrary.fsi` declares `ReductionWithZeroes
+            // [\R\]`, `FortressLibrary.fsi:1871` declares `[\R,L\]`, and
+            // six of FortressLibrary's own objects that DID merge then read
+            // `takes 1 static argument(s), found 2`.
+            //
+            // So it keeps its identity under an unwritable name, and every
+            // reference from ITS OWN api follows it. Nobody else's does: an
+            // importer's own declaration still wins for the importer's own
+            // references, which is what makes this a narrowing rather than a
+            // change of who wins.
+            //
+            // api-SIDE ONLY AND BODY-FREE, and that pair is what makes
+            // `rename_types` complete rather than partial: every type reference
+            // in a declaration with no bodies is in a TYPE POSITION, and every
+            // type position is walked. `scopeable` is where that is CHECKED.
+            let winner = shapes.get(&written).copied().flatten();
+            let (Some(mine), Some(theirs)) = (static_arity(&decl), winner) else {
+                continue;
+            };
+            // TWO `if`s AND NOT ONE, because a mutation row splits on
+            // `IFS='|'` and cannot carry a `||`. The arity comparison is the
+            // one a table has to be able to reach.
+            if !scopeable {
+                continue;
+            }
+            if mine == theirs {
+                continue;
+            }
+            let private = scoped_name(&name, &written);
+            // THE SECOND REQUEST FOR ONE api MERGES NOTHING TWICE. `seen` is
+            // keyed by the api name AND what the import asked for, so an api
+            // reached both on demand and by a named list is popped twice --
+            // and the second pass recomputes the SAME private name. Without
+            // this the list takes a second declaration under it, which is two
+            // templates of one name in `mono`'s generics map.
+            if !taken.insert(private.clone()) {
+                continue;
+            }
+            set_decl_name(&mut decl, private.clone());
+            renames
+                .entry(name.clone())
+                .or_default()
+                .insert(written, private.clone());
+            shapes.insert(private, Some(mine));
+            origins.push(name.clone());
+            merged.push(decl);
         }
         if !loaded.contains(&name) {
             loaded.push(name);
+        }
+    }
+
+    // A POST-PASS, BECAUSE THE COLLISION IS FOUND AFTER THE REFERENCES ARE
+    // MERGED. An api's declarations arrive in source order, and
+    // `FortressLibrary.fsi` writes the six objects that read
+    // `ReductionWithZeroes[\_,_\]` at :78 and :2021 -- both sides of the
+    // declaration itself at :1871.
+    for (decl, origin) in merged.iter_mut().zip(&origins) {
+        if let Some(map) = renames.get(origin) {
+            rename_types(decl, map);
         }
     }
 

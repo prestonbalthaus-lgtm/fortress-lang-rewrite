@@ -438,7 +438,7 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # 26 walk on to a later wall. This is a wall-unstacking milestone, and the
 # assertions are `badbindingif`, `badbindingwhile` and three mutation rows.
 OBJECT_FLOOR=321
-API_FLOOR=134
+API_FLOOR=135
 
 passed=0
 failed=0
@@ -783,6 +783,38 @@ implicit_builtin_import() {
         bad 'an imported clause naming a name this file also declares' "status $status: $err"
     fi
 
+    # AND WHEN THE TWO DECLARATIONS TAKE A DIFFERENT NUMBER OF STATIC
+    # PARAMETERS, THE IMPORTER DOES NOT SPEAK FOR THE api. The block above is
+    # the SAME-arity case and it still drops: an importer's declaration wins
+    # the name, because the shipped libraries are layered COPIES and
+    # identifying them is what the layering is for. A different arity is proof
+    # they are not copies -- no substitution makes `[\R\]` and `[\R,L\]` one
+    # declaration -- so the api keeps its own under an unwritable name and its
+    # own references follow it.
+    err=$("$fortressc" "$repo/fortressc/tests/scopedarityuse.fsi" \
+            --emit-obj -o /dev/null 2>&1 >/dev/null)
+    status=$?
+    if [[ $status -eq 0 ]]; then
+        ok 'a merged reference keeps the arity the api declared it at'
+    else
+        bad 'a merged reference keeps the arity the api declared it at' "status $status: $err"
+    fi
+
+    # THE CORPUS WITNESS, and it is the file the fixture above is a miniature
+    # of. `Library/GeneratorLibrary.fsi` declares `ReductionWithZeroes[\R\]`;
+    # `FortressLibrary.fsi:1871` declares `[\R,L\]` and six of its own objects
+    # name it at two. Asserted on the real file because the fixture cannot
+    # prove the source path, the implicit core import and the merge order all
+    # line up on it.
+    err=$("$fortressc" "$repo/Library/GeneratorLibrary.fsi" \
+            --emit-obj -o /dev/null 2>&1 >/dev/null)
+    status=$?
+    if [[ $status -eq 0 ]]; then
+        ok '`Library/GeneratorLibrary.fsi` checks beside the core library'
+    else
+        bad '`Library/GeneratorLibrary.fsi` checks beside the core library' "status $status: $err"
+    fi
+
     # TWO REQUESTS FOR ONE api AT DIFFERENT NAME SETS ARE TWO REQUESTS.
     err=$("$fortressc" "$repo/fortressc/tests/twoimports.fsi" \
             --emit-obj -o /dev/null 2>&1 >/dev/null)
@@ -970,6 +1002,16 @@ MUTATIONS=(
   # builtin implicitly import itself AND the layer above it.
   'crates/driver/src/resolve.rs|if component.name == name {|if false {|let a core api implicitly import itself and the layer above it'
   'crates/driver/src/resolve.rs|let key = (name.clone(), import.items.clone());|let key = (name.clone(), ImportItems::OnDemand);|key the resolver on the api name alone again'
+  # A MERGED DECLARATION THAT LOSES TO A DIFFERENT ARITY KEEPS ITS IDENTITY.
+  # Putting the drop back is what `Library/GeneratorLibrary.fsi` and
+  # `scopedarityuse.fsi` both died of: the api's own two-argument reference
+  # re-points at the importer's one-parameter declaration.
+  'crates/driver/src/resolve.rs|            if mine == theirs {|            if true {|drop a merged declaration that loses to a DIFFERENT static arity'
+  # AND A STATIC PARAMETER OF THE CONTESTED NAME MUST NOT BE CAPTURED. Without
+  # the carve-out `Shadower[\Zeroed\]`'s parameter keeps its name while
+  # `pick(): Zeroed` becomes `pick(): $scopedarityapi$Zeroed`, which is a
+  # two-parameter trait named with no static arguments.
+  'crates/driver/src/resolve.rs|            if !bound.contains(name.as_str()) {|            if true {|let the rename capture a static parameter of the contested name'
   'crates/types/src/comprises.rs|if r.is_own_static(sub) {|if false {|read a static parameter in a comprises clause as a type name'
   'crates/types/src/comprises.rs|if !r.clause_is_ours() {|if false {|report a merged comprises clause against the importing file'
   'crates/parser/src/lib.rs|if is_literal(operand) {|if true {|duplicate every chain operand instead of binding it'
