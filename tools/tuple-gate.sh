@@ -184,9 +184,18 @@ end'
 
     printf '\n== part B2: what has NOT landed, still refused BY NAME ==\n'
 
-    probe 'a tuple TYPE in a parameter' 'cannot be a parameter' \
-'f(p: (ZZ32, ZZ32)): ZZ32 = 1
-run(): () = println(1)'
+    # ARITY FLATTENING LANDED 2026-08-23 and this part said so by going RED:
+    # `a tuple TYPE in a parameter is refused cleanly` printed its own note --
+    # "if tuples have LANDED, this gate has done its job: rewrite it as a real
+    # tuple gate". The parameter row is a RUNS row now; the RESULT row is
+    # untouched, because the result direction is exactly what did not land.
+
+    runs 'a tuple TYPE in a parameter is FLATTENED' "$(printf '3')" \
+'f(p: (ZZ32, ZZ32)): ZZ32 = do
+  (a, b) = p
+  a + b
+end
+run(): () = println(f((1, 2)))'
 
     probe 'a tuple TYPE as a return type' 'cannot be the result' \
 'f(x: ZZ32): (ZZ32, ZZ32) = x
@@ -195,7 +204,7 @@ run(): () = println(1)'
     probe 'a tuple EXPRESSION whose value is USED' 'a tuple expression' \
 'run(): () = do
   t = (1, 2)
-  println(1)
+  println(t)
 end'
 
     probe 'a CALL on the right of a binder' 'unless it is written as a tuple' \
