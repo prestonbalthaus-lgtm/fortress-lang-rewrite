@@ -1518,6 +1518,25 @@ println(draw(Solid, Round))       (* the bare name is an ordinary expression *)
 ```
 *Seen in: SpecData/examples/basic/Object.Decl.Leaf.fss:20-23, fortressc/tests/dispatch.fss:9, fortressc/tests/dispatch.fss:38*
 
+⚠ **2026-08-24: THE VALUE-PARAMETER LIST MAY BEGIN ON THE NEXT LINE.** Newlines
+are significant in Fortress, but the parameter list is one of two places that
+looks past them -- the static parameter list is the other -- and the library
+writes the wrapped form once the static parameters have made the first line
+long:
+
+```fortress
+object SimpleSequentialNestedGenerator[\E11 extends Any, F7 extends Any\]
+        (g0: SequentialGenerator[\E11\], f0: E11->SequentialGenerator[\F7\])
+```
+
+*Seen in: Library/GeneratorLibrary.fsi:131-132, Library/Random.fsi:211-212,
+Library/Sparse.fsi:28-29, ProjectFortress/not_passing_yet/ParametricTree.fss:22-23*
+
+It looks past NEWLINES ONLY, so a body whose first declaration begins with
+anything else is untouched. What is still refused is `trait T(a: ZZ32, b:
+String)` -- a trait with VALUE parameters, which is 1.0's pattern-matching
+feature and appears almost only under `parser_tests/`.
+
 Passing the name is not the same as juxtaposing it. `println(Marker 2)` is refused with "juxtaposition of Marker and Marker is neither multiplication nor concatenation", which is exactly what fortressc/tests/juxtsingleton.fss:6 exists to assert [legacy].
 
 Singletons are about half of the corpus's 1858 object-declaration lines, and are the normal spelling for enum-like alternatives. The other half take a parameter list, which declares the constructor and the fields at once.

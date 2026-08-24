@@ -3779,7 +3779,7 @@ impl<'t, 'a> Parser<'t, 'a> {
             // folds the same way, so `BIG LEXICO()` is a call of the name
             // `BIG LEXICO` and `BIG ||[e <- x] e` is a reduction over the
             // operator `BIG ||`.
-            Kind::Reserved("BIG") => self.big_operator(),
+            Kind::Reserved("BIGX") => self.big_operator(),
             Kind::Reserved(word) => Err(ParseError::ReservedWord {
                 span,
                 word: (*word).to_owned(),

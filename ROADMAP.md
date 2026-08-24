@@ -460,6 +460,40 @@ went 53 -> 32, so 21 files came off it and two onto the compile list: a
 wall-unstacking milestone. ALL 432 PRE-EXISTING OBJECTS EMIT BYTE-IDENTICAL IR.
 See docs/superpowers/specs/2026-08-24-multi-value-return.md.
 
+**A WRAPPED VALUE-PARAMETER LIST, 2026-08-24.** An object's value-parameter
+list may begin on the line AFTER the header, which is what
+`Library/GeneratorLibrary.fsi:131`, `Random.fsi:211` and `Sparse.fsi:28` write
+once the static parameters have made the first line long. ONE
+`skip_newlines_before(&Kind::LParen)`, the same exception the STATIC parameter
+list already had one line above.
+
+435 objects and 134 apis, +9 and nothing lost. `API_FLOOR` moves 126 -> 134 and
+all 434 pre-existing objects emit byte-identical IR.
+
+MEASURED FIRST, AND THE BUCKET WAS THREE FEATURES. `expected a field or method
+name, found LParen` was 29 corpus files; reading all 29 gave 8 wrapped parameter
+lists, 16 `trait T(a:ZZ32, b:String)` -- trait VALUE parameters, a
+pattern-matching feature, almost all under `parser_tests` -- and 2 tuple
+bindings written as an object's first member. Only the first is built.
+
+EIGHT OF THE NINE GAINS ARE `BirdyLib/*.fsi`, AND THAT IS THE FINDING. They were
+first-blocked on `unknown type DefaultGeneratorImplementation`, a trait declared
+in `Library/GeneratorLibrary.fsi` -- a file that did not PARSE. The resolver
+takes an imported api's declarations after PARSING it, so a CHECK error in an
+imported api does not block its importer and a PARSE error does.
+`GeneratorLibrary.fsi` still fails to check and its importers no longer care.
+**A diagnostic that names a missing type is not always about the type: ask
+whether the file declaring it parsed.**
+
+AND IT UNCOVERED THE NEXT WALL WITHOUT CLOSING IT. `GeneratorLibrary.fsi`
+declares its own `trait ReductionWithZeroes[\R\]` while the implicit core
+import brings in `FortressLibrary`'s `[\R,L\]`, and `FortressLibrary`'s OWN
+references to that name are re-resolved in the IMPORTER's scope, where the
+file's one-parameter declaration wins -- `ReductionWithZeroes takes 1 static
+argument(s), found 2`, reported against a line that does not mention it. That is
+a NAME-RESOLUTION milestone, the same family as Link 5: a merged declaration's
+type references belong to the api that declared them.
+
 **EXCEPTIONS, PARKED 2026-08-23.** `throw` is built -- an uncaught throw halts,
 naming the exception, with no unwinding and no cost on the path that does not
 throw -- and `try`/`catch`/`forbid`/`finally` PARSE and are refused by name. The
