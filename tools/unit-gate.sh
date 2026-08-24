@@ -177,7 +177,7 @@ refusals() {
 badvoidvalue|cannot be stored in a slot of a wider type
 badvoidfield|cannot be stored in a field
 voidnotobject|() does not satisfy `T extends Object`
-badtupletype|cannot be the result of a function with a body
+badtupletype|`()` has no value, so it cannot be stored in the result
 badarrowtype|an arrow type is not implemented
 badtupleexpr|a tuple expression is not implemented
 CASES

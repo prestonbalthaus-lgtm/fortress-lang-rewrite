@@ -28,6 +28,13 @@
 #   C. the refusal is still the ONLY gate: nothing outside types.rs and its
 #      tests constructs a `Type::Tuple`
 #
+# THE RESULT DIRECTION LANDED ON 2026-08-24 and part B2 was converted again.
+# A tuple RESULT is an LLVM aggregate return -- `insertvalue` into a struct,
+# `extractvalue` at the call -- and it is STILL NON-MATERIALISING: the value
+# lives in SSA registers, so there is no allocation, no tag and no `alloca`, and
+# this gate reads both facts off the IR. What stays refused is NESTING and a
+# whole tuple held by ONE name.
+#
 # TUPLE VALUES PARTLY LANDED ON 2026-08-22 AND PART B WAS CONVERTED, which is
 # what the previous version of this line asked whoever landed them to do.
 # Part B is now positive fixtures asserted BY VALUE; part B2 is what is still
@@ -40,12 +47,13 @@
 #
 #   ./tools/tuple-gate.sh              run the gate
 #   ./tools/tuple-gate.sh --selftest   only prove the assertions can refuse
+#   ./tools/tuple-gate.sh --mutate     break the compiler ten ways and prove the
+#                                      gate refuses each one
 #
-# There is still no --mutate. An UNCONSTRUCTABLE variant gives a mutation
-# nothing to fire on, and the only other thing to break is the refusal itself,
-# which `--selftest`'s negative cases already cover and which landing tuple
-# values will do for real. A table that deletes a diagnostic to watch a refusal
-# stop would assert nothing this file does not already assert.
+# THE "NO --mutate" PARAGRAPH IS GONE. It was true while the variant was
+# unconstructable; there are ten rows now, and four of them are SILENT WRONG
+# ANSWERS -- a swapped field index in either direction exits 0 with the wrong
+# number, which only a VALUE assertion catches.
 #
 # FORTRESSC pins the binary. KEEP THE PINNED COPY OUTSIDE fortressc/build/.
 set -uo pipefail
@@ -62,7 +70,14 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # unlock, and landing the type variant moved none of it.
 # 35 at the M6 merge, 40 at the consolidation: the corpus set itself moved
 # (api check mode, and the refusals the consolidation added), not the feature.
-TUPLE_FIRST_BLOCKERS=53
+# 53 before the multi-value return, 32 after: the RESULT direction took 21
+# files off this list, and only two of them onto the compile list -- the rest
+# moved to a later wall, which is what a wall-unstacking milestone looks like.
+# What is left is 12 `a tuple expression is not implemented`, 7 initializers
+# that are neither a written tuple nor a flattened name, 5 tuple PARAMETERS
+# that flattening did not reach, 3 parenthesised variable lists, 2 flattened
+# names used as a value, and one each of a nested tuple and a mutable one.
+TUPLE_FIRST_BLOCKERS=32
 
 passed=0
 failed=0
@@ -197,9 +212,33 @@ end'
 end
 run(): () = println(f((1, 2)))'
 
-    probe 'a tuple TYPE as a return type' 'cannot be the result' \
-'f(x: ZZ32): (ZZ32, ZZ32) = x
+    # THE RESULT DIRECTION LANDED 2026-08-24 and this row went red saying so:
+    # it asserted `cannot be the result` and got `expected (ZZ32, ZZ32), found
+    # ZZ32` -- an ordinary mismatch, which is what a lowered type gives. A RUNS
+    # row now, and the two values differ so a swapped extraction cannot pass.
+    runs 'a tuple RESULT is an aggregate, destructured at the call' "$(printf '3\n4')" \
+'split(): (ZZ32, ZZ32) = (3, 4)
+run(): () = do
+  (a, b) = split()
+  println(a)
+  println(b)
+end'
+
+    # WHAT IS STILL REFUSED IN THE RESULT DIRECTION: nesting. Lowering it to a
+    # nested struct would make the ABI decision depend on a type's shape two
+    # levels down, and it is measured at zero corpus files.
+    probe 'a NESTED tuple result' 'an element of another tuple' \
+'f(x: ZZ32): (ZZ32, (ZZ32, ZZ32)) = x
 run(): () = println(1)'
+
+    # And a whole tuple held by ONE name. `t = split()` compiled before this
+    # refusal was added -- inert only while nothing read `t`.
+    probe 'a tuple result held by one name' 'held by one name' \
+'split(): (ZZ32, ZZ32) = (3, 4)
+run(): () = do
+  t = split()
+  println(1)
+end'
 
     probe 'a tuple EXPRESSION whose value is USED' 'a tuple expression' \
 'run(): () = do
@@ -315,14 +354,56 @@ end'
         bad 'an api signature MAY name a tuple' \
             "$("$fortressc" "$build/api.fsi" 2>&1 | grep -v '^fortressc: ' | head -1)"
     fi
-    # CODEGEN MAY NOT PANIC ON ONE. `basic_type`'s arm was an `unreachable!`
-    # and it became reachable the moment `resolve` started building: exit 101
-    # on user source. The checker is the real gate; this is the backstop.
-    if grep -q 'Type::Tuple(_) => None,' "$repo/fortressc/crates/codegen/src/lib.rs"; then
+    # CODEGEN BUILDS A STRUCT FOR ONE, AND STILL DOES NOT PANIC. This row read
+    # `Type::Tuple(_) => None,` until 2026-08-24 and went red on the multi-value
+    # return: the invariant MOVED rather than went away. `basic_type`'s arm was
+    # an `unreachable!` once and became reachable the moment `resolve` started
+    # building -- exit 101 on user source -- so what has to stay true is that
+    # the arm EXISTS and is not a panic, and what is new is that it produces an
+    # aggregate instead of "no storage".
+    local tuple_arm
+    tuple_arm=$(grep -c 'Type::Tuple(elems) => {' "$repo/fortressc/crates/codegen/src/lib.rs")
+    if [[ $tuple_arm -eq 1 ]]; then
+        ok 'codegen BUILDS an aggregate for a tuple type'
+    else
+        bad 'codegen builds an aggregate for a tuple type' \
+            "found $tuple_arm arms -- if it is `None` again, every tuple is one word"
+    fi
+    if grep -q 'struct_type(&fields, false)' "$repo/fortressc/crates/codegen/src/lib.rs"; then
+        ok 'the aggregate is an LLVM struct built from the element types'
+    else
+        bad 'the aggregate is an LLVM struct' 'a placeholder would collide two tuples'
+    fi
+    if ! grep -q 'Type::Tuple(_) => unreachable' "$repo/fortressc/crates/codegen/src/lib.rs"; then
         ok 'codegen has no `unreachable!` for a tuple type'
     else
         bad 'codegen has no `unreachable!` for a tuple type' \
             'the arm that panicked at exit 101 is back'
+    fi
+    # AND NOTHING MATERIALISES. The aggregate lives in SSA registers: no
+    # allocation, no tag, no `alloca`. Read off the IR rather than asserted in
+    # a comment -- an extra `fortress_alloc` here would be a second allocation
+    # path, which the allocation rule forbids outright.
+    mkdir -p "$build"
+    # THE ELEMENTS ARE RUNTIME VALUES ON PURPOSE. With two literals LLVM folds
+    # the `insertvalue` chain into a constant aggregate and emits neither
+    # instruction, so a constant fixture asserted nothing about how the value
+    # is BUILT -- it passed the `extractvalue` half and failed the other for
+    # the wrong reason.
+    printf 'component t\nexport Executable\nsplit(k: ZZ32): (ZZ32, ZZ32) = (k, k + 1)\nrun(): () = do\n  (a, b) = split(3)\n  println(a)\n  println(b)\nend\nend\n' \
+        > "$build/agg.fss"
+    local agg
+    agg=$("$fortressc" "$build/agg.fss" --emit-ir 2>/dev/null)
+    if [[ $agg == *insertvalue* && $agg == *extractvalue* ]]; then
+        ok 'the aggregate is built with insertvalue and taken apart with extractvalue'
+    else
+        bad 'the aggregate uses insertvalue/extractvalue' 'it is going through memory'
+    fi
+    if [[ $agg != *'fortress_alloc'* ]]; then
+        ok 'a tuple result allocates NOTHING'
+    else
+        bad 'a tuple result allocates nothing' \
+            'an aggregate reached the heap -- that is a second allocation path'
     fi
 
     printf '\n%d passed, %d failed\n' "$passed" "$failed"
@@ -347,6 +428,11 @@ MUTATIONS=(
   'crates/types/src/lib.rs|            self.declare(name.clone(), ty, false);|            let _ = ty;|bind nothing, so the names are not in scope'
   'crates/types/src/lib.rs|                if earlier == name {|                if false {|let a binder repeat a name, so the second part silently overwrites the first'
   'crates/types/src/lib.rs|        if items.len() != b.names.len() {|        if false {|drop the arity check on a binder'
+  'crates/codegen/src/lib.rs|.build_extract_value(aggregate, index as u32, name)|.build_extract_value(aggregate, 0, name)|hand every destructured name FIELD 0 -- a silent wrong answer that exits 0'
+  'crates/codegen/src/lib.rs|.build_insert_value(aggregate, value, index as u32, "tuple")|.build_insert_value(aggregate, value, 0, "tuple")|build the aggregate with every element in FIELD 0'
+  'crates/types/src/lib.rs|if elems.len() != b.names.len() {|if false {|drop the arity check between a tuple RESULT and its binder'
+  'crates/types/src/lib.rs|if Self::is_a_whole_tuple(ty) {|if false {|let one name hold a whole tuple again'
+  'crates/types/src/lib.rs|if typed.ty != *want {|if false {|stop checking a tuple element against its declared type'
 )
 
 mutate_needs_the_built_compiler() {

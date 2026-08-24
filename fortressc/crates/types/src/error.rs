@@ -1728,10 +1728,15 @@ impl core::fmt::Display for TypeError {
                 "this binding names {names} value(s) and its initializer has \
                  {values}"
             ),
+            // THE `position` CARRIES THE WHOLE PHRASE NOW. It used to be a noun
+            // and this template appended " of a function with a body", which
+            // read correctly for the two callers there were and produced "an
+            // element of a tuple, which would nest an aggregate, of a function
+            // with a body" for the third. A sentence a reader has to unpick is
+            // a defect in a diagnostic.
             Self::TupleNotStorable { position, .. } => write!(
                 f,
-                "a tuple value is not implemented in this subset, so it cannot \
-                 be {position} of a function with a body"
+                "a tuple has no representation in this position: it cannot be {position}"
             ),
             Self::SpawnInsideAtomic { .. } => write!(
                 f,

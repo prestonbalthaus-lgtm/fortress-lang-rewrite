@@ -1,7 +1,18 @@
 component badtupletype
 export Executable
 
-f(): (ZZ32, String) = 1
+(* THE REFUSAL MOVED WHEN THE MULTI-VALUE RETURN LANDED, and this fixture moved
+   with it. `f(): (ZZ32, String) = 1` used to be refused for the TYPE -- "a
+   tuple cannot be the result of a function with a body" -- and a tuple result
+   is an LLVM aggregate now, so that is an ordinary mismatch and asserts nothing
+   about tuples.
+
+   WHAT IS STILL REFUSED BY NAME is a tuple containing `()`. It keeps
+   `VoidNotStorable`'s own wording at this boundary as it does at every other:
+   `()` has no value at all, where a nested tuple has one of the wrong shape,
+   and a reader wants to be told which. *)
+
+f(): (ZZ32, ()) = 1
 
 run(): () = ()
 

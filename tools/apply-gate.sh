@@ -399,6 +399,14 @@ export LIBRARY_PATH=${LIBRARY_PATH:-$HOME/.local/opt/gc-root/usr/lib64}
 # way to have the first is to lower it into the second: a tuple-typed name
 # becomes SEVERAL names and no tuple is ever built. The RESULT direction stays
 # refused -- that needs the callee to hand back several values.
+# MULTI-VALUE RETURN, 2026-08-24: 434 objects and 126 apis, +2 and nothing lost.
+# `tupleTypeParam.fss` and `Expr.VarRef.fss`, and the second is the file the
+# state file named. THE ESTIMATE WAS "ROUGHLY TEN" AND THE MEASUREMENT IS TWO:
+# the other witnesses walk onto later walls -- a missing `DIV`, a generic
+# `split` whose result type disagrees, and `only a variable or an array element
+# can be assigned to`. Said in the design doc before it was built, not after.
+# ALL 432 PRE-EXISTING OBJECTS EMIT BYTE-IDENTICAL IR.
+# `badtupleresult.fss` LEFT this list and is `tupleresult.fss`, a positive case.
 # THE GENERATOR PROTOCOL, 2026-08-24: 432 objects and 126 apis, UNCHANGED, and
 # that was PREDICTED. 172 corpus files write a generator construct and 144 die
 # in the PARSER; almost all the rest import a Library module whose `.fss` does
@@ -519,6 +527,7 @@ listcomp|5\n10\n16\n4\n7\n6\n32\n5\n36\nq\n40\n40|a list comprehension builds a 
 tupleflat|7\n30\nHello World!\n7\n7\n0.25|a tuple parameter, a tuple value and a written tuple are FLATTENED
 compgenerator|10\n20\n30\n11\n21\n31\n100\n101\n102\n2\n20|a comprehension walks a COLLECTION -- an array, a List and a user object
 bindingcond|7\n1\n2\n3\n2\n1\n99|a binding condition yields zero or one value, and `while` re-evaluates it
+tupleresult|3\n4\n7\nhi\n10\n20\n30\n7\n16\n41\n42\nmade\n11\n3|a tuple RESULT is an LLVM aggregate, and the source is evaluated ONCE
 CASES
 }
 
@@ -599,7 +608,6 @@ badmergedfunctional.fss|where Cup is required
 badsetcomp.fss|only the list form
 badcompelement.fss|element type is not written anywhere
 badcomplisttaken.fss|mints its own `List`, and this component already has one
-badtupleresult.fss|it cannot be the result of a function with a body
 badtuplevalue.fss|is a tuple and tuples are FLATTENED here
 badtuplemutable.fss|a mutable tuple binding is not flattened
 badtupleoverload.fss|`g` is declared twice on the same argument types (ZZ32, ZZ32)

@@ -1,0 +1,73 @@
+component tupleresult
+export Executable
+
+(* MULTI-VALUE RETURN, the other half of the tuple calling convention. This file
+   was `badtupleresult.fss` and asserted that a tuple RESULT was refused; it is a
+   positive case now.
+
+   THE VALUES ARE THE ASSERTION AND THE POSITIONS CARRY DISTINCT ONES. A
+   lowering that extracted field 1 into `a` is a wrong answer that exits 0, and
+   `(1, 1)` would pass a swapped extraction. *)
+
+split(): (ZZ64, ZZ64) = (3, 4)
+
+(* Mixed element types, so a bitcast between the fields would be visible. *)
+tagged(): (ZZ32, String) = (7, "hi")
+
+(* Three fields, so an off-by-one in the field index shows up. *)
+trip(): (ZZ64, ZZ64, ZZ64) = (10, 20, 30)
+
+(* Forwarding a tuple result through another one: the aggregate passes through
+   without being taken apart. *)
+again(): (ZZ64, ZZ64) = split()
+
+(* A generic, stamped per instantiation, and a dotted method. *)
+dup[\T\](x: T): (T, T) = (x, x)
+
+object Box(n: ZZ64)
+  pair(): (ZZ64, ZZ64) = (n, n + 1)
+end
+
+(* THE SOURCE IS EVALUATED ONCE. A lowering that split the binder into one call
+   per name would print `made` twice. *)
+made(): (ZZ64, ZZ64) = do
+  println("made")
+  (5, 6)
+end
+
+run(): () = do
+  (a, b) = split()
+  println(a)
+  println(b)
+
+  (n, s) = tagged()
+  println(n)
+  println(s)
+
+  (p, q, r) = trip()
+  println(p)
+  println(q)
+  println(r)
+
+  (c, d) = again()
+  println(c + d)
+
+  (e, f) = dup[\ZZ64\](8)
+  println(e + f)
+
+  (g, h) = Box(41).pair()
+  println(g)
+  println(h)
+
+  (i, j) = made()
+  println(i + j)
+
+  (* A tuple PARAMETER still flattens, which is the half that landed first. *)
+  println(sum((1, 2)))
+end
+
+sum(t: (ZZ64, ZZ64)): ZZ64 = do
+  (x, y) = t
+  x + y
+end
+end

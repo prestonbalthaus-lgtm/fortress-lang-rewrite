@@ -256,6 +256,9 @@ fn collect_targets(e: &TypedExpr, out: &mut Vec<String>) {
                             collect_targets(&part.value, out);
                         }
                     }
+                    fortress_types::TypedBlockItem::TupleDestructure { value, .. } => {
+                        collect_targets(value, out);
+                    }
                     fortress_types::TypedBlockItem::Assign { value, .. } => {
                         collect_targets(value, out);
                     }
@@ -1290,13 +1293,56 @@ fn a_unit_array_element_is_refused() {
 }
 
 #[test]
-fn a_tuple_result_on_a_function_with_a_body_is_refused() {
-    // THE REFUSAL MOVED AND THE REASON CHANGED. A tuple TYPE resolves now;
-    // what is refused is a tuple in a position a DEFINED function would have
-    // to lower, because there is no representation yet. An `api` names one
-    // freely -- see the test below.
-    match type_error("component t\nf(): (ZZ32, String) = 1\nend\n") {
-        TypeError::TupleNotStorable { position, .. } => assert_eq!(position, "the result"),
+fn a_tuple_result_is_lowered_and_a_wrong_body_is_an_ordinary_type_error() {
+    // THE REFUSAL MOVED TWICE. A tuple TYPE resolved first; then the
+    // multi-value return made a tuple RESULT lower to an LLVM aggregate, so
+    // this is no longer a representation question at all -- `1` against
+    // `(ZZ32, String)` is an ordinary mismatch, the way it is against any other
+    // type. What is still refused is below.
+    let e = type_error("component t\nf(): (ZZ32, String) = 1\nend\n");
+    assert!(
+        !matches!(e, TypeError::TupleNotStorable { .. }),
+        "a tuple result is lowered now, got {e:?}"
+    );
+}
+
+#[test]
+fn a_nested_tuple_result_is_refused() {
+    // Refused rather than lowered to a nested struct: it would make the ABI
+    // decision depend on a type's shape two levels down, and it is measured at
+    // zero corpus files.
+    match type_error("component t\nf(): (ZZ32, (ZZ32, ZZ32)) = 1\nend\n") {
+        TypeError::TupleNotStorable { position, .. } => {
+            assert_eq!(
+                position,
+                "an element of another tuple -- that would nest an aggregate"
+            );
+        }
+        other => panic!("expected TupleNotStorable, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_void_element_of_a_tuple_result_keeps_its_own_wording() {
+    // `()` has no value at all, where a nested tuple has one of the wrong
+    // shape, and a reader wants to be told which.
+    match type_error("component t\nf(): (ZZ32, ()) = 1\nend\n") {
+        TypeError::VoidNotStorable { position, .. } => assert_eq!(position, "the result"),
+        other => panic!("expected VoidNotStorable, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_whole_tuple_held_by_one_name_is_refused() {
+    // `t = split()` COMPILED before this refusal was added, because nothing on
+    // the plain-binding path asked -- inert only while nothing reads `t`. A
+    // tuple result is destructured or it is not taken.
+    match type_error(
+        "component t\ng(): (ZZ32, ZZ32) = (1, 2)\nf(): ZZ32 = do\n  t = g()\n  1\nend\nend\n",
+    ) {
+        TypeError::TupleNotStorable { position, .. } => {
+            assert!(position.contains("held by one name"), "got {position}");
+        }
         other => panic!("expected TupleNotStorable, got {other:?}"),
     }
 }

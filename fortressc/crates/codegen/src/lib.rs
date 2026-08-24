@@ -230,15 +230,33 @@ impl<'ctx> Lowering<'ctx> {
             // every tuple would lower to one word and the first two-element
             // tuple would corrupt a frame.
             //
-            // THIS WAS AN `unreachable!` AND IT WAS REACHABLE. The comment said
-            // `Registry::resolve` refuses every tuple and is the single gate --
-            // true when it was written. The moment `resolve` began building the
-            // variant, `f(p:(ZZ32,ZZ32)):ZZ32 = 0` panicked here at EXIT 101 on
-            // user source, which this project's rules forbid whichever pass
-            // ought to have caught it first. The checker's `tuple_free` is that
-            // pass; this is the backstop that makes a mistake there a
-            // diagnostic instead of a crash.
-            Type::Tuple(_) => None,
+            // A TUPLE IS AN LLVM STRUCT, as of the multi-value return. It is
+            // STILL NON-MATERIALISING: this type is only ever a function's
+            // RESULT, the value lives in SSA registers, and nothing is
+            // allocated -- LLVM's own ABI lowering decides whether the fields
+            // travel in registers or through a hidden pointer, which is the
+            // target's decision and not this compiler's.
+            //
+            // `None` FOR AN UNREPRESENTABLE ELEMENT, and that is the same
+            // backstop this arm has always been. `None` means "no storage",
+            // which is what `Void` means and is NOT what a tuple means -- so an
+            // element with no storage makes the whole tuple unrepresentable
+            // rather than silently shrinking it. The checker refuses that by
+            // name; reaching here is a compiler defect and `declare_functions`
+            // turns it into a diagnostic.
+            //
+            // THIS ARM WAS AN `unreachable!` AND IT WAS REACHABLE. The comment
+            // said `Registry::resolve` refuses every tuple and is the single
+            // gate -- true when it was written. The moment `resolve` began
+            // building the variant, `f(p:(ZZ32,ZZ32)):ZZ32 = 0` panicked here
+            // at EXIT 101 on user source.
+            Type::Tuple(elems) => {
+                let mut fields = Vec::with_capacity(elems.len());
+                for elem in elems {
+                    fields.push(self.basic_type(*elem)?);
+                }
+                Some(self.context.struct_type(&fields, false).into())
+            }
         }
     }
 
@@ -629,16 +647,19 @@ impl<'ctx> Lowering<'ctx> {
             // `tuple_free` refuses this by name; reaching here is a compiler
             // defect, and it is a diagnostic rather than a panic or a shifted
             // frame.
+            // THE RESULT IS NO LONGER CHECKED HERE -- a tuple result lowers to
+            // an aggregate return. A tuple PARAMETER still cannot reach this
+            // point: arity flattening owns parameters, so one arriving here
+            // means that pass missed a site.
             if let Some(bad) = f
                 .params
                 .iter()
                 .map(|p| p.ty)
-                .chain(std::iter::once(f.return_type))
                 .find(|t| matches!(t, Type::Tuple(_)))
             {
                 return Err(CodegenError::internal(format!(
-                    "`{}` names the tuple type {} in its signature and a tuple \
-                     has no representation in this backend",
+                    "`{}` takes the tuple type {} as a PARAMETER, which arity \
+                     flattening was supposed to have split",
                     f.name,
                     bad.name()
                 )));
@@ -1111,6 +1132,7 @@ impl<'ctx> Lowering<'ctx> {
                 else_branch,
             } => self.if_expr(cond, then_branch, else_branch.as_deref(), e.ty),
             TypedExprKind::Block { items, tail } => self.block(items, tail.as_deref()),
+            TypedExprKind::TupleValue { parts } => self.tuple_value(e.ty, parts).map(Some),
             TypedExprKind::ArrayLit {
                 elem,
                 items,
@@ -2932,6 +2954,40 @@ impl<'ctx> Lowering<'ctx> {
         result
     }
 
+    /// `(e1, e2)` in a position that wants a tuple, built with `insertvalue`
+    /// from `poison`. LEFT TO RIGHT: `tuple-expr.tex` makes each element an
+    /// implicit thread, and `parallelism.tex:88-90` permits an implementation
+    /// to serialise any group of them -- the licence `also do` and arity
+    /// flattening already run on.
+    ///
+    /// NOTHING IS ALLOCATED. The aggregate is an SSA value; there is no
+    /// `fortress_alloc`, no GC block and no `alloca`.
+    fn tuple_value(
+        &mut self,
+        ty: Type,
+        parts: &[TypedExpr],
+    ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+        let BasicTypeEnum::StructType(shape) = self.basic_type(ty).ok_or_else(|| {
+            CodegenError::internal(format!("`{}` has no storage type", ty.name()))
+        })?
+        else {
+            return Err(CodegenError::internal(format!(
+                "`{}` is not an aggregate",
+                ty.name()
+            )));
+        };
+        let mut aggregate = shape.get_poison();
+        for (index, part) in parts.iter().enumerate() {
+            let value = self.operand(part)?;
+            aggregate = self
+                .builder
+                .build_insert_value(aggregate, value, index as u32, "tuple")
+                .map_err(CodegenError::from_builder)?
+                .into_struct_value();
+        }
+        Ok(aggregate.into())
+    }
+
     fn block_inner(
         &mut self,
         items: &[TypedBlockItem],
@@ -2977,6 +3033,23 @@ impl<'ctx> Lowering<'ctx> {
                 // implicit threads and `parallelism.tex:88-90` lets an
                 // implementation serialise any group of them, which is the
                 // same licence `also do` runs on here.
+                // ONE EVALUATION, THEN ONE `extractvalue` PER NAME. Splitting
+                // this into a `TupleBinding` with one expression each would
+                // call the callee once per name, which is why it is its own
+                // variant.
+                TypedBlockItem::TupleDestructure { value, parts, .. } => {
+                    let whole = self.operand(value)?;
+                    let aggregate = whole.into_struct_value();
+                    for (index, (name, _)) in parts.iter().enumerate() {
+                        let field = self
+                            .builder
+                            .build_extract_value(aggregate, index as u32, name)
+                            .map_err(CodegenError::from_builder)?;
+                        if let Some(scope) = self.scopes.last_mut() {
+                            scope.insert(name.clone(), Slot::Value(field));
+                        }
+                    }
+                }
                 TypedBlockItem::TupleBinding { parts, .. } => {
                     for part in parts {
                         let lowered = self.operand(&part.value)?;

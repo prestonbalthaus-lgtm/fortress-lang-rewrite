@@ -790,6 +790,17 @@ pub enum TypedExprKind {
         exception: String,
         value: Box<TypedExpr>,
     },
+    /// `(e1, e2)` where a TUPLE is what the context wants -- which is exactly
+    /// one place: the result of a function whose declared result is a tuple.
+    ///
+    /// IT LOWERS TO AN LLVM AGGREGATE and it is STILL NON-MATERIALISING: the
+    /// struct lives in SSA registers, built with `insertvalue`. No
+    /// `fortress_alloc`, no GC block, no type tag, no `alloca`. LLVM's own ABI
+    /// lowering decides whether the pair travels in registers or through a
+    /// hidden pointer, and that decision belongs to the target.
+    TupleValue {
+        parts: Vec<TypedExpr>,
+    },
     ArrayLit {
         elem: Elem,
         /// ROW MAJOR, whatever order the source wrote them in.
@@ -931,6 +942,21 @@ pub enum TypedBlockItem {
     /// ever created.
     TupleBinding {
         parts: Vec<TypedBinding>,
+        span: Span,
+    },
+    /// `(a, b) = f(...)` where `f`'s declared result is a tuple. The value is
+    /// ONE expression of tuple type and each name takes one FIELD of it.
+    ///
+    /// A SEPARATE VARIANT FROM `TupleBinding` BECAUSE THE CALL HAPPENS ONCE.
+    /// `TupleBinding` above carries one expression per name, which is right
+    /// when the source WROTE a tuple -- there is nothing whole to evaluate.
+    /// Here there is: splitting it into one call per name would call `f` twice.
+    TupleDestructure {
+        /// Type is `Type::Tuple`, with one element per part.
+        value: TypedExpr,
+        /// Name and element type, in field order. The `value` field of each is
+        /// unused -- the field is extracted from `value` above.
+        parts: Vec<(String, Type)>,
         span: Span,
     },
 }

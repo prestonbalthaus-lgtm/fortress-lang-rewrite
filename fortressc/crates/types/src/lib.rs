@@ -851,6 +851,43 @@ impl Checker {
     /// does reach it, and there is no representation waiting: refused by name
     /// here rather than dropped silently in `declare_functions`, where a
     /// `filter_map` would delete the parameter and shift every later one.
+    /// A tuple that CAN be lowered to an aggregate: every element has a
+    /// representation, and no element is itself a tuple.
+    ///
+    /// A NESTED TUPLE IS REFUSED rather than lowered to a nested struct, for
+    /// the reason the parameter direction refuses one: it would make the ABI
+    /// decision depend on a type's shape two levels down, and it is measured at
+    /// zero corpus files. A `()` ELEMENT keeps `VoidNotStorable`'s own wording,
+    /// as it does at every other boundary -- it has no value at all, where a
+    /// nested tuple has one of the wrong shape, and a reader wants to be told
+    /// which.
+    fn representable_tuple(ty: Type, t: &TypeRef, position: &'static str) -> Checked<()> {
+        let Type::Tuple(elems) = ty else {
+            return Ok(());
+        };
+        for elem in elems {
+            if *elem == Type::Void {
+                return Err(TypeError::VoidNotStorable {
+                    span: t.span(),
+                    position,
+                });
+            }
+            if matches!(elem, Type::Tuple(_)) {
+                return Err(TypeError::TupleNotStorable {
+                    span: t.span(),
+                    position: "an element of another tuple -- that would nest an aggregate",
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether a binding would hold a whole tuple. NAMED so a mutation row has
+    /// one unique bar-free line: `matches!(ty, Type::Tuple(_))` appears twice.
+    fn is_a_whole_tuple(ty: Type) -> bool {
+        matches!(ty, Type::Tuple(_))
+    }
+
     fn tuple_free(ty: Type, t: &TypeRef, position: &'static str) -> Checked<()> {
         if matches!(ty, Type::Tuple(_)) {
             return Err(TypeError::TupleNotStorable {
@@ -1402,15 +1439,20 @@ impl Checker {
                 // discriminator: an api is checked and never lowered, so it may
                 // name a tuple it has no representation for.
                 if f.body.is_some() {
-                    Self::tuple_free(ty, &p.ty, "a parameter")?;
+                    Self::tuple_free(ty, &p.ty, "a parameter of a function with a body")?;
                 }
                 params.push(ty);
             }
             let returns = match &f.return_type {
                 Some(t) => {
                     let ty = self.registry.resolve(t)?;
+                    // A TUPLE RESULT IS LOWERED, as of the multi-value return:
+                    // it becomes an LLVM aggregate return, in SSA registers,
+                    // with nothing allocated. What is still refused is a tuple
+                    // ELEMENT with no representation, and a NESTED tuple --
+                    // both by `representable_tuple` below, which names which.
                     if f.body.is_some() {
-                        Self::tuple_free(ty, t, "the result")?;
+                        Self::representable_tuple(ty, t, "the result")?;
                     }
                     ty
                 }
@@ -3179,10 +3221,7 @@ impl Checker {
                     span: *span,
                 })
             }
-            Expr::Tuple { span, .. } => Err(TypeError::TypeNotImplemented {
-                span: *span,
-                form: "a tuple expression",
-            }),
+            Expr::Tuple { items, span } => self.tuple_value(items, *span, expected),
             Expr::IntLit { digits, span } => self.int_literal(digits, *span, expected),
             Expr::FloatLit {
                 int_digits,
@@ -3358,6 +3397,105 @@ impl Checker {
                 },
             }),
         }
+    }
+
+    /// `(a, b) = e` where `e` is not a written tuple: its TYPE has to be one.
+    ///
+    /// THE VALUE IS EVALUATED ONCE. That is the whole reason this is not done
+    /// in `tuple.rs`: that pass runs before there are any types, so splitting
+    /// the binder there would either duplicate the call or need a whole-tuple
+    /// temporary -- and a temporary is the representation this backend does not
+    /// have.
+    fn destructure_call(&mut self, b: &fortress_ast::TupleBinding) -> Checked<TypedBlockItem> {
+        let value = self.expr(&b.value, None)?;
+        let Type::Tuple(elems) = value.ty else {
+            return Err(TypeError::TupleNotStorable {
+                span: b.value.span(),
+                position: "the initializer of a tuple binding unless it is written as a \
+                           tuple or has a tuple TYPE",
+            });
+        };
+        if elems.len() != b.names.len() {
+            return Err(TypeError::TupleArityMismatch {
+                span: b.span,
+                names: b.names.len(),
+                values: elems.len(),
+            });
+        }
+        let mut parts = Vec::with_capacity(elems.len());
+        for (name, elem) in b.names.iter().zip(elems) {
+            if *elem == Type::Void {
+                return Err(TypeError::VoidNotStorable {
+                    span: value.span,
+                    position: "a binding",
+                });
+            }
+            self.refuse_wide_shadowing(name, b.span)?;
+            self.declare(name.clone(), *elem, false);
+            parts.push((name.clone(), *elem));
+        }
+        Ok(TypedBlockItem::TupleDestructure {
+            value,
+            parts,
+            span: b.span,
+        })
+    }
+
+    /// `(e1, e2)` IN A POSITION THAT WANTS A TUPLE, and nowhere else.
+    ///
+    /// There is exactly one such position: the result of a function whose
+    /// DECLARED result is a tuple. Everywhere else a tuple expression is still
+    /// refused by name -- `println(t)`, `t.m()`, `typecase (x,y)` all want a
+    /// value with a representation outside a return, and arity flattening has
+    /// already rewritten every position where a tuple is spread into a call.
+    ///
+    /// SO THE EXPECTATION IS THE GATE. Without a written tuple result nothing
+    /// hands this an expectation and the refusal is exactly what it was.
+    ///
+    /// `Specification/basic/expressions/tuple-expr.tex`: "There must be at
+    /// least two element expressions", and each is an implicit thread --
+    /// `parallelism.tex:88-90` permits serialising any group of them, which is
+    /// the licence this evaluates them left to right on.
+    fn tuple_value(
+        &mut self,
+        items: &[Expr],
+        span: Span,
+        expected: Option<Type>,
+    ) -> Checked<TypedExpr> {
+        let Some(Type::Tuple(elems)) = expected else {
+            return Err(TypeError::TypeNotImplemented {
+                span,
+                form: "a tuple expression",
+            });
+        };
+        if elems.len() != items.len() {
+            return Err(TypeError::TupleArityMismatch {
+                span,
+                names: elems.len(),
+                values: items.len(),
+            });
+        }
+        let mut parts = Vec::with_capacity(items.len());
+        for (item, want) in items.iter().zip(elems) {
+            let typed = self.expr(item, Some(*want))?;
+            // ELEMENTWISE AND EXPLICIT. `require` has already rejected a
+            // mismatch through the pushed-down expectation for everything that
+            // reads one; this catches the expressions that ignore it, the way
+            // the range bounds' own `!= ZZ64` loop does.
+            if typed.ty != *want {
+                return Err(TypeError::Mismatch {
+                    span: typed.span,
+                    found: typed.ty,
+                    required: *want,
+                });
+            }
+            parts.push(typed);
+        }
+        Ok(TypedExpr {
+            kind: TypedExprKind::TupleValue { parts },
+            ty: Type::Tuple(elems),
+            span,
+        })
     }
 
     /// A name in scope, or -- failing that -- a singleton object, which is the
@@ -4063,11 +4201,18 @@ impl Checker {
     /// sentence permits an implementation to serialise ANY group of them --
     /// which is the licence `also do` already runs on here.
     fn tuple_binding(&mut self, b: &fortress_ast::TupleBinding) -> Checked<TypedBlockItem> {
-        let Expr::Tuple { items, .. } = &b.value else {
-            return Err(TypeError::TupleNotStorable {
-                span: b.value.span(),
-                position: "the initializer of a tuple binding, unless it is written as a tuple",
-            });
+        // A NON-TUPLE INITIALIZER IS NOW TAKEN WHEN ITS TYPE IS A TUPLE, which
+        // is the multi-value return arriving. The call happens ONCE and each
+        // name takes one FIELD of the aggregate -- `TupleDestructure`, not
+        // `TupleBinding`, because the latter carries one expression per name and
+        // would call the callee once per name.
+        //
+        // THE DUPLICATE-NAME AND ARITY CHECKS BELOW RUN FOR THIS PATH TOO, and
+        // they run BEFORE it: `(a, a) = f()` and a 2-name binder against a
+        // 3-element result are the same defects on either path.
+        let written = match &b.value {
+            Expr::Tuple { items, .. } => Some(items),
+            _ => None,
         };
         // `(a, a) = (1, 2)` COMPILED AND PRINTED 2. The second part overwrote
         // the first in the scope and nothing said so -- a silent wrong answer
@@ -4087,6 +4232,9 @@ impl Checker {
                 }
             }
         }
+        let Some(items) = written else {
+            return self.destructure_call(b);
+        };
         if items.len() != b.names.len() {
             return Err(TypeError::TupleArityMismatch {
                 span: b.span,
@@ -7451,6 +7599,19 @@ impl Checker {
                         return Err(TypeError::VoidNotStorable {
                             span: b.span,
                             position: "a binding",
+                        });
+                    }
+                    // ONE NAME MAY NOT HOLD A WHOLE TUPLE, and this is a
+                    // refusal the multi-value return had to ADD rather than
+                    // remove. `t = split()` bound an aggregate to a local and
+                    // COMPILED, because nothing on this path asked -- inert only
+                    // as long as nothing reads `t`, and an accidental capability
+                    // is exactly what the subset boundary is supposed to keep
+                    // out. A tuple result is DESTRUCTURED or it is not taken.
+                    if Self::is_a_whole_tuple(ty) {
+                        return Err(TypeError::TupleNotStorable {
+                            span: b.span,
+                            position: "held by one name; write `(a, b) = ...` to destructure it",
                         });
                     }
                     self.refuse_wide_shadowing(&b.name, b.span)?;
