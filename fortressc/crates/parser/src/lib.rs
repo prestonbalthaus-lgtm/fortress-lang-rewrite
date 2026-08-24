@@ -3480,6 +3480,34 @@ impl<'t, 'a> Parser<'t, 'a> {
         .then_some(2)
     }
 
+    /// The operator word at the cursor, IF this occurrence is prefix.
+    ///
+    /// THREE EXCLUSIONS, each for its own reason. `AND`, `OR` and `NOT` have
+    /// real codegen through `BinOp`/`UnOp` and routing them through a call to a
+    /// function nobody declared would break every program that uses them --
+    /// the same carve-out `infix_added_operator` makes, for the same reason.
+    /// A BIG REDUCTION is checked FIRST because `primary` is downstream of
+    /// `unary`: without this, `SUM[i <- 1:10] e` is taken here as a prefix
+    /// operator applied to a subscript and `big_reduction` never runs.
+    /// And the TABLE has the last word, so an occurrence it reads as infix,
+    /// postfix or nofix is left to the layer that owns it.
+    fn prefix_operator_word_here(&self) -> Option<&'a str> {
+        let Some(Kind::OpWord(word)) = self.peek_kind() else {
+            return None;
+        };
+        let word: &'a str = word;
+        if CODEGEN_OPERATOR_WORDS.contains(&word) {
+            return None;
+        }
+        if self.big_reduction_here(0) {
+            return None;
+        }
+        if !matches!(self.table_fixity_at(self.pos), TableFixity::Prefix) {
+            return None;
+        }
+        Some(word)
+    }
+
     fn unary(&mut self) -> Parsed<Expr> {
         // `NOT` is a prefix operator, and 1.0 puts prefix operators above every
         // infix operator, so `NOT a AND b` is `(NOT a) AND b`.
@@ -3492,6 +3520,33 @@ impl<'t, 'a> Parser<'t, 'a> {
             return Ok(Expr::Prefix {
                 op: UnOp::Not,
                 operand: Box::new(operand),
+                span: full,
+            });
+        }
+        // A PREFIX OPERATOR WORD, and the position is the whole argument.
+        // `opr-fixity.tex:34-55` decides fixity from LEFT CONTEXT: an operator
+        // whose left context is another OPERATOR or a DELIMITER is PREFIX, and
+        // `unary` is reached at exactly that position. So this asks the same
+        // twelve-row table `infix_added_operator` asks, and takes the occurrence
+        // only where the table says prefix -- `delta_Y / SQRT rsq`, `(BITNOT
+        // six) + 1`, `= CONVERSE other`.
+        //
+        // A CALL AND NOT A `UnOp`, because `UnOp` is a closed set with real
+        // codegen and a word operator is an ordinary declaration: `opr SQRT(x)`
+        // declares a function named `SQRT`. That is the same node
+        // `operator_expr` builds for the INFIX case, with one argument instead
+        // of two, so both spellings reach one overload set.
+        if let Some(word) = self.prefix_operator_word_here() {
+            let span = self.span_here();
+            self.pos += 1;
+            let operand = self.unary()?;
+            let full = Span::new(span.start, operand.span().end);
+            return Ok(Expr::Call {
+                callee: Box::new(Expr::Var {
+                    name: word.to_owned(),
+                    span,
+                }),
+                args: vec![operand],
                 span: full,
             });
         }
@@ -5236,6 +5291,17 @@ impl<'t, 'a> Parser<'t, 'a> {
 /// the rows the specification calls a STATIC ERROR: it names a recommended
 /// reading for each so a parse can continue looking for further errors, and
 /// this parser stops at the first error, so they are refusals.
+/// The three operator words with REAL CODEGEN, excluded from the prefix arm.
+/// `AND` and `OR` are `BinOp::And`/`BinOp::Or` and `NOT` is `UnOp::Not` and is
+/// taken by `unary` a few lines above; routing any of them through a call to a
+/// function nobody declared would break every program that uses them. The same
+/// carve-out `infix_added_operator` makes, for the same reason.
+///
+/// A NAMED CONST AND NOT A `matches!`, because a mutation row splits on
+/// `IFS='|'` and a match alternative cannot appear in a line a table has to
+/// reach.
+const CODEGEN_OPERATOR_WORDS: [&str; 3] = ["AND", "OR", "NOT"];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TableFixity {
     Infix,

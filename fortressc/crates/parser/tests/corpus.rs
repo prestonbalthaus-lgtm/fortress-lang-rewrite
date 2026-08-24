@@ -221,8 +221,15 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
     // measurement cannot catch a regression. Two of those 274 are datable: the
     // binding-condition lookahead, and the wrapped value-parameter list, which
     // is the last one and took it 1112 -> 1113.
+    // THE PREFIX OPERATOR WORD took it 1113 -> 1133. `opr-fixity.tex:34-55`
+    // reads an operator whose LEFT CONTEXT is another operator or a delimiter
+    // as PREFIX, and `unary` is reached at exactly that position -- so
+    // `delta_Y / SQRT rsq`, `(BITNOT six) + 1` and `= CONVERSE other` parse.
+    // TWENTY is the honest number and 54 was the first-blocker count: the
+    // bucket held at least six features, and the `opr` STATIC PARAMETER ones
+    // (SIM, ODOT, QQ_NE, INTERSECTION) stay refused by design, D7 §4.
     assert!(
-        parsed >= 1113,
-        "parser corpus regressed: {parsed} files parse, floor is 1113"
+        parsed >= 1133,
+        "parser corpus regressed: {parsed} files parse, floor is 1133"
     );
 }

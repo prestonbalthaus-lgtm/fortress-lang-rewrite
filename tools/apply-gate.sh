@@ -528,6 +528,7 @@ ctoroverload|107\n7|a constructor and a function of one name are ONE overload se
 setterfires|SETTER RAN\n105\n9\nBOX 7\nBASE 7|a declared setter FIRES and an ordinary method does not
 mergedaccessor|42|a merged getter name does not capture this file's own method
 seqvoperator|true\nfalse|`===` reaches the overload set and is not a spelling of `=`
+prefixopword|6\n16\n12\nfalse\n10|a prefix operator word binds tighter than every infix
 bigoperator|7\n42\n10|`BIG` folds into the operator NAME at the use site too
 conditionalops|false\ntrue\ntrue\nfalse|`AND:` and `OR:` are the conditional forms and SHORT CIRCUIT
 objectexpr|8\n100\n42|an anonymous `object` captures a local and gets a tag of its own
@@ -616,6 +617,7 @@ badcomprehension.fss|expected ZZ32, found ZZ64
 badmutablecapture.fss|is mutable, and a closure captures it BY VALUE here
 badimmutableparam.fss|field `w` is immutable
 badnomeet.fss|is ambiguous for (O, O)
+badprefixand.fss|expected an expression, found OpWord("AND")
 badmergedfunctional.fss|where Cup is required
 badsetcomp.fss|only the list form
 badcompelement.fss|element type is not written anywhere
@@ -1012,6 +1014,16 @@ MUTATIONS=(
   # `pick(): Zeroed` becomes `pick(): $scopedarityapi$Zeroed`, which is a
   # two-parameter trait named with no static arguments.
   'crates/driver/src/resolve.rs|            if !bound.contains(name.as_str()) {|            if true {|let the rename capture a static parameter of the contested name'
+  # THE PREFIX OPERATOR WORD. Three separate claims, three rows.
+  # The KILL SWITCH: without the arm, `DBL 3` is `expected an expression`.
+  'crates/parser/src/lib.rs|        if !matches!(self.table_fixity_at(self.pos), TableFixity::Prefix) {|        if true {|stop reading an operator word as a prefix operator'
+  # THE ORDER IS LOAD BEARING. `primary` is DOWNSTREAM of `unary`, so without
+  # this guard `SUM[i <- 1:4] i` is taken as a prefix operator over a subscript
+  # and `big_reduction` never runs.
+  'crates/parser/src/lib.rs|        if self.big_reduction_here(0) {|        if false {|let the prefix arm steal a BIG reduction'
+  # AND `AND`/`OR`/`NOT` HAVE REAL CODEGEN. Taken as prefix words they become a
+  # call to a function nobody declared.
+  'crates/parser/src/lib.rs|        if CODEGEN_OPERATOR_WORDS.contains(&word) {|        if false {|let AND and OR be taken as prefix operator words'
   'crates/types/src/comprises.rs|if r.is_own_static(sub) {|if false {|read a static parameter in a comprises clause as a type name'
   'crates/types/src/comprises.rs|if !r.clause_is_ours() {|if false {|report a merged comprises clause against the importing file'
   'crates/parser/src/lib.rs|if is_literal(operand) {|if true {|duplicate every chain operand instead of binding it'

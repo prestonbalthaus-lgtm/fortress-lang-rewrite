@@ -1,0 +1,20 @@
+(* A PREFIX OPERATOR WORD, and the GROUPING is the point. `opr-fixity.tex`
+   reads an operator whose left context is an operator or a delimiter as
+   PREFIX, and 1.0 puts a prefix operator above every infix one -- so
+   `DBL 3 + 10` is `(DBL 3) + 10` and NOT `DBL (3 + 10)`. 16 and not 26. *)
+
+opr DBL(x: ZZ32): ZZ32 = x + x
+
+run(): () = do
+    println(DBL 3)
+    println(DBL 3 + 10)
+    println(DBL DBL 3)
+    (* `AND` is NOT taken here: it has real codegen through `BinOp::And`, and
+       routing it through a call to a function nobody declared would break
+       every program that uses it. *)
+    b: Boolean = true AND false
+    println(b)
+    (* And a BIG reduction is not stolen: `big_reduction_here` is checked
+       BEFORE the table, because `primary` is downstream of `unary`. *)
+    println(SUM[i <- 1:4] i)
+end

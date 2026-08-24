@@ -1,0 +1,14 @@
+(* `AND` AND `OR` ARE NOT TAKEN AS PREFIX OPERATOR WORDS, and this is the file
+   that says so. They have real codegen through `BinOp::And` and `BinOp::Or`;
+   without the carve-out `(AND true)` becomes a CALL to a function nobody
+   declared and the message turns into `unknown name AND`.
+
+   SEPARATED BY THE MESSAGE AND NOT BY THE EXIT CODE. Both readings refuse this
+   program -- it is invalid either way -- so an exit-code assertion passes on
+   both, which is exactly why the mutation row SURVIVED until this file was
+   written. *)
+
+run(): () = do
+    x: Boolean = (AND true)
+    println(x)
+end
