@@ -1,0 +1,11 @@
+(* THE SAME DECLARATION WITH ITS PARAMETER UNTYPED, and it is a REFUSAL
+   fixture because only the MESSAGE separates the two readings. Glued, this
+   reached the local-function refusal; spaced, `g (x)` was a JUXTAPOSITION and
+   the file reported `unknown name g` from the CHECKER -- a true sentence that
+   names neither the feature nor the wall. Both readings refuse the program,
+   so an exit-code assertion passes either way. *)
+
+run(): () = do
+    g (x) = x + 1
+    println(g(4))
+end

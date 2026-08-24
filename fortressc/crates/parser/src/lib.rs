@@ -405,6 +405,28 @@ impl<'t, 'a> Parser<'t, 'a> {
     /// parameter to be `name: Type`, so a call whose argument list is an
     /// expression -- `f(1:10)`, `assert(("A":"B":"C").toString, s)` -- fails
     /// inside it and the caller falls through unchanged.
+    /// The token shape of a local function HEADER -- a name followed by a
+    /// parameter list -- which is what tells a declaration from a discarded
+    /// equality before either has been parsed.
+    ///
+    /// THE PARENTHESIS NEED NOT BE GLUED. `LocalDecl.rats:75` is
+    /// `Id (w StaticParams)? w ValParam` and `w = Whitespace*`, so
+    /// `g (x: ZZ32): ZZ32 = e` is ONE declaration and `funny.fss:29` writes it.
+    /// Requiring adjacency read the SPELLING and not the grammar, and it cost
+    /// two different messages: the typed spaced form died in the parser at the
+    /// `:`, and the untyped spaced form parsed as a JUXTAPOSITION and reported
+    /// `unknown name g` from the checker, which names neither the feature nor
+    /// the file's real wall.
+    ///
+    /// A NEWLINE STILL STOPS IT, and for free: a newline is a TOKEN here, so
+    /// `peek_ahead(1)` is `Newline` and not `LParen`. 1.0's own `w` spans
+    /// newlines, which would join two block elements into one declaration; no
+    /// corpus file writes that and this parser does not.
+    fn local_function_header_here(&self) -> bool {
+        let named = matches!(self.peek_kind(), Some(Kind::Ident(_)));
+        named && matches!(self.peek_ahead(1), Some(Kind::LParen))
+    }
+
     fn typed_local_function_here(&mut self) -> Option<Span> {
         let start = self.span_here();
         if !matches!(self.peek_kind(), Some(Kind::Ident(_))) {
@@ -4885,10 +4907,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         // Guarded on tokens rather than on the parsed tree, because a body that
         // is itself an equality (`isZero(x) = x = 0`) collects into a chain and
         // desugars into a block before any tree match could see it.
-        if matches!(self.peek_kind(), Some(Kind::Ident(_)))
-            && matches!(self.peek_ahead(1), Some(Kind::LParen))
-            && self.glued_left(self.pos + 1)
-        {
+        if self.local_function_header_here() {
             let probe = self.pos;
             if let Ok(Expr::Call { callee, span, .. }) = self.postfix() {
                 if matches!(*callee, Expr::Var { .. }) && self.definition_equals_at(self.pos) {

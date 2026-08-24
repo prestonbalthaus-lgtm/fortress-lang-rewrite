@@ -1,0 +1,14 @@
+(* A LOCAL FUNCTION WHOSE PARAMETER LIST IS NOT GLUED TO ITS NAME.
+   `LocalDecl.rats:75` is `Id (w StaticParams)? w ValParam` and `w` is
+   `Whitespace*`, so `g (x: ZZ32): ZZ32 = e` is ONE declaration. Requiring the
+   parenthesis to be glued read the SPELLING and not the grammar, and this
+   spelling died in the PARSER at the `:` with `expected )`.
+
+   `ProjectFortress/tests/funny.fss:29` is the corpus file that writes it, and
+   it is the only one -- which is the point: the local-function bucket is 39
+   and 39 is now a TRUE ceiling rather than a glued-spelling one. *)
+
+run(): () = do
+    g (x: ZZ32): ZZ32 = x + 1
+    println(g(4))
+end

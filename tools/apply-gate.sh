@@ -594,6 +594,8 @@ juxtnary.fss|a juxtaposition of 3 elements led by a function is not implemented
 juxtsingleton.fss|neither multiplication nor concatenation
 localfn.fss|a local function declaration is not implemented
 badlocalfntyped.fss|a local function declaration is not implemented
+localfnspaced.fss|a local function declaration is not implemented
+localfnspaceduntyped.fss|a local function declaration is not implemented
 badelidedbody.fss|this declaration has a BODY
 badelidedfield.fss|an object's value parameters are its FIELDS
 badchainsense.fss|chained ordering operators must have the same sense
@@ -1052,7 +1054,11 @@ MUTATIONS=(
   'crates/types/src/comprises.rs|if !r.clause_is_ours() {|if false {|report a merged comprises clause against the importing file'
   'crates/parser/src/lib.rs|if is_literal(operand) {|if true {|duplicate every chain operand instead of binding it'
   'crates/parser/src/lib.rs|Some((seen, earlier)) if seen != this => {|Some((seen, earlier)) if false => {|drop the chain sense check'
-  'crates/parser/src/lib.rs|&& self.glued_left(self.pos + 1)|&& false|drop the local function declaration guard'
+  # THE LOCAL FUNCTION HEADER, two claims. The guard is what tells a
+  # declaration from a discarded equality, and the parenthesis need NOT be
+  # glued to the name -- `LocalDecl.rats:75` separates them with `w`.
+  'crates/parser/src/lib.rs|        let named = matches!(self.peek_kind(), Some(Kind::Ident(_)));|        let named = false;|drop the local function declaration guard'
+  'crates/parser/src/lib.rs|        named && matches!(self.peek_ahead(1), Some(Kind::LParen))|        named && matches!(self.peek_ahead(1), Some(Kind::LParen)) && self.glued_left(self.pos + 1)|require the local function parameter list to be glued to its name again'
   'crates/types/src/lib.rs|Decl::Value(v) => Some(v),|Decl::Value(_) => None,|see no component-level values at all, so no initializer runs'
   # AN ANONYMOUS OBJECT, three axes: the parser must reach the expression at
   # all, the hoist must carry the locals its members read, and each one must
