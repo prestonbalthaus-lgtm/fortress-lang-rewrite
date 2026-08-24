@@ -1066,6 +1066,22 @@ pub enum Expr {
         body: Box<Expr>,
         span: Span,
     },
+    /// A comprehension's SEQUENTIAL walk over a generator source. Minted by
+    /// `comprehension.rs`; no source spelling produces it.
+    ///
+    /// IT IS NOT A `ForIn`, and the difference is load bearing. A `for` body is
+    /// OUTLINED and may run on several workers, and a list comprehension appends
+    /// to one shared accumulator -- so the walk has to stay on the calling
+    /// thread, which is a `while`. It is a NODE rather than a desugaring in
+    /// `comprehension.rs` for the same reason `ForIn` is one: that pass runs
+    /// before there are any types, and WHICH members carry the extent is a
+    /// question about the source's type.
+    SeqIterate {
+        binder: String,
+        source: Box<Expr>,
+        body: Box<Expr>,
+        span: Span,
+    },
     /// `do A also do B also do C end`. `also.tex:17-21` makes each block an
     /// implicit thread of one group, and the group completes when all of them
     /// do.
@@ -1247,6 +1263,7 @@ impl Expr {
             | Self::Field { span, .. }
             | Self::Spawn { span, .. }
             | Self::For { span, .. }
+            | Self::SeqIterate { span, .. }
             | Self::Atomic { span, .. }
             | Self::Case { span, .. }
             | Self::TypeCase { span, .. }

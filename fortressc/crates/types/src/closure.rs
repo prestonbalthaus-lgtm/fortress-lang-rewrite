@@ -1208,6 +1208,12 @@ impl Pass {
                 source,
                 body,
                 ..
+            }
+            | Expr::SeqIterate {
+                binder,
+                source,
+                body,
+                ..
             } => {
                 self.rewrite_expr(source, scope)?;
                 scope.push();
@@ -1641,6 +1647,12 @@ pub(crate) fn free_names(e: &Expr, bound: &mut Vec<BTreeSet<String>>, out: &mut 
             }
         }
         Expr::ForIn {
+            binder,
+            source,
+            body,
+            ..
+        }
+        | Expr::SeqIterate {
             binder,
             source,
             body,

@@ -282,7 +282,7 @@ impl Pass {
                 self.expr(hi, None)?;
                 self.expr(body, None)?;
             }
-            Expr::ForIn { source, body, .. } => {
+            Expr::ForIn { source, body, .. } | Expr::SeqIterate { source, body, .. } => {
                 self.expr(source, None)?;
                 self.expr(body, None)?;
             }
@@ -417,10 +417,18 @@ impl Pass {
                 form: "a generator binding more than one name",
             });
         };
+        // A GENERATOR OVER A COLLECTION. The parser sets `hi` only for a RANGE
+        // (`a:b`, `a#n`), so `None` here is a source that has to be WALKED --
+        // and which members carry its extent is a question about its TYPE,
+        // which this pass runs before there are any. `SeqIterate` is that
+        // question handed to the checker; `Checker::seq_iterate` lowers it to
+        // the same `while` shape the range arm builds below.
         let Some(hi) = clause.hi.clone() else {
-            return Err(TypeError::ComprehensionGeneratorUnsupported {
-                span: clause.span,
-                form: "a generator over a collection rather than a range",
+            return Ok(Expr::SeqIterate {
+                binder: (*binder).clone(),
+                source: Box::new(clause.init.clone()),
+                body: Box::new(inner),
+                span,
             });
         };
         let counter = format!("i${index}${depth}");

@@ -111,6 +111,29 @@ const CONCAT: &str = "||";
 /// What `CONCAT` has to reach before a declaration takes concatenation away.
 const STRING_PAIR: [Type; 2] = [Type::String, Type::String];
 
+/// THE INDEXED GENERATOR PROTOCOL, and both names come from
+/// `Library/FortressLibrary.fsi:1205`'s `trait Indexed[\E, I\]` rather than from
+/// anything invented here: it declares `getter size()` and `opr [i: I]: E`, and
+/// its own doc comment supplies the contract that makes walking it by index its
+/// generation order -- "`self[i] = v`", "stripping away the `i` yields exactly
+/// the results of `v <- self`".
+///
+/// `SUBSCRIPT` is the name `opr [i: ZZ64]: E` is REGISTERED under. `_` marks the
+/// operand, which is what keeps the enclosing bracket from colliding with an
+/// infix operator of the same spelling; `[_]:=` is its sibling and a different
+/// member.
+const SUBSCRIPT: &str = "[_]";
+/// The extent. A nullary METHOD or a getter, and the checker picks the spelling
+/// from `accessors` -- 1.0 declares the getter, and the minted `List[\T\]`
+/// declares the method.
+const SIZE: &str = "size";
+
+/// THE CONDITION PROTOCOL, `Library/FortressLibrary.fsi:847`: a `Condition[\E\]`
+/// is "a generator that generates 0 or 1 element", and it is what a BINDING
+/// CONDITION iterates. Two getters, and yielding IS the truth.
+const HOLDS: &str = "holds";
+const GET: &str = "get";
+
 /// While a dotted method body is checked: the receiver's type, and the fields
 /// a bare name may resolve against. A method sees its object's fields.
 struct SelfCtx {
@@ -2694,10 +2717,40 @@ impl Checker {
             });
         }
 
+        // NARROW BY THE RECEIVER BEFORE TAKING HINTS, and it is the receiver's
+        // turn to be useful: it is ALREADY TYPED here, and a declaration the
+        // receiver does not fit can never be applicable overall -- so leaving
+        // it in the pool only WEAKENS the hint `agreed` hands the arguments,
+        // and never changes which declaration wins.
+        //
+        // IT IS NOT COSMETIC. `opr [i: ZZ64]` on an object is one `[_]` among
+        // every `[_]` the core apis declare, so `agreed` found no agreement at
+        // the index position, an integer literal fell back to `ZZ32`, and
+        // `r[0]` reported `no declaration of [_] applies to (Row, ZZ32)` -- in
+        // any component ON the source path, and nowhere else, which is how a
+        // scratch-directory probe missed it.
+        let receiver_ty = receiver.ty;
+        let narrowed: Vec<Signature> = candidates
+            .iter()
+            .filter(|s| {
+                s.params
+                    .first()
+                    .is_some_and(|p| self.registry.is_subtype(receiver_ty, *p))
+            })
+            .cloned()
+            .collect();
+        // Empty means nothing fits the receiver at all. The full pool is kept
+        // for the hints then, so the diagnostic that follows is the one it
+        // always was rather than a worse one drawn from an empty set.
+        let hints = if narrowed.is_empty() {
+            &candidates
+        } else {
+            &narrowed
+        };
         let mut typed = Vec::with_capacity(arity);
         typed.push(receiver);
         for (index, arg) in args.iter().enumerate() {
-            let hint = agreed(&candidates, index + 1);
+            let hint = agreed(hints, index + 1);
             typed.push(self.expr(arg, hint)?);
         }
 
@@ -3214,6 +3267,12 @@ impl Checker {
                 *span,
                 expected,
             ),
+            Expr::SeqIterate {
+                binder,
+                source,
+                body,
+                span,
+            } => self.seq_iterate(binder, source, body, *span, expected),
             Expr::Atomic { body, span } => self.atomic(body, *span, expected),
             Expr::Spawn { body, span } => self.spawn(body, *span, expected),
             Expr::Case {
@@ -3263,12 +3322,22 @@ impl Checker {
                 span: *span,
                 form: "a `fn` in this position",
             }),
-            Expr::BindingCondition { loops, span, .. } => {
-                Err(TypeError::BindingConditionUnsupported {
-                    span: *span,
-                    keyword: if *loops { "while" } else { "if" },
-                })
-            }
+            Expr::BindingCondition {
+                binders,
+                source,
+                body,
+                loops,
+                otherwise,
+                span,
+            } => self.binding_condition(
+                binders,
+                source,
+                body,
+                *loops,
+                otherwise.as_deref(),
+                *span,
+                expected,
+            ),
             // Unreachable from a lowered component: `closure.rs` hoists an
             // anonymous object into a minted top-level declaration and leaves a
             // construction here. A body the hoist could not walk lands here.
@@ -3516,6 +3585,18 @@ impl Checker {
     ) -> Checked<TypedExpr> {
         let base = self.expr(base, None)?;
         let Type::Array(elem, rank) = base.ty else {
+            // AN OBJECT SUBSCRIPT REACHES THE OBJECT'S OWN `opr []`.
+            // `subscripting.tex` makes `a[i]` a call on the declaration named
+            // `[_]`, and 1.0's `Indexed` is defined in terms of it, so this is
+            // the spelling reaching machinery that was already there: the
+            // declaration parsed before this milestone and only the USE was
+            // refused. Whole-program dispatch, inheritance and the
+            // exactly-one-winner check all come with `dispatch_method`.
+            if matches!(base.ty, Type::Object(_) | Type::Trait(_))
+                && self.methods.contains_key(SUBSCRIPT)
+            {
+                return self.dispatch_method(base, SUBSCRIPT, indices, span, span, expected);
+            }
             return Err(TypeError::NotAnArray {
                 span,
                 found: base.ty,
@@ -3939,7 +4020,7 @@ impl Checker {
             Expr::Label { body, .. } => self.reads_shared(body, floor),
             Expr::Lambda { body, .. } => self.reads_shared(body, floor),
             Expr::AlsoDo { blocks, .. } => blocks.iter().any(|b| self.reads_shared(b, floor)),
-            Expr::ForIn { source, body, .. } => {
+            Expr::ForIn { source, body, .. } | Expr::SeqIterate { source, body, .. } => {
                 self.reads_shared(source, floor) || self.reads_shared(body, floor)
             }
             Expr::BigReduction { lo, hi, body, .. } => {
@@ -6320,23 +6401,13 @@ impl Checker {
         expected: Option<Type>,
     ) -> Checked<TypedExpr> {
         let typed_source = self.expr(source, None)?;
-        let Type::Array(_, rank) = typed_source.ty else {
-            return Err(TypeError::NotAnArray {
-                span: source.span(),
-                found: typed_source.ty,
-            });
-        };
-        // The desugaring below is one index over one extent. A higher rank
-        // needs a nest, and which order it walks in is 1.0's question rather
-        // than a default worth guessing.
-        if rank != 1 {
-            return Err(TypeError::ArrayRankNotImplemented {
-                span: source.span(),
-                what: "iteration",
-                rank,
-            });
-        }
         let array = format!("$in{}", self.cases);
+        // THE EXTENT, and it is the only thing that differs between an array
+        // source and a collection. The ELEMENT is `Expr::Index` either way --
+        // an array subscript on an array, the object's own `opr []` on an
+        // object -- so the array path's emitted code is unchanged by this
+        // milestone, byte for byte.
+        let extent = self.generator_extent(typed_source.ty, &array, source.span(), span)?;
         let index = format!("$at{}", self.cases);
         self.cases = self.cases.saturating_add(1);
 
@@ -6359,14 +6430,7 @@ impl Checker {
                         digits: "0".to_owned(),
                         span,
                     }),
-                    hi: Box::new(Expr::Call {
-                        callee: Box::new(Expr::Var {
-                            name: "length".to_owned(),
-                            span,
-                        }),
-                        args: vec![array_ref()],
-                        span,
-                    }),
+                    hi: Box::new(extent),
                     inclusive: false,
                     sequential,
                     body: Box::new(Expr::Block {
@@ -6392,6 +6456,411 @@ impl Checker {
             span,
         };
         self.expr(&desugared, expected)
+    }
+
+    /// `if x <- g then B else C end` and `while x <- g do B end`.
+    ///
+    /// THE CONDITION IS A GENERATOR AND YIELDING IS THE TRUTH. 1.0's condition
+    /// here is a `GeneratorClause` and not an expression
+    /// (`DelimitedExpr.rats:37,39,40,216`), and what it must be is a
+    /// `Condition[\E\]` -- `Library/FortressLibrary.fsi:847`, "a generator that
+    /// generates 0 or 1 element", whose minimal complete definition is
+    /// `getter holds(): Boolean` and `getter get(): E`.
+    ///
+    /// 1.0 DESUGARS THROUGH `__cond(e, fn (binds) => B, thunk(C))`, and that
+    /// form is NOT reachable here: both its arrows have a `()` codomain, which
+    /// `closure.rs` refuses by name. The direct lowering needs no arrow at all:
+    ///
+    /// ```text
+    /// if x <- g then B else C end
+    ///   -->  do $c0 = g
+    ///            if $c0.holds then do x = $c0.get ; B end else C end end
+    ///
+    /// while x <- g do B end
+    ///   -->  do $on0: Boolean := true
+    ///            while $on0 do
+    ///              $c0 = g
+    ///              if $c0.holds then do x = $c0.get ; B end
+    ///                           else $on0 := false end end end
+    /// ```
+    ///
+    /// THE `while` FORM RE-EVALUATES `g` EXACTLY ONCE PER ROUND, which is what
+    /// makes it a while-CONDITION rather than a walk over one value. The flag is
+    /// how the loop stops without an `exit`: a `while` body is not outlined, so
+    /// assigning it is ordinary.
+    #[allow(clippy::too_many_arguments)]
+    fn binding_condition(
+        &mut self,
+        binders: &[String],
+        source: &Expr,
+        body: &Expr,
+        loops: bool,
+        otherwise: Option<&Expr>,
+        span: Span,
+        expected: Option<Type>,
+    ) -> Checked<TypedExpr> {
+        let [binder] = binders else {
+            // A `Condition` yields ONE element. `(a,b) <- g` wants that element
+            // destructured, which is the tuple binder `tuple.rs` owns and this
+            // node is walked before it -- so it is refused by name rather than
+            // half-taken.
+            return Err(TypeError::BindingConditionUnsupported {
+                span,
+                keyword: if loops { "while" } else { "if" },
+            });
+        };
+        let held = format!("$c{}", self.cases);
+        let running = format!("$on{}", self.cases);
+        self.cases = self.cases.saturating_add(1);
+
+        // The source is typed HERE, before any of it is built, so a source that
+        // is not a condition is named as one thing rather than as three missing
+        // members.
+        let typed_source = self.expr(source, None)?;
+        let ty = typed_source.ty;
+        if !matches!(ty, Type::Object(_) | Type::Trait(_)) {
+            return Err(TypeError::NotACondition {
+                span: source.span(),
+                found: ty,
+                missing: HOLDS,
+            });
+        }
+        if let Some(missing) = self.protocol_gap(ty, &[(HOLDS, HOLDS, 1), (GET, GET, 1)]) {
+            return Err(TypeError::NotACondition {
+                span: source.span(),
+                found: ty,
+                missing,
+            });
+        }
+
+        let bind_source = |name: &str| {
+            BlockItem::Binding(fortress_ast::Binding {
+                name: name.to_owned(),
+                ty: None,
+                value: source.clone(),
+                mutable: false,
+                span,
+            })
+        };
+        let condition = self.nullary_read(&held, HOLDS, span);
+        let yielded = Expr::Block {
+            items: vec![
+                BlockItem::Binding(fortress_ast::Binding {
+                    name: (*binder).clone(),
+                    ty: None,
+                    value: self.nullary_read(&held, GET, span),
+                    mutable: false,
+                    span,
+                }),
+                BlockItem::Expr(body.clone()),
+            ],
+            span,
+        };
+
+        if !loops {
+            let desugared = Expr::Block {
+                items: vec![
+                    bind_source(&held),
+                    BlockItem::Expr(Expr::If {
+                        cond: Box::new(condition),
+                        then_branch: Box::new(yielded),
+                        else_branch: otherwise.map(|e| Box::new(e.clone())),
+                        span,
+                    }),
+                ],
+                span,
+            };
+            return self.expr(&desugared, expected);
+        }
+
+        let flag = || Expr::Var {
+            name: running.clone(),
+            span,
+        };
+        let desugared = Expr::Block {
+            items: vec![
+                BlockItem::Binding(fortress_ast::Binding {
+                    name: running.clone(),
+                    ty: Some(TypeRef::Named {
+                        name: "Boolean".to_owned(),
+                        args: Vec::new(),
+                        span,
+                    }),
+                    value: Expr::BoolLit { value: true, span },
+                    mutable: true,
+                    span,
+                }),
+                BlockItem::Expr(Expr::While {
+                    cond: Box::new(flag()),
+                    body: Box::new(Expr::Block {
+                        items: vec![
+                            bind_source(&held),
+                            BlockItem::Expr(Expr::If {
+                                cond: Box::new(condition),
+                                then_branch: Box::new(yielded),
+                                else_branch: Some(Box::new(Expr::Block {
+                                    items: vec![BlockItem::Assign(fortress_ast::Assign {
+                                        target: flag(),
+                                        op: None,
+                                        value: Expr::BoolLit { value: false, span },
+                                        span,
+                                    })],
+                                    span,
+                                })),
+                                span,
+                            }),
+                        ],
+                        span,
+                    }),
+                    span,
+                }),
+            ],
+            span,
+        };
+        self.expr(&desugared, expected)
+    }
+
+    /// `o.m` or `o.m()`, and WHICH ONE IS NOT A GUESS. A getter is read like a
+    /// field and a method is called, `accessors` records which spelling this
+    /// component declared, and every protocol member here is declared as a
+    /// getter by 1.0 and as a plain method by the minted `List[\T\]`. Getting it
+    /// backwards is `AccessorUnsupported` -- a refusal, never a wrong answer.
+    fn nullary_read(&self, base: &str, name: &str, span: Span) -> Expr {
+        let read = Expr::Field {
+            base: Box::new(Expr::Var {
+                name: base.to_owned(),
+                span,
+            }),
+            name: name.to_owned(),
+            span,
+        };
+        if self.declared_as_a_getter(name) {
+            read
+        } else {
+            Expr::Call {
+                callee: Box::new(read),
+                args: Vec::new(),
+                span,
+            }
+        }
+    }
+
+    /// Whether this component declared `name` as an accessor. EXTRACTED so a
+    /// mutation row has one unique bar-free line to break: `accessors.contains`
+    /// appears twice, and a row matching twice disables its own table.
+    fn declared_as_a_getter(&self, name: &str) -> bool {
+        self.accessors.contains(name)
+    }
+
+    /// A comprehension's sequential walk over a generator source, lowered to a
+    /// `while` over the index. Minted by `comprehension.rs`; no source spelling
+    /// reaches here.
+    ///
+    /// A `while` AND NOT A `for`, for the reason `comprehension.rs`'s own header
+    /// gives: a `for` body is outlined and may run on several workers, and the
+    /// body this wraps appends to one shared `List[\T\]`. Sequential is also
+    /// what the RESULT needs -- a list comprehension's order is its generator's,
+    /// and for an `Indexed` that is index order.
+    ///
+    /// THE SOURCE IS EVALUATED ONCE, into an immutable binding, so a generator
+    /// expression with a side effect runs once rather than once per element.
+    fn seq_iterate(
+        &mut self,
+        binder: &str,
+        source: &Expr,
+        body: &Expr,
+        span: Span,
+        expected: Option<Type>,
+    ) -> Checked<TypedExpr> {
+        let typed_source = self.expr(source, None)?;
+        let walked = format!("$sq{}", self.cases);
+        let index = format!("$ix{}", self.cases);
+        self.cases = self.cases.saturating_add(1);
+        let extent = self.generator_extent(typed_source.ty, &walked, source.span(), span)?;
+
+        let at = || Expr::Var {
+            name: index.clone(),
+            span,
+        };
+        let desugared = Expr::Block {
+            items: vec![
+                BlockItem::Binding(fortress_ast::Binding {
+                    name: walked.clone(),
+                    ty: None,
+                    value: source.clone(),
+                    mutable: false,
+                    span,
+                }),
+                BlockItem::Binding(fortress_ast::Binding {
+                    name: index.clone(),
+                    ty: Some(TypeRef::Named {
+                        name: "ZZ64".to_owned(),
+                        args: Vec::new(),
+                        span,
+                    }),
+                    value: Expr::IntLit {
+                        digits: "0".to_owned(),
+                        span,
+                    },
+                    mutable: true,
+                    span,
+                }),
+                BlockItem::Expr(Expr::While {
+                    cond: Box::new(Expr::Infix {
+                        op: BinOp::Lt,
+                        fixity: fortress_ast::Fixity::Loose,
+                        lhs: Box::new(at()),
+                        rhs: Box::new(extent),
+                        span,
+                    }),
+                    body: Box::new(Expr::Block {
+                        items: vec![
+                            BlockItem::Binding(fortress_ast::Binding {
+                                name: binder.to_owned(),
+                                ty: None,
+                                value: Expr::Index {
+                                    base: Box::new(Expr::Var { name: walked, span }),
+                                    indices: vec![at()],
+                                    span,
+                                },
+                                mutable: false,
+                                span,
+                            }),
+                            BlockItem::Expr(body.clone()),
+                            BlockItem::Assign(fortress_ast::Assign {
+                                target: at(),
+                                op: None,
+                                value: Expr::Infix {
+                                    op: BinOp::Add,
+                                    fixity: fortress_ast::Fixity::Loose,
+                                    lhs: Box::new(at()),
+                                    rhs: Box::new(Expr::IntLit {
+                                        digits: "1".to_owned(),
+                                        span,
+                                    }),
+                                    span,
+                                },
+                                span,
+                            }),
+                        ],
+                        span,
+                    }),
+                    span,
+                }),
+            ],
+            span,
+        };
+        self.expr(&desugared, expected)
+    }
+
+    /// HOW MANY ELEMENTS A GENERATOR SOURCE HAS, as an expression over a name
+    /// already bound to it. THE ONE PLACE the indexed generator protocol is
+    /// decided: `for x <- g` and a comprehension's `SeqIterate` both come here,
+    /// so a source either iterates in both or in neither.
+    ///
+    /// An ARRAY answers `length(src)`, which is what `for x <- a` emitted before
+    /// this milestone -- the array path is unchanged.
+    ///
+    /// An OBJECT answers `src.size()` or `src.size`, and which one is not a
+    /// guess: `Library/FortressLibrary.fsi:1211` declares `abstract getter
+    /// size()` on `Indexed`, and the minted `List[\T\]` declares the plain
+    /// method, so BOTH spellings are real Fortress and `accessors` says which
+    /// this component wrote. Getting it backwards is a refusal
+    /// (`AccessorUnsupported`), never a wrong answer.
+    ///
+    /// The ELEMENT is not decided here because it does not have to be:
+    /// `Expr::Index` is an array subscript on an array and the object's own
+    /// `opr []` on an object.
+    fn generator_extent(
+        &self,
+        source: Type,
+        bound_to: &str,
+        source_span: Span,
+        span: Span,
+    ) -> Checked<Expr> {
+        let src = || Expr::Var {
+            name: bound_to.to_owned(),
+            span,
+        };
+        if let Type::Array(_, rank) = source {
+            // The desugaring is one index over one extent. A higher rank needs
+            // a nest, and which order it walks in is 1.0's question rather than
+            // a default worth guessing.
+            if rank != 1 {
+                return Err(TypeError::ArrayRankNotImplemented {
+                    span: source_span,
+                    what: "iteration",
+                    rank,
+                });
+            }
+            return Ok(Expr::Call {
+                callee: Box::new(Expr::Var {
+                    name: "length".to_owned(),
+                    span,
+                }),
+                args: vec![src()],
+                span,
+            });
+        }
+        if !matches!(source, Type::Object(_) | Type::Trait(_)) {
+            return Err(TypeError::NotAnArray {
+                span: source_span,
+                found: source,
+            });
+        }
+        if let Some(missing) =
+            self.protocol_gap(source, &[(SIZE, SIZE, 1), (SUBSCRIPT, "opr []", 2)])
+        {
+            return Err(TypeError::NotAGenerator {
+                span: source_span,
+                found: source,
+                missing,
+            });
+        }
+        let read = Expr::Field {
+            base: Box::new(src()),
+            name: SIZE.to_owned(),
+            span,
+        };
+        Ok(if self.accessors.contains(SIZE) {
+            read
+        } else {
+            Expr::Call {
+                callee: Box::new(read),
+                args: Vec::new(),
+                span,
+            }
+        })
+    }
+
+    /// The first named member of a protocol that `receiver` does not answer, or
+    /// `None` when it answers all of them. Arity COUNTS THE RECEIVER, the way
+    /// `Signature::params` does.
+    ///
+    /// A GETTER IS A NULLARY DOTTED METHOD here, so it is already in
+    /// `self.methods` and this asks one question rather than two.
+    /// Each member is `(registered name, source spelling, arity)`. The two names
+    /// differ for an operator: `opr [i: ZZ64]: E` is REGISTERED as `[_]`, and a
+    /// diagnostic that says `[_]` is naming a table key at somebody who wrote
+    /// Fortress.
+    fn protocol_gap(
+        &self,
+        receiver: Type,
+        members: &[(&'static str, &'static str, usize)],
+    ) -> Option<&'static str> {
+        members
+            .iter()
+            .find(|(name, _, arity)| {
+                !self.methods.get(*name).is_some_and(|all| {
+                    all.iter().any(|s| {
+                        live(s, *arity)
+                            && s.params
+                                .first()
+                                .is_some_and(|self_ty| self.registry.is_subtype(receiver, *self_ty))
+                    })
+                })
+            })
+            .map(|(_, spelling, _)| *spelling)
     }
 
     /// `do A also do B end`, SERIALISED, and that is a deviation with a licence

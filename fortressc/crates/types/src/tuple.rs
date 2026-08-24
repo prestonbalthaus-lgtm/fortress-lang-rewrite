@@ -707,6 +707,12 @@ impl Pass {
                 source,
                 body,
                 ..
+            }
+            | Expr::SeqIterate {
+                binder,
+                source,
+                body,
+                ..
             } => {
                 self.expr(source)?;
                 self.push();

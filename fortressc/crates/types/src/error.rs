@@ -240,6 +240,21 @@ pub enum TypeError {
         span: Span,
         found: Type,
     },
+    /// A `for x <- g` or a comprehension whose source is an object that does
+    /// not carry the indexed generator protocol. `missing` names the FIRST
+    /// member it does not answer, because "it is not a generator" without
+    /// saying which member is absent sends a reader looking at the wrong half.
+    NotAGenerator {
+        span: Span,
+        found: Type,
+        missing: &'static str,
+    },
+    /// `if x <- g` or `while x <- g` whose source is not a `Condition`.
+    NotACondition {
+        span: Span,
+        found: Type,
+        missing: &'static str,
+    },
     /// `array(8)` or `[]` with nothing to say what it holds.
     ElementTypeUnknown {
         span: Span,
@@ -933,6 +948,8 @@ impl TypeError {
             | Self::DuplicateOverload { span, .. }
             | Self::DuplicateDefinition { span, .. }
             | Self::NotAnArray { span, .. }
+            | Self::NotAGenerator { span, .. }
+            | Self::NotACondition { span, .. }
             | Self::ElementTypeUnknown { span }
             | Self::UnsupportedElementType { span, .. }
             | Self::UnknownDimensionName { span, .. }
@@ -1245,6 +1262,26 @@ impl core::fmt::Display for TypeError {
             Self::NotAnArray { found, .. } => {
                 write!(f, "expected an array, found {}", found.name())
             }
+            // THE MEMBER NAMES ARE 1.0'S. `Indexed[\E,I\]`
+            // (`FortressLibrary.fsi:1205`) declares `getter size()` and
+            // `opr [i: I]: E`, and this compiler iterates a generator by
+            // walking those two -- so a diagnostic naming them is naming the
+            // library's own protocol rather than an invention.
+            Self::NotAGenerator { found, missing, .. } => write!(
+                f,
+                "{} is not a generator here: iterating one walks `size` and \
+                 `opr []`, as `Indexed` declares them, and {} declares no `{missing}`",
+                found.name(),
+                found.name()
+            ),
+            Self::NotACondition { found, missing, .. } => write!(
+                f,
+                "{} is not a condition here: `if x <- g` yields zero or one \
+                 value and reads `holds` and `get`, as `Condition` declares \
+                 them, and {} declares no `{missing}`",
+                found.name(),
+                found.name()
+            ),
             Self::ElementTypeUnknown { .. } => write!(
                 f,
                 "nothing here says what this array holds; annotate the binding, as in `a:Array[\\ZZ64\\] = ...`"

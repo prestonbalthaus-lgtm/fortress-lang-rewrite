@@ -1234,6 +1234,17 @@ impl<'a> Expander<'a> {
                 body: Box::new(self.expr(body, subst)?),
                 span: *span,
             },
+            Expr::SeqIterate {
+                binder,
+                source,
+                body,
+                span,
+            } => Expr::SeqIterate {
+                binder: binder.clone(),
+                source: Box::new(self.expr(source, subst)?),
+                body: Box::new(self.expr(body, subst)?),
+                span: *span,
+            },
             Expr::AlsoDo { blocks, span } => Expr::AlsoDo {
                 blocks: self.exprs(blocks, subst)?,
                 span: *span,

@@ -20,7 +20,11 @@ object List[\T\](capacity: ZZ64)
 
   size(): ZZ64 = count
 
-  get(i: ZZ64): T = store[i]
+  (* THE ELEMENT HALF OF THE INDEXED GENERATOR PROTOCOL, spelled the way
+     `Indexed[\E,I\]` spells it (`Library/FortressLibrary.fsi:1205`) rather
+     than as a `get` method this compiler made up. `for x <- aList` and a
+     comprehension over one both walk `size` and this. *)
+  opr [i: ZZ64]: T = store[i]
 
   append(x: T): () = do
     if count >= length(store) then reserve() end
