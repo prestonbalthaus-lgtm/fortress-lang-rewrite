@@ -47,18 +47,29 @@ const REPOSITORY_PATH: [&str; 3] = [
 /// stops on at :362 without ever writing an import for them.
 const IMPLICITLY_IMPORTED: [&str; 2] = ["CompilerBuiltin", "FortressLibrary"];
 
-/// THE api HALF ONLY, AND THE COMPONENT HALF IS ARCHITECTURALLY OUT.
-/// Merged declarations land in `component.decls`: a merged OBJECT takes a
-/// 32-bit type tag, which shifts every dispatch table built after it, and a
-/// merged SINGLETON is CONSTRUCTED in that program's `main`, because
-/// `emit_main` walks `component.objects`. Doing it component-side would perturb
-/// the emitted IR of every module that already compiles. An api is checked and
-/// never lowered, so neither happens there.
+/// BOTH HALVES. THIS RAN FOR apis ONLY UNTIL LINK 5 (`bd76d11e3`, 2026-08-23)
+/// AND IT HAS RUN FOR COMPONENTS EVER SINCE. The comment here kept saying "the
+/// component half is ARCHITECTURALLY OUT" for two days after that, above an
+/// early return that had been dead since the same commit, and the false claim
+/// propagated out of this file into `02-stack.md`, `04-state.md` and
+/// `ROADMAP.md`, where a milestone that was already built stayed on the queue
+/// as "the largest remaining lever". Corrected 2026-08-25.
 ///
-/// AND IT COULD NOT LAND UNTIL `CompilerBuiltin.fsi` ITSELF CHECKED. Written
-/// once before that and measured at 446 -> 392: merging a library that does not
-/// check poisons every importer with its own remaining error, and every one of
-/// the 57 losses reported the same `()` has no value.
+/// THE OLD REASON WAS TRUE AND WAS NOT THE BLOCKER, which is why it held for so
+/// long. A merged OBJECT does take a 32-bit type tag and a merged SINGLETON is
+/// constructed in `main` -- and a trait-only variant built to dodge exactly
+/// that lost the same 402 files. What actually stopped it was a NAME COLLISION
+/// WITH THE BUILTIN SCALARS. The four rules that made it land are in
+/// `bd76d11e3`'s message and each is measured against what happens without it:
+/// a merged declaration LOSES to a builtin of its own name; a merged trait's
+/// supertype edge to a builtin is DROPPED; a merged functional method is NOT
+/// lifted into a component; and a merged object is lowered ONLY ON DEMAND,
+/// never if it is a singleton, never without a buildable layout.
+///
+/// WHAT HOLDS IT: `fortressc/tests/implicitbuiltin.fss` is COMPILED AND RUN by
+/// `apply-gate.sh`, and it carries a literal, a `String` and a `||` precisely
+/// because the whole risk of the component half is a merged declaration
+/// shadowing a builtin of the same name.
 ///
 /// NOT INTO THE BUILTIN ITSELF, and not into anything it reaches: only the
 /// TOP-LEVEL file gets the implicit import, because an api pulled in through
@@ -69,12 +80,13 @@ const IMPLICITLY_IMPORTED: [&str; 2] = ["CompilerBuiltin", "FortressLibrary"];
 /// LAST IN THE QUEUE, WHICH IS `insert(0, ..)`: the loop POPS, so index zero is
 /// reached last and an explicitly written import claims a contested name first.
 ///
-/// TWO GUARDS ON TWO LINES, neither carrying a vertical bar: a mutation row
-/// splits on `IFS='|'`, so `||` cannot appear in a line a table has to reach.
+/// ONE GUARD, ON ONE LINE, CARRYING NO VERTICAL BAR: a mutation row splits on
+/// `IFS='|'`, so `||` cannot appear in a line a table has to reach. The second
+/// guard was the api-only early return; Link 5 neutered it to `if false` rather
+/// than deleting it, and the dead block came out on 2026-08-25 with the comment
+/// above. Nothing targets it -- `apply-gate.sh`'s row for this function matches
+/// `if component.name == name {`.
 fn implicit_import(component: &Component, queue: &mut Vec<ImportDecl>) {
-    if false {
-        return;
-    }
     for name in IMPLICITLY_IMPORTED {
         // `break` AND NOT `continue`, AND THAT ONE WORD IS THE LAYERING. The
         // core apis are ordered here, and a core api implicitly imports the

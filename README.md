@@ -259,11 +259,14 @@ GENERATOR PROTOCOL.
 **The generator protocol is `Indexed`, walked EXTERNALLY, and that is a named
 deviation with three measured reasons.** 1.0's protocol is
 `generate[\R\](r: Reduction[\R\], body: E->R): R`; there is no first-class
-`Reduction` here, a `()` arrow codomain -- the arrow `loop` takes -- is refused
-by name, and a COMPONENT cannot name `Generator`, `Indexed` or `Condition`
-because the implicit core-api import is api-side only. That last one is
-decisive: nominal membership in the protocol is unavailable from a `.fss`, so
-the check has to be structural. The members are still 1.0's own --
+`Reduction` here, and a `()` arrow codomain -- the arrow `loop` takes -- is
+refused by name. THE THIRD REASON THIS USED TO GIVE WAS FALSE AND CAME OUT ON
+2026-08-25: it said a component cannot name `Generator`, `Indexed` or
+`Condition` because the implicit core-api import is api-side only, and called
+that the decisive one. Link 5 had already landed -- as the section below this
+table says in the same file -- so a component names all three with no written
+import and compiles. The two reasons above are each sufficient on their own, so
+the check is still structural and the deviation still stands. The members are still 1.0's own --
 `Library/FortressLibrary.fsi:1205` declares `getter size()` and `opr [i: I]: E`
 on `Indexed`, and `opr []` now dispatches on an object -- and 1.0's own NATIVE
 compiler library, `Library/CompilerLibrary.fsi`, cuts the protocol the same way
@@ -274,7 +277,9 @@ over one, and `if x <- g then` / `while x <- g do` all compile.
 in "Why rewrite it" above was arrays capping at 2^31 elements. `tools/phase7-gate
 .sh` writes and reads index 2,999,999,999 of a three-billion-element
 `Array[\Boolean\]`, and runs a 10^9-element parallel reduction that goes from
-0.80 s at one worker to 0.09 s at fourteen.
+0.80 s at one worker to 0.09 s at fourteen. (Those absolute times are from
+fourteen unpinned cores. Everything here now runs on CPUs 2-7; the gate's floor
+is a ratio and still passes, the wall-clock will not reproduce.)
 
 Where the numbers are, and every one is a ratchet in a test rather than
 commentary:
@@ -337,7 +342,7 @@ The legacy Sun implementation is kept as reference material:
 | `SpecData/` | Machine readable spec data: reserved words, examples |
 | `Fortify/` | Renders Fortress source into LaTeX |
 
-About 1950 `.fss` and `.fsi` files sit across `Library/` and `ProjectFortress/`.
+1956 `.fss` and `.fsi` files sit across `Library/` and `ProjectFortress/`.
 Those are valid Fortress programs and they are the conformance suite the new
 compiler gets measured against.
 
@@ -395,7 +400,9 @@ are already paid for.
 
 `tools/oracle-gate.sh` is the primary correctness instrument and the one to run
 first. The oracle is the 373 `.test` files the legacy implementation shipped, on
-disk, needing no JVM: 266 of them record the exact compile error 1.0 gave, which
+disk, needing no JVM: 264 of them record the exact compile error 1.0 gave under
+`compile_err_equals`, the predicate the gate self-tests (266 is the looser count
+across every `compile_err_*` comparator), which
 is a MUST-FAIL ratchet -- `tools/oracle-accepted-must-fail.txt` names every
 program we wrongly accept, a new acceptance outside the list is red, and a file
 that starts being refused comes out of the list in the same commit.

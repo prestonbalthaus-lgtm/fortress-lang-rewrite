@@ -10,9 +10,12 @@ and `.fsi` files already in this tree.
 **THE "DIFFERENTIAL BASELINE AGAINST THE LEGACY INTERPRETER" IN PHASE 0 DOES NOT
 EXIST AND NEVER WILL.** The JVM path was cancelled as a side effect of the
 no-JVM decision and this file was never amended. The real oracle needs no JVM:
-it is the 373 `.test` files the legacy implementation shipped, on disk, 266 of
-them carrying the exact compile error 1.0 gave. `tools/oracle-gate.sh` is the
-instrument. Phases 4 and 5 below inherit the dead reference in their exit
+it is the 373 `.test` files the legacy implementation shipped, on disk, 264 of
+them carrying the exact compile error 1.0 gave. THAT NUMBER WAS 266 HERE UNTIL
+2026-08-25 AND 266 IS A DIFFERENT PREDICATE: `tools/oracle-gate.sh:761` selftests
+`264 cases carry a non-empty compile_err_equals`, and 266 is the count under ANY
+`compile_err_*` comparator, two files wider. "The exact compile error" is the
+narrow one. `tools/oracle-gate.sh` is the instrument. Phases 4 and 5 below inherit the dead reference in their exit
 criteria; read "the legacy interpreter" as "the recorded `.test` set".
 
 ## Where the work actually is, 2026-08-19
@@ -114,7 +117,14 @@ a real algorithm and is refused with a diagnostic. `f ()` as the zero-argument
 call is four lines and is *kept*, because it makes valid Fortress compile rather
 than because it moves a number.
 
-**What is in front now.** The remaining nine constructs, blocker count against
+**What is in front now.** *(M3f-era, 2026-08-19, AND FULLY SUPERSEDED -- kept
+because the blocker-against-delta table is the evidence for the trap it names,
+not because any of it is still in front. `getter`/`setter`, `self` parameters,
+top-level value declarations, object expressions, `var` bindings and `opr`
+declarations have all since landed; untyped parameters are parsed and refused by
+name. AND IT SAYS NINE AND LISTS TEN, which nobody has ever noticed because
+nobody re-added them. What is actually in front is in the G ledger under phase 2
+and in `04-state.md`.)* The remaining nine constructs, blocker count against
 measured parse delta, so the trap is visible: `getter`/`setter` 131 -> +31,
 top-level value declarations 113 -> +31, `self` parameters 46 -> +25,
 `import java com...` 34 -> +25, object expressions 19 -> +13, dotted export
@@ -133,23 +143,46 @@ and always was: 373 `.test` files, 266 with the exact legacy compile error.
 compiling corpus file, and carries a must-fail ratchet. It needs no JVM.
 
 **1. Lexer.** `logos` based, newline aware (see decision 2).
-*Exit:* tokenizes all 1950 corpus files without panicking, with token counts
-stable across runs.
+*Exit:* tokenizes all 1956 corpus files without panicking, with token counts
+stable across runs. THIS SAID 1950 FROM 2026-08-18 TO 2026-08-25 and 1950 is not
+a denominator anything uses -- `grep -rn 1950 tools/ fortressc/crates` returns
+nothing. It was a draft approximation that lost its tilde: the line above it read
+"~1950" in the same commit, against a tree that already held exactly 1956.
+*Where it is:* 1909 of 1956 lex. THE RATCHET IS 1845 AND NOT 1909
+(`crates/lexer/tests/corpus.rs:139`), so a lex regression of up to sixty-four
+files passes the build in silence. Raising it is a one-line edit nobody has
+made.
 
 **2. Parser.** Recursive descent over the core grammar, ported from the 27
 `.rats` modules under `ProjectFortress/src/com/sun/fortress/parser/`.
 *Exit:* parses 90% of the corpus to an AST. The remaining 10% is catalogued with
 a reason each.
-*Where it is, re-measured 2026-08-24:* 1909 of 1956 lex (98%), 1174 of those
-parse (62%). Both numbers are ratchets in the corpus tests rather than
-commentary, so a regression fails the build. This line read "1845 lex, 839
-parse" until it was re-run; a `.rats` port advances in small named steps and the
+*Where it is, re-measured 2026-08-25:* 1909 of 1956 lex (98%), 1174 of those
+parse (62%). THE PARSE HALF IS A RATCHET AND THE LEX HALF IS NOT, and this line
+claimed both were until 2026-08-25. `crates/parser/tests/corpus.rs:261` asserts
+`parsed >= 1174` and fails the build below it; the lexer's floor is 1845
+(`crates/lexer/tests/corpus.rs:139`), sixty-four below the number quoted here.
+Neither floor is a named constant -- both are inline literals inside an
+`assert!`, which is why neither goes red when the prose drifts past it.
+This line read "1845 lex, 839 parse" until it was re-run; a `.rats` port advances in small named steps and the
 prose does not follow on its own.
 
-*What is left is a PARSER queue and not a type-system one.* The 1382 files that
-do not parse are catalogued by `tools/triage.sh`, and the top buckets are all
-grammar: an all-caps operator word used as a name, `grammar` and the other
-syntax-abstraction reserved words, trait value parameters, untyped parameters.
+*What is left is a PARSER queue and not a type-system one.* The 735 files that
+do not parse -- 1909 that lex minus the 1174 that do -- are catalogued by
+`tools/triage.sh`. THIS SAID "THE 1382 FILES THAT DO NOT PARSE" UNTIL 2026-08-25
+AND IT WAS WRONG TWICE IN ONE SENTENCE. 1382 is not a parse denominator at all:
+it is 1956 minus the 574 files that COMPILED at 5e061b97d, a whole-driver
+refusal count carried across and relabelled. The driver's refusal count at this
+tip is 1374, and neither number has ever been a parse figure.
+
+The top buckets are still grammar, and the list this line used to give is what
+they were before the G milestones cut into them. An all-caps operator word used
+as a name: G3 paid the PREFIX form, which was most of it, and the bucket is
+FIFTEEN rather than 54. `grammar` and the other syntax-abstraction reserved
+words: out of v1 by decision 1. Trait value parameters: 1.0's pattern matching,
+untouched. Untyped parameters: PARSED AND REFUSED BY NAME since G7 and I, which
+is what turned a first-blocker count into a ceiling and showed the thing behind
+it is whole-component inference rather than a parser gap.
 Two traps this phase has now paid for twice. A first-blocker count is not a
 ceiling -- it says what the compiler hit FIRST, and this project's counts have
 been wrong by up to 20x in both directions -- so the cheapest way to turn one
@@ -161,8 +194,12 @@ what a gained file compiles TO, never just the count.
 *Exit:* `Library/` resolves clean with no unresolved references.
 *Where it is, 2026-08-23:* the resolver merges an api's TYPES transitively, into
 apis and now into COMPONENTS as well -- `source-code.tex:305`'s implicit core
-import, both halves. `unknown type` as a first blocker fell from 93 corpus files
-to 26. What an api's FUNCTIONS and VALUES declare is still not merged, and is
+import, both halves. The component half is LINK 5 and it LANDED, in bd76d11e3 on
+2026-08-23, with four rules of which the first is that A MERGED DECLARATION
+LOSES TO A BUILTIN OF ITS OWN NAME; `fortressc/tests/implicitbuiltin.fss` is
+built and RUN by apply-gate to hold it. `unknown type` as a first blocker fell
+from 93 corpus files to 26 then, and is TWELVE at this tip, re-measured
+2026-08-25 with the driver over all 1956. What an api's FUNCTIONS and VALUES declare is still not merged, and is
 not meant to be: `source-code.tex:313-320` makes satisfying them the importing
 component's obligation. See
 `docs/superpowers/specs/2026-08-23-link-5-component-side-core-import.md`.
@@ -202,7 +239,10 @@ position, hoisted the way a `fn` already was: a minted top-level `ObjectDecl`
 whose value parameters are the locals its members read, and a construction of it
 left behind, so no member body is rewritten and codegen gained nothing. 423
 objects and 126 apis, +7 and nothing lost, and the oracle pass floor moves 345
--> 348. A CAPTURE COPIES, so closing over a local declared `:=` is now REFUSED
+-> 348. (EVERY ORACLE NUMBER IN THE MILESTONE SECTIONS IS A SNAPSHOT AT ITS OWN
+TIP. The ladder runs 345 -> 348 -> 350 -> 356 down this file; the LIVE floor is
+`PASS_FLOOR = 356` at `tools/oracle-gate.sh:329` and the pass count is 359 with
+454 binaries built and run. Do not quote the first one you grep.) A CAPTURE COPIES, so closing over a local declared `:=` is now REFUSED
 BY NAME at both hoists -- reading one printed the value as of construction and
 exited 0, and 1.0 captures the cell. Measured at zero corpus files.
 `objectCC_mutVar1.fss` is 1.0's own test for the cell semantics and is still
@@ -351,9 +391,25 @@ desugars through. Three things block that form here:
   * a `()` arrow CODOMAIN is refused by name, and that is the arrow `loop`
     takes -- not an edge case for this protocol but the whole of it
   * a COMPONENT cannot name `Generator`, `Indexed` or `Condition`: the implicit
-    core-api import is api-side only and Link 5 is architecturally out. So
-    NOMINAL membership in the protocol is unavailable from a `.fss` whatever
-    the protocol is, which is the decisive one -- it forces a structural check.
+    core-api import is api-side only and Link 5 is architecturally out.
+
+**THAT THIRD BULLET WAS FALSE WHEN IT WAS WRITTEN AND IS STRUCK, 2026-08-25.**
+Link 5 landed the day BEFORE this section, in bd76d11e3, and the component half
+of the implicit core import has been on ever since -- `implicit_import` is
+called for every component and the api-only early return has been dead since
+that commit. A component naming all three with no written import compiles: exit
+0, seven apis resolved, probed at this tip. So NOMINAL membership was available
+from a `.fss` the whole time, and this file said the opposite two sections
+after phase 3 said the truth. The claim also propagated out of the repo into
+`02-stack.md` and `04-state.md`, which both carried "Link 5 architecturally
+out" as the largest remaining lever for a milestone already built.
+
+WHAT SURVIVES IS THE DECISION, NOT ITS THIRD REASON. The structural check stays:
+the first two bullets are untouched and each is sufficient on its own -- there
+is no first-class `Reduction` to pass, and a `()` arrow codomain is refused by
+name, which is the whole of `loop`. The protocol is `Indexed` walked externally
+because `generate` cannot be given its arguments, not because the names could
+not be spelled.
 
 THE MEMBERS ARE 1.0's OWN. `Library/FortressLibrary.fsi:1205`'s
 `trait Indexed[\E, I\]` declares `getter size()` and `opr [i: I]: E`, and its
@@ -398,7 +454,10 @@ RE-EVALUATES its source once per round, which is what makes it a
 while-CONDITION rather than a walk over one value.
 
 432 objects and 126 apis, UNCHANGED, AND THAT WAS PREDICTED. 172 corpus files
-write a generator construct and 144 of them die in the PARSER; almost all the
+write a generator construct and 144 of them die in the PARSER (DATED 2026-08-24
+AND NOT RE-MEASURED SINCE: parse has gone 1113 -> 1174 across G3, G4/G5, G7 and
+J, so 144 is an upper bound at best. Re-measure it, and write the predicate down
+this time); almost all the
 rest import a `Library` module whose `.fss` does not compile, and an imported
 object is declared by an api and never defined. So the protocol is NECESSARY
 for all 172 and SUFFICIENT for none: it is a prerequisite behind Link 5, not a
@@ -481,7 +540,10 @@ once the static parameters have made the first line long. ONE
 list already had one line above.
 
 435 objects and 134 apis, +9 and nothing lost. `API_FLOOR` moves 126 -> 134 and
-all 434 pre-existing objects emit byte-identical IR.
+all 434 pre-existing objects emit byte-identical IR. (Dated. G2 took `API_FLOOR`
+to 135 the next day and the live constant is `tools/apply-gate.sh:441`; corpus
+is 582 at this tip. Every count in a milestone section is what it was AT THAT
+MILESTONE -- read the ratchets in `tools/` for what is true now.)
 
 MEASURED FIRST, AND THE BUCKET WAS THREE FEATURES. `expected a field or method
 name, found LParen` was 29 corpus files; reading all 29 gave 8 wrapped parameter
@@ -494,7 +556,8 @@ first-blocked on `unknown type DefaultGeneratorImplementation`, a trait declared
 in `Library/GeneratorLibrary.fsi` -- a file that did not PARSE. The resolver
 takes an imported api's declarations after PARSING it, so a CHECK error in an
 imported api does not block its importer and a PARSE error does.
-`GeneratorLibrary.fsi` still fails to check and its importers no longer care.
+`GeneratorLibrary.fsi` did not check when this was written and its importers no
+longer cared.
 **A diagnostic that names a missing type is not always about the type: ask
 whether the file declaring it parsed.**
 
@@ -506,6 +569,234 @@ file's one-parameter declaration wins -- `ReductionWithZeroes takes 1 static
 argument(s), found 2`, reported against a line that does not mention it. That is
 a NAME-RESOLUTION milestone, the same family as Link 5: a merged declaration's
 type references belong to the api that declared them.
+
+**CLOSED BY G2 THE NEXT DAY (ca9d55170), AND THIS SECTION SAID OTHERWISE UNTIL
+2026-08-25.** `Library/GeneratorLibrary.fsi` CHECKS -- exit 0 against the binary
+at this tip. The fix is parameter-COUNT scoping: a merged declaration that loses
+a name collision to one taking a DIFFERENT NUMBER OF STATIC PARAMETERS keeps its
+identity under `$<api>$<name>`, unwritable the way `$Self` is, and that api's own
+references follow it. See the G2 section below. WHAT IS STILL OPEN is the wider
+half and it is bigger: 6,921 collisions are the SAME parameter count with a
+DIFFERENT BOUND VECTOR and are silently flattened.
+
+**G2: A MERGED DECLARATION THAT LOSES TO A DIFFERENT ARITY KEEPS ITS OWN NAME,
+2026-08-24.** `Library/GeneratorLibrary.fsi` CHECKS. Corpus 569 -> 570, zero
+lost, 435 objects byte-identical IR.
+
+The resolver merges an api's declarations into ONE FLAT list, so a name has one
+meaning per component and a later api's same-named declaration is DROPPED.
+`GeneratorLibrary.fsi:275` declares `ReductionWithZeroes[\R\]` and
+`FortressLibrary.fsi:1871` declares `[\R,L\]`; six of the library's OWN objects
+name it at two. Those six do not collide, so they merged. The declaration they
+were written against did, so it did not, and their references re-resolved to the
+IMPORTER's one-parameter declaration -- `takes 1 static argument(s), found 2`,
+at a line that does not mention the name.
+
+THE RULE IS A NARROWING, NOT A CHANGE OF WINNER. A merged declaration that loses
+a collision is still dropped, EXCEPT where the two take a different NUMBER of
+static parameters; then it keeps its identity under `$<api>$<name>`, unwritable
+the way `$Self` is, and every reference from ITS OWN api follows it. Nobody
+else's does.
+
+AND THE CENSUS WAS RUN TWICE BECAUSE THE FIRST INSTRUMENT WAS THE WRONG ONE. It
+compared `static_params.len()` and said 24 mismatches. That is not this
+codebase's own definition of shape: `check_uniformity` (`mono.rs:1694-1699`)
+compares count, each parameter's `bounds.len()` AND its kind, and its own
+comment says count alone was a bug D7 already paid for. Re-measured with the
+right predicate over the same 1956 files: 25,637 collisions reach the shape
+check, 18,705 are IDENTICAL, 6,921 are the same count with DIFFERENT BOUNDS, and
+just 11 differ in COUNT -- which is this rename's entire reach, across four
+files. **THE 6,921 ARE STILL SILENTLY FLATTENED AND ARE THE BIGGER HALF.**
+
+**G3: AN OPERATOR WORD IN EXPRESSION POSITION IS A PREFIX OPERATOR, 2026-08-24.**
+parse 1113 -> 1133, corpus 570 -> 571, zero lost, 435 objects byte-identical IR.
+
+THE LEXER WAS ALREADY RIGHT. `is_operator_word` is the specification's own rule
+(`lexical-structure.tex:1167-1172`): all uppercase or `_`, no leading or
+trailing `_`, at least TWO DIFFERENT letters, so `SQRT` is an operator and `AAA`
+is not. `OpWord` already parsed as INFIX and already followed `BIG`. What was
+missing was the PREFIX reading, and `opr-fixity.tex:34-55` says when that is --
+an operator whose LEFT CONTEXT is another operator or a delimiter, which is
+exactly where `unary` is reached. The arm asks `table_fixity_at`, the same
+twelve-row table the infix path asks.
+
+IT BUILDS A CALL AND NOT A `UnOp`, so both spellings reach ONE overload set:
+`pfo1.fss` declares `opr FOO(x:Object)` beside a functional method
+`opr FOO(self)`, runs, and the method wins.
+
+AND THE 54 FIRST-BLOCKERS WERE NEVER THE CEILING. The prediction was written
+before the sweep -- a library-declared `opr` never merges, because the resolver
+skips `Decl::Function` from an api, so most files should move to a CHECK error
+while only a file declaring the operator LOCALLY goes end to end. That is what
+happened: 38 files moved forward and the single end-to-end gain declares its
+own `opr`. **THE BUCKET IS FIFTEEN NOW, NOT 54**, and most of the remainder is
+not buildable: three `OPR`, two `SIM`, two `ODOT`, one `QQ_NE` and one
+`INTERSECTION` are `opr` STATIC PARAMETERS, refused by design under D7 section 4.
+DO NOT SCHEDULE `OpWord` AS THE HEAD OF ANYTHING.
+
+**G4/G5: `typed` IS AN ASCRIPTION AND IS BUILT; `asif` IS AN ASSUMPTION AND IS
+REFUSED BY NAME, 2026-08-24.** parse 1133 -> 1152, corpus 571 -> 574, zero lost,
+436 objects byte-identical IR.
+
+ONE PRODUCTION, TWO FEATURES, ten lines apart in one spec file.
+`type-annotation.tex:4-18` makes `typed` a type ASCRIPTION that "does not affect
+the dynamic type", which is precisely what `expected: Option<Type>` already does
+here, so its whole lowering is resolve, check the operand against it, hand the
+type outward. `:36-53` makes `asif` a type ASSUMPTION over "both the static AND
+THE DYNAMIC type ... for the purposes of the immediately enclosing ...
+invocation", and the spec itself calls it a richer `super`.
+
+SO `asif` IS REFUSED RATHER THAN QUIETLY READ AS THE ASCRIPTION. Dispatch here
+is symmetric, whole-program and keyed on a concrete TAG, so honouring the
+dynamic half means selecting a declaration the tag alone would not select.
+Reading it as `typed` would compile `(self asif Generator[\E\]).asString` to the
+object's OWN method: a silent wrong answer, not a missing feature.
+
+BUILDING THE PARSE FIRST IS WHAT BOUGHT THE CEILING, and the ceiling is why the
+rest is not scheduled. Of the 32 files first-blocked on the two keywords, THREE
+compile end to end and only THREE of the remaining 29 stop on the `asif`
+refusal; the other 26 walked past both keywords onto something else. The dynamic
+half is a `super`-dispatch milestone for a three-file return. **SKIPPED BY
+PRESTON'S RULING, 2026-08-24. Reopen only if something raises that ceiling, and
+re-measure before believing it.**
+
+**G6: A TYPED LOCAL FUNCTION REACHES THE REFUSAL THE UNTYPED ONE ALREADY
+REACHED, 2026-08-24.** ZERO files gained, zero lost, the rc=0 set identical file
+for file, 439 objects byte-identical IR -- AND THAT IS THE POINT. It buys a
+measurement: the local-function first-blocker count goes 7 -> 36.
+
+`block_item` found a local function by parsing `f(x)` as a CALL, and a typed
+parameter list is not a call, so `f(w: ZZ32) = w+1` died at the `:` reporting
+`expected )`. A second speculative parse reaches the refusal the untyped form
+already reached; `params()` requiring `name: Type` is what stops it eating a
+call whose arguments are expressions.
+
+AND "LIFT TO COMPONENT LEVEL" IS THE WRONG MODEL, which is worth more than the
+count. These local functions CAPTURE (`sideEffUpdate.fss:19`), EXIT NON-LOCALLY
+(`labelExit.fss:58`) and are PASSED AS ARGUMENTS (`simplify1.fss:29`), which
+needs arrow values. **IT IS A CLOSURE MILESTONE.** Three of the 36 are
+must-FAIL.
+
+**G7: AN ABSTRACT DECLARATION MAY ELIDE A PARAMETER NAME, AND ONLY AN ABSTRACT
+ONE, 2026-08-24.** parse 1152 -> 1161, corpus 574 -> 579, zero lost, 439 objects
+byte-identical IR.
+
+`basic/functions.tex:384-385`, of a declaration with NO BODY: "Parameter names
+may be elided but parameter types cannot be omitted." Both halves are enforced.
+`params` takes a bare TYPE, told from a written name by ONE token -- a name is
+followed by `:` -- and the synthesised name is `$N`, unwritable. Where elision
+is NOT licensed a bare identifier IS the omitted-type case and is refused by
+name: an object's value parameters, because they are its FIELDS, and any
+declaration WITH A BODY.
+
+THE SECOND GUARD IS NOT TIDINESS -- WITHOUT IT TWO WRONG PROGRAMS COMPILED.
+`Object.Decl.Cons.fss` and `.ConsFn.fss` write `cons(x) = Cons(x,self)`, a
+method with a body and an untyped parameter; read as an elided name that is a
+parameter of type `x`, and both reached rc=0 and were counted as GAINS in the
+first sweep. **THE FIRST "+7" WAS +5 PLUS TWO SILENT WRONG ANSWERS.** A feature
+that makes an INVALID program compile shows up as a gain: read what a gained
+file compiles TO, never just the count.
+
+AND THE FIRST-BLOCKER COUNT SAID SIX, THE ANSWER IS FIVE, AND IT IS A DIFFERENT
+SET. Two of the five were not predicted at all, because a first-blocker count
+sees only the FIRST wall.
+
+**H: A LOCAL FUNCTION'S PARAMETER LIST NEED NOT BE GLUED TO ITS NAME,
+2026-08-24.** ZERO gained, zero lost, all 579 byte-identical IR, parse
+1161 -> 1161. IT IS ONE FILE AND THAT IS THE DELIVERABLE.
+
+`LocalDecl.rats:75` is `Id (w StaticParams)? w ValParam` and `w` is
+`Whitespace*`, so `g (x: ZZ32): ZZ32 = e` is ONE declaration. The block-level
+probe required the parenthesis to be GLUED, which read the SPELLING and not the
+grammar, and it cost two different wrong messages: the typed spaced form died in
+the parser at the `:`, and the untyped spaced form parsed as a JUXTAPOSITION and
+reported `unknown name g` from the CHECKER. Exactly one file moved,
+`ProjectFortress/tests/funny.fss:29`, which makes the local-function bucket a
+TRUE ceiling rather than a glued-spelling one.
+
+A NEWLINE STILL STOPS IT AND THAT IS FREE: a newline is a TOKEN here, so
+`peek_ahead(1)` is `Newline` and not `LParen`. 1.0's own `w` spans newlines,
+which would join two block elements into one declaration; no corpus file writes
+that. THE LOSS CLASS IS REAL AND MEASURED AT ZERO -- a block-level `a (b) = 6`,
+a discarded juxtaposition equality, is now the declaration reading and is
+refused. 1.0's `BlockElem` is an ordered choice with `LocalVarFnDecl` FIRST, so
+that is the oracle's behaviour and not a deviation.
+
+**I: AN UNTYPED PARAMETER IS NOT AN ELIDED NAME, AND 42 FILES WERE TOLD IT WAS,
+2026-08-24.** ZERO gained, zero lost, all 579 byte-identical IR. 42 files moved
+MESSAGE.
+
+THE SPEC HAS TWO PARAMETER PRODUCTIONS WHERE THIS COMPILER HAD ONE RULE.
+`Parameter.rats:96` is `Param ::= BindId (w IsTypeOrPattern)?` and `:104` is
+`AbsParam ::= BindId w IsType | Type`. So on a declaration WITH A BODY the TYPE
+may be omitted and the NAME may not; without a body it is the other way round.
+`functions.tex:384-385` says both halves in one sentence, which is how they came
+to be implemented as one -- and 35 programs that were not attempting elision at
+all were told they were, plus 7 more through the FIELDS wording.
+
+AND ELISION IS NOT EVEN REACHABLE ON AN OBJECT'S VALUE PARAMETERS.
+`TraitObject.rats:185` sends them through the SAME `Params` a function's go
+through, so `object O(x)` is an untyped FIELD and can be nothing else. The
+message says `field` now, and names it.
+
+THE DIAGNOSTIC NAMES WHOLE-COMPONENT INFERENCE, and the citations were verified
+rather than quoted: `basic/inference.tex` is 27 LINES whose entire chapter is
+one note saying the mechanism will be described, and it records an unresolved
+CIRCULAR DEPENDENCY between inference and juxtaposition disambiguation;
+`components/type-inference.tex:15-16` runs inference over a WHOLE COMPONENT and
+only after every imported api has been expanded into it. **Refused by name is
+the correct end state here, not a deferral. Nobody should schedule untyped
+parameters as a parser milestone.**
+
+ALL 42 CORPUS FILES ARE THE BARE-IDENTIFIER SHAPE, so the surviving elision
+branch has ZERO corpus exercisers and is a BACKSTOP held by two fixtures and one
+mutation row.
+
+**J: `end` MAY BE ELIDED FROM AN `if` IMMEDIATELY ENCLOSED BY PARENTHESES,
+2026-08-24.** corpus 579 -> 582, parse 1161 -> 1174, zero lost, and the 579 that
+already compiled emit byte-identical IR. objects 443 -> 446, apis 136, oracle
+359 pass with 454 binaries built and run.
+
+`if.tex:71-73`: "The reserved word `end` may be elided if the `if` expression is
+immediately enclosed by parentheses. In such a case, an `else` clause is
+required." 1.0 carries it as its OWN production, `DelimitedExpr.rats:40`, where
+`Else` is MANDATORY and only `end` is optional -- the prose's second sentence
+written into the grammar. BOTH HALVES ARE BUILT, and the second is what stops
+the first accepting programs 1.0 refuses: an `if` with no `else` has type `()`,
+so the missing branch would read as a void STATEMENT rather than as the error it
+is.
+
+THE LICENSING TEST NEEDS NO THREADING, which is what makes it cheap. Look
+BACKWARD from the `if`'s own token, past any `Newline`, for an `LParen`. That
+covers BOTH sites at once -- the parenthesised atom and a glued CALL's argument
+list, one production in 1.0 and two here -- and it refuses `(1 + if c then 2
+else 3)`, `f(1, if ...)` and the INNER `if` of `(if a then 1 else if b then 2)`,
+which follows `else` and so still needs its own `end`. That last case FALLS OUT
+of the test rather than being special-cased.
+
+TWO DESIGN CORRECTIONS PAID FOR BY PROBING BEFORE WRITING. EVERY BLOCK INSIDE
+THE IF-PARSE TAKES `RParen`, not just the `else` arm: with it on the else sets
+only, `(if b then 1)` runs its THEN block onto the closing parenthesis and
+reports the GENERIC message those files already gave, so the named refusal is
+UNREACHABLE and its fixture would have been written around the generic text. And
+`saw_else` IS TRACKED DURING THE PARSE, not read off the tree -- an `elif` chain
+fills `else_branch` with the nested `if`, so "does this node have an
+else_branch" is `Some` for exactly the program the refusal exists to catch.
+
+AND THE BUCKET LIED TWICE. Nineteen first-blockers, recorded here as "ALL ONE
+SHAPE": TWO were not `if` files at all (`Compiled2.j.fss` and `Compiled2.p.fss`,
+an unbalanced closing parenthesis) and of the 17 real ones only THREE compile,
+10 reach a CHECKER error and 4 move from one PARSE error to another. That is why
+parse moves 13 and objects move 3. **A BUCKET IS NOT A FEATURE UNTIL YOU HAVE
+READ EVERY FILE IN IT**, and reading the reported line of all nineteen is one
+command.
+
+STILL OPEN AND WORTH KNOWING: a nested `if` inside a licensed one is correctly
+refused but reports the punctuation rather than the feature, because the outer
+block's terminator set carries `RParen`. Zero corpus files write it. And J's
+three gains have no `.test` file, so oracle-gate builds and RUNS them and
+reaches no verdict -- the binary count moves 451 -> 454 and the pass count does
+not. Expected, not a miss.
 
 **EXCEPTIONS, PARKED 2026-08-23.** `throw` is built -- an uncaught throw halts,
 naming the exception, with no unwinding and no cost on the path that does not
@@ -523,7 +814,11 @@ raises the ceiling.
 generators and reductions lowered to real threads.
 *Exit, MET and gated by `tools/phase7-gate.sh`:* a parallel reduction over 10^9
 elements beats the sequential version on one node -- 0.80 s at one worker to
-0.09 s at fourteen -- and `ZZ64` indexing works past 2^31: index 2,999,999,999
+0.09 s at fourteen, ON FOURTEEN UNPINNED CORES, which is no longer how anything
+here runs: since 2026-08-25 everything is confined to CPUs 2-7 and
+`tools/phase7-gate.sh:59` still sweeps `WORKERS="1 2 4 8 14"`. The gate still
+passes pinned, because the floor is a RATIO and the one-worker leg gets one core
+either way, but the absolute 0.09 s will not reproduce on six cores -- and `ZZ64` indexing works past 2^31: index 2,999,999,999
 of a three-billion-element `Array[\Boolean\]` is written and read. That second
 half is the reason the rewrite exists.
 
@@ -539,14 +834,27 @@ another 28 grammar files serving it. A `logos` plus recursive descent frontend
 cannot do user extensible grammar cheaply, so the question was how much real code
 depends on it. Counted across all 1956 `.fss` and `.fsi` files:
 
-* 34 files declare a `grammar`. Every one is in
+* 34 files declare a plain `grammar`. Every one is in
   `ProjectFortress/syntax_abstraction_tests/` (110 files total with its consumer
   cases), which is the feature testing itself.
-* `Library/` has 126 source files and zero grammar declarations.
+* `Library/` has 126 source files and zero plain `grammar` declarations.
+* **THE WORD "PLAIN" IS LOAD BEARING AND WAS ADDED 2026-08-25.** Counting
+  `native grammar` too makes it 35 files, and the one that is NOT under
+  `syntax_abstraction_tests/` is `Library/FortressSyntax.fsi`, which carries
+  eighteen `native grammar` declarations. So "every one is in the test
+  directory" and "`Library/` has zero" are both true of the plain form and both
+  false of the native one. It changes nothing about the decision -- that file is
+  already one of the three macro-API files cut below, and `triage.sh` deliberately
+  leaves it inside the 1846 for the same reason -- but a reader who greps
+  `grammar` gets 35 and concludes this section is lying.
 * Three files in `Library/` touch the macro APIs (`FortressSyntax.fsi`,
-  `FortressAstUtil.fss`, `FortressAstUtil.fsi`, 218 lines together). They import
-  each other and nothing else in `Library/` imports them. `FortressLibrary.fss`
-  does not.
+  `FortressAstUtil.fss`, `FortressAstUtil.fsi`, 218 lines together -- 144, 51
+  and 23, re-verified 2026-08-25). They import each other and nothing else in
+  `Library/` imports them. `FortressLibrary.fss` does not. There is a FOURTH
+  file of the family the count leaves out and it costs nothing:
+  `Library/FortressSyntax.fss`, 14 lines whose entire body is `component
+  FortressSyntax / export FortressSyntax / end` -- the empty component half of
+  the api, declaring no grammar at all.
 
 So the standard library does not use syntax abstraction at all. Cutting it from
 v1 costs the 110 test files and those 218 lines. Nothing else breaks.
@@ -556,12 +864,22 @@ corpus percentages in phases 1 and 2 should be quoted against 1846, not 1956. An
 the specification still documents the feature, so v1 is a Fortress dialect rather
 than the whole language. Say so in the README when v1 ships.
 
-**THE 1846 DENOMINATOR WAS NEVER ADOPTED AND SHOULD NOT BE.** `grep -rn 1846`
-across `tools/` and `fortressc/crates` returns nothing: every instrument in the
-tree walks and quotes against 1956, and the syntax-abstraction files are counted
-like any other. Changing it now would move every recorded number in this repo
-against a denominator no gate uses. The 110 files ARE out of scope for v1
-conformance; they are not out of the corpus walk. Quote 1956.
+**THE 1846 DENOMINATOR IS OPT-IN AND IS NOT THE DEFAULT.** This paragraph said
+"NEVER ADOPTED" and that `grep -rn 1846` across `tools/` and `fortressc/crates`
+"returns nothing", AND THAT WAS FALSE WHEN IT WAS WRITTEN. The exact grep returns
+five hits, all in `tools/triage.sh`, and two of them are live code rather than
+comment: `--conformance` filters the syntax-abstraction files out (:550-551) and
+the selftest HARD-ASSERTS the denominator (`check('the conformance denominator is
+1846', ...)`, :541). It landed 2026-08-21 in 91d37a295; the paragraph denying it
+was written 2026-08-23 in faef66205, two days later, and nobody ran the grep it
+quotes.
+
+WHAT IS TRUE: `fortressc/crates` is genuinely clean, 0 hits. Every gate and every
+default report walks and quotes 1956, so 1846 moves no recorded number unless a
+reader asks for it. THE CUT IS BY PATH, NOT BY FEATURE, and `triage.sh:114-117`
+says why -- cutting by feature would take `Library/FortressSyntax.fsi` with it
+and 1846 would stop reproducing. Quote 1956 unless you mean conformance, and say
+which one you mean.
 
 **2. Whitespace and newlines.** The grammar has dedicated `Spacing`,
 `NoSpaceLiteral`, `MayNewlineHeader` and `NoNewlineHeader` modules. Newlines are
@@ -634,12 +952,33 @@ line above bundles two items with OPPOSITE demand, which is what D7 §4 found:
   juxtaposition-as-product over those. Evaluation happens at the substitution, so
   `[\2 + 3\]` and `[\5\]` are one stamp against `MAX_INSTANTIATIONS`.
 * **"Constraint solving for `nat` parameters" HAS ZERO DEMAND AND IS NOT BUILT.**
-  Measured: not one `where { k < n }` exists in 1956 corpus files, while `nat`
-  PARAMETERS have 61 files and 842 sites. A bound on a value parameter is refused
-  by name rather than dropped. Re-open it when a corpus file writes one.
+  Measured: `nat` PARAMETERS have 61 files, reproduced exactly. A bound on a value
+  parameter is refused by name rather than dropped.
+  **CORRECTED 2026-08-25, TWO WAYS.** This said "not one `where { k < n }` exists
+  in 1956 corpus files" and ONE DOES: `ProjectFortress/tests/whereTest.fss:21`
+  writes `2 n + i < 2^8` inside a `where` clause, with `n` a `nat` and `i` an
+  `int` parameter of the enclosing trait, and it was already there when the census
+  ran. Both censuses missed it the same way -- the syntax is
+  `where [\params\] { constraints }`, so a scan requiring `{` immediately after
+  `where` sees 13 clauses and none of the 18 that really exist. THE RE-OPEN
+  CONDITION THIS BULLET SETS FOR ITSELF IS THEREFORE MET ON ITS OWN TERMS, and
+  the demand behind it is still one file: `whereTest.fss` is a PARSE smoke test
+  whose `run()` prints "Where clasues can be parsed." Not a constraint solver's
+  worth of demand, but the sentence was false and the count is not zero.
+  And "842 sites" DOES NOT REPRODUCE and disagrees with its own source: D7's
+  census (`2026-08-21-d7-reconcile-nat.md:179`) says 377. The two are a
+  match-count and a line-count of the same thing; nobody wrote down which unit
+  "sites" meant. The 61 FILES reproduce exactly on both instruments and are the
+  number to quote.
 * `unit` and `dim` stay in v1 and stay deferred to sub-phase 4d, gated on
   `SPIKE-COMPOSITE-TYPE` rather than on D7 — `unit` is 6 corpus files and zero
-  library files, `dim` has no corpus witness at all.
+  library files AS A STATIC PARAMETER, and `dim` has no corpus witness AS A
+  STATIC PARAMETER. Both qualifiers were added 2026-08-25 because the
+  unqualified sentence is refuted by a grep: `unit` and `dim` DECLARATIONS are a
+  different construct and do have witnesses -- `dim Length` at
+  `ProjectFortress/tests/dimensionUnitDecl.fss:16`, and four library files under
+  `Library/incomplete/basic/`. D7 worded it precisely and this line compressed
+  the qualifier out.
 * `NatReflect.reflect`, which turns a run-time `ZZ32` into a static parameter, is
   a **named deviation** refused by name: a monomorphizing compiler cannot stamp a
   specialisation for a value it does not know.
