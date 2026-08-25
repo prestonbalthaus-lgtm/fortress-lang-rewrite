@@ -145,6 +145,9 @@ fn parses_what_it_can_of_the_corpus_without_panicking() {
                     fortress_parser::ParseError::ObjectVarargsParameter { .. } => {
                         "object varargs parameter without `transient`".to_owned()
                     }
+                    fortress_parser::ParseError::VarargsNotLast { .. } => {
+                        "a parameter follows a varargs parameter".to_owned()
+                    }
                     fortress_parser::ParseError::ClosingNameDiffers { .. } => {
                         "`end` names a different declaration".to_owned()
                     }

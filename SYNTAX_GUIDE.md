@@ -55,7 +55,16 @@ programs were compiled and run, and where one contradicted a tag the tag lost.
 > `nat`/`int`/`bool` static parameters, compound assignment, `value`/`private`/`abstract`/
 > `native`, `atomic`/`also`/`spawn`/`label`/`exit`, reduction variables, an enforced
 > `where` clause, `end`-name validation, a real MODULE SYSTEM with `.fsi` apis, component
-> level values whose initializers run, varargs, `throws`, and `||` concatenation.
+> level values whose initializers run, `throws`, and `||` concatenation.
+>
+> **⚠ 2026-08-25: this list said "varargs" and that was not true when it was written.**
+> `...` PARSED and was recorded on the parameter and read by NOTHING that lowers, so
+> `f(es: ZZ32...)` and `f(es: ZZ32)` emitted byte-identical IR and `f(1)` compiled as a
+> scalar bind. It is true NOW, for a BODIED, GROUND, UNOVERLOADED declaration: the
+> trailing arguments collect into a rank-one array, so `length(es)`, `es[i]` and
+> `for x <- es` all work, and zero trailing arguments is legal. A varargs parameter in a
+> BODILESS api declaration is still recorded and never lowered. A GENERIC varargs
+> (`opr <|[\E\] xs: E...|>`) is NOT stamped yet.
 >
 > **Owed:** a full re-derivation of every tag and every quoted diagnostic against the
 > current binary. It is tracked in `04-state.md`; until it is done this banner stands.

@@ -1675,6 +1675,7 @@ impl<'t, 'a> Parser<'t, 'a> {
             self.skip_throws()?;
             let body = self.optional_definition()?;
             Self::reject_elided_name(&params, body.as_ref())?;
+            Self::reject_varargs_position(&params)?;
             let end = body.as_ref().map_or(rparen, Expr::span);
             return Ok(Member::Method(MethodDecl {
                 modifiers,
@@ -1890,6 +1891,7 @@ impl<'t, 'a> Parser<'t, 'a> {
             }
         };
         Self::reject_elided_name(&params, body.as_ref())?;
+        Self::reject_varargs_position(&params)?;
         let end = body.as_ref().map_or(rparen, Expr::span);
         let span = Span::new(name_span.start, end.end);
         Ok(FnDecl {
@@ -1912,6 +1914,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         let start = self.span_here();
         self.pos += 1;
         let sig = self.opr_signature()?;
+        Self::reject_varargs_position(&sig.params)?;
         let body = match self.optional_definition()? {
             Some(body) => Some(body),
             None if signature_only => None,
@@ -1938,6 +1941,7 @@ impl<'t, 'a> Parser<'t, 'a> {
         let start = self.span_here();
         self.pos += 1;
         let sig = self.opr_signature()?;
+        Self::reject_varargs_position(&sig.params)?;
         let body = self.optional_definition()?;
         let end = body.as_ref().map_or(sig.end, Expr::span);
         Ok(MethodDecl {
@@ -2243,6 +2247,46 @@ impl<'t, 'a> Parser<'t, 'a> {
             return Ok(());
         };
         Err(Self::untyped_or_elided(&p.ty, p.span, "parameter"))
+    }
+
+    /// AT MOST ONE VARARGS, AND NO ORDINARY PARAMETER AFTER IT.
+    /// `concrete-syntax.tex:696-708` is
+    /// `(Param,)* [Varargs,] Keyword(,Keyword)*` / `(Param,)* Varargs`.
+    /// A SECOND varargs falls out of the same rule: the first then has a
+    /// parameter after it.
+    ///
+    /// THE CHECK CANNOT LIVE IN `params`, and that is not a style choice.
+    /// `opr_signature` assembles ONE parameter vector from up to four separate
+    /// `params()` calls (:1984, :2023, :2056, :2138), so a per-call check would
+    /// accept a varargs that is last within its own list and not last in the
+    /// assembled signature.
+    ///
+    /// IT IS NOT GATED ON THE BODY, unlike `reject_elided_name`. This is a
+    /// GRAMMAR rule, so it holds for an api exactly as it holds for a
+    /// component. Measured at zero corpus files either way, so the split would
+    /// have bought nothing and cost a reader an explanation.
+    ///
+    /// AND IT IS NOT SPELLED "MUST BE LAST" ON PURPOSE. Seven corpus sites
+    /// write a varargs followed by a KEYWORD parameter (`y: ZZ32..., z: ZZ32 = 0`
+    /// -- `Compiled5.aw.fss:17`, `XXXtestTuple.fss:16,21,24,25,27`,
+    /// `OverloadedFunctions.fss:19`), which is the grammar's FIRST alternative
+    /// and legal 1.0. Keyword parameters are not in this subset, so `params`
+    /// stops at their `=` with `expected )` before this ever runs -- but the
+    /// RULE would have been wrong, and would have blamed varargs for a
+    /// keyword-parameter gap the day keyword parameters landed.
+    fn reject_varargs_position(params: &[Param]) -> Parsed<()> {
+        let mut rest = params.iter().skip_while(|p| !p.varargs);
+        let Some(varargs) = rest.next() else {
+            return Ok(());
+        };
+        let Some(after) = rest.next() else {
+            return Ok(());
+        };
+        Err(ParseError::VarargsNotLast {
+            span: after.span,
+            name: varargs.name.clone(),
+            following: after.name.clone(),
+        })
     }
 
     /// WHICH RULE A TYPELESS PARAMETER BROKE, decided by the SHAPE of what was

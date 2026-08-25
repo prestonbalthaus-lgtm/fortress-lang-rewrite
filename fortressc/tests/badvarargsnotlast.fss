@@ -1,0 +1,15 @@
+component badvarargsnotlast
+export Executable
+
+(* `concrete-syntax.tex:696-708` makes a parameter list
+   `(Param,)* [Varargs,] Keyword(,Keyword)*` or `(Param,)* Varargs`, so no
+   ORDINARY parameter may follow a varargs one.
+
+   THIS COMPILED BEFORE THE GUARD. `...` was parsed and recorded on `Param`
+   and read by nothing, so this declaration was indistinguishable from
+   `f(a: ZZ32, b: ZZ32)` -- byte-identical IR, verified. *)
+f(a: ZZ32..., b: ZZ32): ZZ32 = 7
+
+run(): () = println(f(1, 2))
+
+end

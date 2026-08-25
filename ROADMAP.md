@@ -374,6 +374,64 @@ ZERO. `expected then, found Lt` goes from 27 files to NONE and exactly ONE
 lands on the lowering; the other 26 walk on to a later wall, as far as
 `println does not accept Just$Boolean$e`.
 
+**VARARGS, LANDED 2026-08-25. PHASE N, IN TWO SLICES.**
+`f(es: T...)` collects its trailing arguments into a rank-one array.
+
+THE PARSE HALF WAS ALREADY BUILT AND THE FLAG WAS READ BY NOTHING THAT LOWERS.
+`at_ellipsis` re-glued the three `Dot` tokens, `Param.varargs` recorded it,
+`conform.rs` compared and rendered it -- and `build_signatures` dropped it into a
+fixed-arity `Vec<Type>`, so `f(es: ZZ32...)` and `f(es: ZZ32)` emitted
+BYTE-IDENTICAL IR and `f(1)` compiled as a scalar bind. A silent wrong parse, not
+a gap. Same shape as `TypedValue.mutable`: written and read by nothing.
+
+SLICE 1 is the position rule -- at most one varargs, and no ORDINARY parameter
+after it (`concrete-syntax.tex:696-708`). IT IS DELIBERATELY NOT "MUST BE LAST":
+seven corpus sites write a varargs followed by a KEYWORD parameter, which is the
+grammar's first alternative and legal 1.0. They die at the keyword `=` first, but
+"last" would have blamed varargs for a keyword-parameter gap the day keyword
+parameters landed.
+
+SLICE 2 is the lowering, and `basic/overloading.tex:214-226` sanctions the
+architecture outright: a varargs declaration is "(possibly infinitely) many
+declarations, one for each number of arguments it may be called with", bounded in
+practice "by the maximum number of arguments that the functional is called with
+anywhere in the program". Whole-program, demand-driven, finite -- which is what
+monomorphization already is.
+
+THE COLLECTION IS AN ORDINARY ARRAY LITERAL, WHICH IS WHY CODEGEN IS UNTOUCHED.
+`f(1,2,3)` rewrites to `f$va3([1,2,3])` inside `mono`, and `Expr::ArrayLit`
+already lowers through `fortress_array_alloc`. No new shim, no second allocation
+path, no boxing; and zero trailing arguments is `[]`, which already builds a
+`T[0]`. `Any...` at a bodied site is refused BY THE ARRAY ELEMENT ALLOWLIST, for
+free, because the collection IS an array.
+
+ARITY IS IN THE STAMP'S NAME (`f$va3`), which dissolves a mangle collision
+without touching `mangle`: collapsing the trailing arguments into one `T[n-k]`
+parameter would make `f`@3 and `f`@4 both mangle to `f$zz32_array_zz32`.
+
+AND THE STAMPS ARE EMITTED IN THE TEMPLATE'S OWN POSITION.
+`resolve_inferred_returns` is a DECLARATION-ORDER fixpoint, so stamps appended
+after their callers keep a `Void` placeholder -- `restTest.fss` went from
+`unknown name SUM` at the declaration to an integer-versus-`()` error at the call
+three lines later. Caught by sweeping the MESSAGE column; the exit codes were
+identical.
+
+SCOPED, MEASURED: 41 corpus sites are BODIED GROUND against 13 bodied GENERIC. A
+bodiless api declaration is RECORDED AND NEVER LOWERED, which is what keeps the
+fifteen library apis that write `Any...` compiling, `FortressLibrary.fsi` among
+them. An OVERLOADED name is left alone -- this pass has no types, so the name
+alone cannot say which declaration a call means. Generic varargs is the same
+stamper with `Subst` threaded through it and is NOT built.
+
+corpus 583 -> 583 across both slices, ZERO gained, ZERO lost, ZERO messages
+moved, 583 objects BYTE-IDENTICAL IR, all 20 gates green, apply-gate 126/0.
+IT GAINS NO FILES AND THAT WAS PREDICTED BEFORE THE SWEEP. The value is killing a
+silent-wrong-parse class across 86 sites -- the same job H and I did.
+
+AND IT DOES NOT UNBLOCK `Library/Set.fsi:55`. Varargs was ONE of that route's
+three blockers; the declaration is still bodiless and still an api OBLIGATION the
+resolver does not merge. The resolver is untouched.
+
 **THE GENERATOR PROTOCOL, LANDED 2026-08-24. `Indexed`, EXTERNALLY.**
 `for x <- someCollection`, a comprehension over a collection, and the binding
 condition's lowering -- the three milestones that all stopped here.
