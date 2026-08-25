@@ -1,0 +1,10 @@
+component badarraycompindex
+export Executable
+
+(* A BODY THAT IS NOT `index |-> value`. Every other comprehension ACCUMULATES;
+   an array cannot, so a bare element has no slot to go in. *)
+run(): () = do
+  c: ZZ64[3] = [ i | i <- 0#3 ]
+  println(1)
+end
+end

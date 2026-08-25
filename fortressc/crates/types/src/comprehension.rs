@@ -104,6 +104,11 @@ const SET: &str = "Set";
 /// and that is what this pass looks for.
 const SET_LITERAL: &str = "{_}";
 
+/// `[ i |-> e | ... ]`. Not in `KINDS`: an array comprehension does not mint a
+/// collection, it FILLS one the binding already declares, so it has neither a
+/// source to splice nor a builder to call.
+const ARRAY_BRACKET: &str = "[_]";
+
 /// Which collection a bracket pair builds. `mapping` is whether the element --
 /// a literal's argument, or a comprehension's body -- is written `k |-> v`.
 fn kind_for(bracket: &str, mapping: bool) -> Option<&'static Kind> {
@@ -566,6 +571,100 @@ impl Pass {
         }
     }
 
+    /// `a: T[n] = [ i |-> e | i <- lo:hi ]`, lowered to:
+    ///
+    /// ```text
+    ///   do
+    ///     acc$0: T[n] = array(n)
+    ///     i$0: ZZ64 := lo
+    ///     while i$0 <= hi do
+    ///       i = i$0
+    ///       acc$0[i] := e
+    ///       i$0 := i$0 + 1
+    ///     end
+    ///     acc$0
+    ///   end
+    /// ```
+    ///
+    /// THE EXTENT COMES OFF THE SLOT AND THERE IS NO OTHER OPTION. An array is
+    /// sized ONCE, at construction, and a comprehension with a guard does not
+    /// know its count until the walk is over -- so unlike a `List`, which grows,
+    /// there is nothing to infer the size from. Refused by name without one.
+    ///
+    /// RANK ONE ONLY, for the same reason `length` and `for x <- a` are rank
+    /// one: a multi-dimensional fill needs one index per dimension and the
+    /// body writes a single `index |-> value`.
+    fn array_comprehension(
+        &mut self,
+        e: &mut Expr,
+        wanted: Option<&TypeRef>,
+    ) -> Result<(), TypeError> {
+        let Expr::Comprehension {
+            body, gens, span, ..
+        } = e
+        else {
+            return Ok(());
+        };
+        let span = *span;
+        let Some(size) = wanted.and_then(one_dimensional_extent) else {
+            return Err(TypeError::ArrayComprehensionExtentUnwritten { span });
+        };
+        let Expr::Mapping { .. } = &**body else {
+            return Err(TypeError::ArrayComprehensionNeedsAnIndex { span });
+        };
+        let slot = wanted.cloned();
+        let mut body = (**body).clone();
+        self.expr(&mut body, None)?;
+        let mut gens = std::mem::take(gens);
+        for g in &mut gens {
+            self.expr(&mut g.init, None)?;
+            if let Some(h) = &mut g.hi {
+                self.expr(h, None)?;
+            }
+        }
+        let index = self.counter;
+        self.counter = self.counter.saturating_add(1);
+        let acc = format!("acc${index}");
+        // THE FILL IS AN ASSIGNMENT AND NOT A METHOD CALL, which is the whole
+        // difference from every other comprehension: there is no `append` on an
+        // array, and `a[i] := e` is the ordinary subscript store this compiler
+        // already emits.
+        let Expr::Mapping { key, value, .. } = body else {
+            return Err(TypeError::ArrayComprehensionNeedsAnIndex { span });
+        };
+        let mut inner = Expr::Block {
+            items: vec![BlockItem::Assign(Assign {
+                target: Expr::Index {
+                    base: Box::new(var(&acc, span)),
+                    indices: vec![*key],
+                    span,
+                },
+                op: None,
+                value: *value,
+                span,
+            })],
+            span,
+        };
+        for (depth, clause) in gens.iter().enumerate().rev() {
+            inner = self.clause(clause, inner, index, depth, &acc, span)?;
+        }
+        *e = Expr::Block {
+            items: vec![
+                BlockItem::Binding(Binding {
+                    name: acc.clone(),
+                    ty: slot,
+                    value: call(var("array", span), vec![size], span),
+                    mutable: false,
+                    span,
+                }),
+                BlockItem::Expr(inner),
+                BlockItem::Expr(var(&acc, span)),
+            ],
+            span,
+        };
+        Ok(())
+    }
+
     fn comprehension(&mut self, e: &mut Expr, wanted: Option<&TypeRef>) -> Result<(), TypeError> {
         let Expr::Comprehension {
             bracket,
@@ -578,6 +677,9 @@ impl Pass {
             return Ok(());
         };
         let span = *span;
+        if bracket == ARRAY_BRACKET {
+            return self.array_comprehension(e, wanted);
+        }
         let mapping = is_mapping(body);
         let Some(kind) = kind_for(bracket, mapping) else {
             // WHICH HALF IS UNSUPPORTED IS A DIFFERENT SENTENCE. `<| k |-> v |
@@ -765,6 +867,37 @@ impl Pass {
 /// slot does not give a SET comprehension its element type, and the other way
 /// round -- the two are different collections and reading one as the other
 /// would silently build the wrong one.
+/// The written SIZE of a rank-one bracket shape, as an expression. `T[17]`
+/// gives `17`; `T[2,3]`, `T^3` and `T[0#n]` give nothing, each refused by name
+/// one level up rather than guessed at.
+fn one_dimensional_extent(wanted: &TypeRef) -> Option<Expr> {
+    let TypeRef::Shaped {
+        spelling: fortress_ast::ShapeSpelling::Bracket,
+        extents,
+        ..
+    } = wanted
+    else {
+        return None;
+    };
+    let [only] = extents.as_slice() else {
+        return None;
+    };
+    // `plain_size` IS THE CODEBASE'S OWN PREDICATE and it is used rather than
+    // re-derived: `#` and `:` are refused by name, and its comment says a
+    // helper that quietly answered for them would be where that refusal got
+    // forgotten. An extent is a STATIC expression -- `ZZ32[17]` carries
+    // `StaticExpr::Int(17)`, not a named type -- and only a literal is taken
+    // here: a `nat` parameter would have to be turned back into a run-time
+    // value, which is expansion's business and not this pass's.
+    match only.plain_size()? {
+        TypeRef::Static {
+            expr: fortress_ast::StaticExpr::Int(n),
+            span,
+        } if *n >= 0 => Some(int(&n.to_string(), *span)),
+        _ => None,
+    }
+}
+
 fn args_of(kind: &Kind, wanted: &TypeRef) -> Option<Vec<TypeRef>> {
     match wanted {
         TypeRef::Named { name, args, .. } if name == kind.name && args.len() == kind.arity => {

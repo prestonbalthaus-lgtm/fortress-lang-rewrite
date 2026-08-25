@@ -545,6 +545,7 @@ setcomprehension|5\n0\n1\n2\n3\n4\n3\n1\n3\n3\n2\n6|a SET comprehension deduplic
 comprehensionmerged|3\n1|a MERGED `List` and `Set` lose to the minted collections instead of colliding
 setliteral|5\n0\n4\n2\n7\n3\n2\n0\ntrue\nfalse|a SET LITERAL dedups, keeps written order, takes its type from the slot or the brackets, and `IN` answers
 mapliteral|2\n9\n8\n1\n6\n3\n2\n6\n2|a MAP literal and a MAP comprehension, key replacement and all, on the SET's brackets
+arraycomprehension|17\n0\n32\n0\n9|an ARRAY comprehension, indexed, taking its extent from the slot it fills
 bindingcond|7\n1\n2\n3\n2\n1\n99|a binding condition yields zero or one value, and `while` re-evaluates it
 tupleresult|3\n4\n7\nhi\n10\n20\n30\n7\n16\n41\n42\nmade\n11\n3|a tuple RESULT is an LLVM aggregate, and the source is evaluated ONCE
 wrappedparams|7\nhi\n9\n42|an object's value-parameter list may begin on the NEXT line
@@ -644,6 +645,8 @@ badmapcomprehension.fss|whose body must be written `k |-> v`
 badsetliteral.fss|set literal's element type is not written anywhere
 badmapmixed.fss|is one entry of a map and is not a value on its own
 badmappingvalue.fss|a mapping body, which only the `{ }` brackets build
+badarraycompextent.fss|takes its EXTENT from the binding it fills
+badarraycompindex.fss|body must be written `index |-> value`
 badcompelement.fss|element type is not written anywhere
 badcomplisttaken.fss|mints its own `List`, and this component declares one of its own
 badtuplevalue.fss|is a tuple and tuples are FLATTENED here
