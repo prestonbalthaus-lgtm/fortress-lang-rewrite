@@ -1,0 +1,10 @@
+component badarraycompextent
+export Executable
+
+(* NO SLOT, SO NO EXTENT. A guard makes the count unknowable until the walk is
+   over, and an array cannot be resized, so there is nothing to infer from. *)
+run(): () = do
+  z = [ i |-> i | i <- 0#3 ]
+  println(1)
+end
+end

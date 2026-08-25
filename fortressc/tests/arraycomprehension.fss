@@ -1,0 +1,18 @@
+component arraycomprehension
+export Executable
+
+(* THE EXTENT COMES OFF THE SLOT and the body is INDEXED. An array is sized
+   once, at construction, so unlike a `List` there is nothing to grow and
+   nothing to infer a size from; and it has no `append`, so each element has to
+   say which slot it fills. *)
+run():() = do
+  a: ZZ64[17] = [ i |-> 2 i | i <- 0#17 ]
+  println(length(a))
+  println(a[0])
+  println(a[16])
+  (* the inclusive range spelling, and a body that is not the index *)
+  b: ZZ64[4] = [ i |-> i i | i <- 0:3 ]
+  println(b[0])
+  println(b[3])
+end
+end

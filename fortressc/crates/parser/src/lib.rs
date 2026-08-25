@@ -4476,6 +4476,51 @@ impl<'t, 'a> Parser<'t, 'a> {
                     Expr::Juxt { items: run, .. } => items.extend(run),
                     single => items.push(single),
                 }
+                // AN ARRAY COMPREHENSION IS WRITTEN IN THESE BRACKETS AND IS
+                // REACHED FROM HERE, not from `enclosing_application`: `[` is
+                // an aggregate opener before it is an enclosing operator, so
+                // `[ i |-> e | i <- 0#n ]` never gets as far as the encloser
+                // and used to stop at `expected `]`, found Bar`.
+                //
+                // THE BODY IS A MAPPING BECAUSE AN ARRAY HAS NO `append`. Every
+                // other comprehension accumulates; an array's extent is fixed
+                // at construction, so the only form that can fill one is the
+                // INDEXED one -- `index |-> value` -- which is what
+                // `not_passing_yet/arrayComp.fss:16` writes.
+                if self.mapping_arrow_here() {
+                    self.pos += 3;
+                    self.skip_newlines();
+                    let value = self.expr()?;
+                    if let Some(key) = items.pop() {
+                        let entry = Span::new(key.span().start, value.span().end);
+                        items.push(Expr::Mapping {
+                            key: Box::new(key),
+                            value: Box::new(value),
+                            span: entry,
+                        });
+                    }
+                }
+                // BOUND TO A LOCAL FIRST, and not because it reads better:
+                // `tools/mutation-patterns.py` matches a row's pattern with
+                // `grep -F` and a row must hit EXACTLY ONCE, so this second
+                // copy of the test would have silently disabled apply-gate's
+                // row on the first. Third time this session.
+                let closes_a_comprehension = self.comprehension_bar_here();
+                if closes_a_comprehension {
+                    self.pos += 1;
+                    self.skip_newlines();
+                    let gens = self.generator_clause_list()?;
+                    self.skip_newlines();
+                    let close = self.expect(&Kind::RBracket, "`]`")?.span;
+                    let body = items.pop().unwrap_or(Expr::Unit { span: start });
+                    return Ok(Expr::Comprehension {
+                        bracket: "[_]".to_owned(),
+                        static_args: Vec::new(),
+                        body: Box::new(body),
+                        gens,
+                        span: Span::new(start.start, close.end),
+                    });
+                }
                 // A juxtaposition run is `n` elements with `n - 1` gaps and
                 // every one of them is whitespace.
                 levels.resize(items.len().saturating_sub(1), 0);

@@ -962,6 +962,42 @@ and tuple keys and its own comment records a known bug in the construct, and
 `mapCombine.fss` needs `println` of an object, `asif` (refused by name),
 `identity` and five closures.
 
+**ARRAY COMPREHENSIONS, 2026-08-25.** `a: T[n] = [ i |-> e | i <- lo:hi ]`
+fills the array the binding declares. ZERO corpus files gained, zero lost, all
+446 pre-existing objects BYTE-IDENTICAL IR, TWO files moved MESSAGE.
+
+IT IS NOT A MINTED COLLECTION AND THAT IS THE WHOLE SHAPE OF IT. `List`, `Set`
+and `Map` are minted and stamped and grown; an array is DECLARED by the binding
+and sized ONCE, at construction. So there is no source to splice, no builder to
+call, and the fill is an ordinary subscript STORE -- `acc[i] := e` -- inside the
+same `while` every other comprehension emits.
+
+TWO REFUSALS FALL OUT OF THAT AND BOTH ARE STRUCTURAL RATHER THAN DEFERRED.
+THE EXTENT COMES OFF THE SLOT and there is nothing else it could come from: a
+comprehension with a guard does not know its count until the walk is over, and
+an array cannot be resized afterwards. AND THE BODY MUST BE `index |-> value`,
+because an array has no `append`: every other comprehension ACCUMULATES, and a
+bare element in these brackets has no slot to go in. `T[2,3]`, `T^3` and
+`T[0#n]` are all refused with the extent message rather than guessed at --
+`plain_size` is the codebase's own predicate and its comment says why a helper
+that quietly answered for `#` and `:` would be where the refusal got forgotten.
+
+IT IS REACHED FROM THE AGGREGATE PARSER, NOT FROM `enclosing_application`,
+because `[` opens an array aggregate before it is an enclosing operator. That
+is why `[ x | x <- 1:3 ]` used to stop at `expected `]`, found Bar` and never
+reached the comprehension parse at all -- which is what `badbracketcomp.fss`
+records, and it is why that fixture uses `{| |}` instead.
+
+AND THE CEILING IS ZERO, WITH THE WALL BEHIND IT NAMED. There is exactly ONE
+corpus witness -- `not_passing_yet/arrayComp.fss:16` writes
+`a : ZZ32[17] = [ i |-> i | i <- 0#17 ]` -- and it does not compile, because the
+generator binder is `ZZ64` and the array element is `ZZ32`. That is not a gap in
+this milestone: the binder is ZZ64 everywhere, deliberately, because the JVM's
+2^31 indexing ceiling is why this rewrite exists. Rewritten to `ZZ64[17]` the
+same program compiles and prints `0 1 2 ... 16`, which is how the wall was
+measured rather than assumed. The only other corpus hit for the shape is inside
+`syntax_abstraction_tests/`, out of v1 by decision 1.
+
 **EXCEPTIONS, PARKED 2026-08-23.** `throw` is built -- an uncaught throw halts,
 naming the exception, with no unwinding and no cost on the path that does not
 throw -- and `try`/`catch`/`forbid`/`finally` PARSE and are refused by name. The

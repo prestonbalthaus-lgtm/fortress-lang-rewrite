@@ -744,6 +744,18 @@ pub enum TypeError {
         span: Span,
         form: &'static str,
     },
+    /// `[ i |-> e | ... ]` with nothing to take an EXTENT from. An array's
+    /// extent is fixed at construction and a guard makes the count unknowable
+    /// until the walk is over, so the size has to be written on the slot.
+    ArrayComprehensionExtentUnwritten {
+        span: Span,
+    },
+    /// `[ e | ... ]` with a body that is not `index |-> value`. Every other
+    /// comprehension ACCUMULATES; an array cannot, so the only form that fills
+    /// one is the indexed one.
+    ArrayComprehensionNeedsAnIndex {
+        span: Span,
+    },
     /// `k |-> v` written where a VALUE is expected. A mapping is ONE ENTRY of a
     /// map and has no representation of its own: the map forms take its halves
     /// apart, and nothing else can.
@@ -1044,6 +1056,8 @@ impl TypeError {
             | Self::TupleLocalUnsplittable { span }
             | Self::ComprehensionElementUnwritten { span }
             | Self::ComprehensionGeneratorUnsupported { span, .. }
+            | Self::ArrayComprehensionExtentUnwritten { span }
+            | Self::ArrayComprehensionNeedsAnIndex { span }
             | Self::MappingOutsideAMap { span }
             | Self::SetLiteralElementUnwritten { span }
             | Self::ComprehensionNameTaken { span, .. }
@@ -1630,6 +1644,20 @@ impl core::fmt::Display for TypeError {
             Self::ComprehensionGeneratorUnsupported { form, .. } => write!(
                 f,
                 "{form} is not implemented in a comprehension"
+            ),
+            Self::ArrayComprehensionExtentUnwritten { .. } => write!(
+                f,
+                "an array comprehension takes its EXTENT from the binding it \
+                 fills, and this one has none. An array is sized once, at \
+                 construction, and a guard makes the count unknowable until \
+                 the walk is over -- so write `a: T[n] = [ i |-> e | ... ]`"
+            ),
+            Self::ArrayComprehensionNeedsAnIndex { .. } => write!(
+                f,
+                "an array comprehension's body must be written `index |-> \
+                 value`. Every other comprehension ACCUMULATES and an array \
+                 cannot: its extent is fixed, so each element has to say which \
+                 slot it fills"
             ),
             Self::MappingOutsideAMap { .. } => write!(
                 f,

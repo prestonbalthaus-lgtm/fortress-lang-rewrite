@@ -462,6 +462,20 @@ run(): () = if (a, b) <- Just1(1) then println(a) end'
         bad 'the minted Map inserts a key and a value'
     fi
 
+    printf '\n== part F: the ARRAY comprehension ==\n'
+
+    # NOT A MINTED COLLECTION. An array comprehension FILLS a binding that
+    # already declares its size, so it has no source to splice and no builder
+    # to call -- the fill is an ordinary subscript STORE.
+    fixture_runs 'an ARRAY comprehension, indexed, extent off the slot' \
+        arraycomprehension "$(printf '17\n0\n32\n0\n9')"
+
+    fixture_refused 'an array comprehension with no slot has no extent' \
+        badarraycompextent 'takes its EXTENT from the binding it fills'
+
+    fixture_refused 'an array comprehension needs an INDEXED body' \
+        badarraycompindex 'body must be written `index |-> value`'
+
     # The minted Set has to carry the protocol in 1.0's spelling for the same
     # reason the List does, or `for x <- aSet` works through a name this
     # compiler invented.
@@ -508,6 +522,8 @@ MUTATIONS=(
   'crates/types/src/Map.fss|if keys[i] = k then found := i end|if keys[i] = k then found := 0 end|make every key look up the FIRST entry, which is a silent wrong answer only a value assertion catches'
   'crates/parser/src/lib.rs|            Some(Kind::Gt)|            Some(Kind::Lt)|end the mapping arrow with the WRONG token, so every map literal and map comprehension stops being a map'
   'crates/types/src/comprehension.rs|let wanted = if mapping { 2 } else { 1 };|let wanted = 1;|read every `{ }` form as a SET, so a map literal builds one collection with the other shape'
+  'crates/types/src/comprehension.rs|        let Some(size) = wanted.and_then(one_dimensional_extent) else {|        let Some(size) = Some(zero(span)) else {|size every array comprehension at ZERO, so the first store is out of bounds'
+  'crates/types/src/comprehension.rs|            indices: vec![*key],|            indices: vec![zero(span)],|store every element of an array comprehension at index 0 -- same length, same exit code, wrong contents'
 )
 
 mutate_needs_the_built_compiler() {
