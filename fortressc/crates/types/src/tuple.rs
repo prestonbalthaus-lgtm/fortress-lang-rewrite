@@ -584,6 +584,10 @@ impl Pass {
     /// program would compile against `x$0` instead of being refused.
     fn children(&mut self, e: &mut Expr) -> Result<(), TypeError> {
         match e {
+            Expr::Mapping { key, value, .. } => {
+                self.expr(key)?;
+                self.expr(value)?;
+            }
             Expr::Unit { .. }
             | Expr::IntLit { .. }
             | Expr::FloatLit { .. }

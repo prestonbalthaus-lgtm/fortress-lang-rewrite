@@ -1,0 +1,79 @@
+(* THE COLLECTION A MAP LITERAL AND A MAP COMPREHENSION BUILD.
+
+   `Set.fss` with a second array and a second static parameter. Minted into the
+   component that needs it, stamped once per (K, V) pair by expansion, and
+   backed by two ordinary `Array`s -- so every byte still comes from
+   `fortress_array_alloc` and there is still exactly one allocation path.
+
+   TWO PARALLEL ARRAYS AND NOT AN ARRAY OF PAIRS, because a pair would be a
+   TUPLE VALUE and this backend has no representation for one: a tuple is
+   FLATTENED, never boxed. Two arrays are the flattening, written down.
+
+   A LATER `insert` AT A KEY THAT IS ALREADY PRESENT REPLACES ITS VALUE, which
+   is what makes this a map rather than a multimap. 1.0's `Library/Map.fsi`
+   says the same. The key order kept is INSERTION ORDER OF FIRST OCCURRENCE,
+   the same NAMED DEVIATION `Set.fss` carries and for the same reason: 1.0
+   bounds the key by `StandardTotalOrder` and keeps it sorted, and there is no
+   first-class ordering to demand of a written static argument here.
+
+   LOOKUP IS A LINEAR SCAN OVER `=` ON THE KEY, so `Map[\ZZ32,String\]` works
+   and a key type without `=` is refused at the stamp, naming the type. Reading
+   a key that is not present indexes at -1 and the array bounds check halts,
+   naming the subscript -- a refusal, not a wrong answer. *)
+component FortressMap
+
+object Map[\K,V\](capacity: ZZ64)
+  var count: ZZ64 := 0
+  var keys: Array[\K\] = array(capacity)
+  var vals: Array[\V\] = array(capacity)
+
+  size(): ZZ64 = count
+
+  (* -1 FOR ABSENT, and the callers test for it. A `Maybe[\ZZ64\]` would be the
+     nicer answer and needs a tuple-free option type this compiler does not
+     have yet. *)
+  indexOf(k: K): ZZ64 = do
+    found: ZZ64 := -1
+    i: ZZ64 := 0
+    while i < count do
+      if keys[i] = k then found := i end
+      i := i + 1
+    end
+    found
+  end
+
+  (* SUBSCRIPTED BY THE KEY, which is `Indexed[\V,K\]`'s own spelling
+     (`Library/FortressLibrary.fsi:1205`) with `K` for the index rather than an
+     integer. `for x <- aMap` is NOT this -- walking a map yields its entries,
+     which needs the tuple value -- so it stays refused. *)
+  opr [k: K]: V = vals[indexOf(k)]
+
+  contains(k: K): Boolean = indexOf(k) >= 0
+
+  insert(k: K, v: V): () = do
+    slot = indexOf(k)
+    if slot < 0 then
+      if count >= length(keys) then reserve() end
+      keys[count] := k
+      vals[count] := v
+      count := count + 1
+    else
+      vals[slot] := v
+    end
+  end
+
+  reserve(): () = do
+    bk: Array[\K\] = array(2 count + 8)
+    bv: Array[\V\] = array(2 count + 8)
+    i: ZZ64 := 0
+    while i < count do
+      bk[i] := keys[i]
+      bv[i] := vals[i]
+      i := i + 1
+    end
+    keys := bk
+    vals := bv
+  end
+end
+
+end

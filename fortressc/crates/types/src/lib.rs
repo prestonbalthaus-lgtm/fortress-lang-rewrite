@@ -3153,6 +3153,11 @@ impl Checker {
     /// checked against; it is never used to convert anything.
     fn expr(&mut self, e: &Expr, expected: Option<Type>) -> Checked<TypedExpr> {
         match e {
+            // REFUSED BY NAME AND NOT LOWERED. A mapping is one entry of a map;
+            // the map literal and the map comprehension take its halves apart
+            // in `comprehension.rs`, before this pass runs, so anything that
+            // reaches here was written where a VALUE belongs.
+            Expr::Mapping { span, .. } => Err(TypeError::MappingOutsideAMap { span: *span }),
             Expr::Unit { span } => {
                 self.require(Type::Void, expected, *span)?;
                 Ok(TypedExpr {
@@ -4091,6 +4096,9 @@ impl Checker {
     fn reads_shared(&self, e: &Expr, floor: usize) -> bool {
         match e {
             Expr::Var { name, .. } => self.shared_in_loop(name, floor),
+            Expr::Mapping { key, value, .. } => {
+                self.reads_shared(key, floor) || self.reads_shared(value, floor)
+            }
             Expr::Unit { .. }
             | Expr::IntLit { .. }
             | Expr::FloatLit { .. }

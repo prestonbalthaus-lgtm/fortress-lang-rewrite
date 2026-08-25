@@ -49,6 +49,7 @@ use crate::error::TypeError;
 /// spliced, and only into a component that used a comprehension of that shape.
 const LIST_SOURCE: &str = include_str!("List.fss");
 const SET_SOURCE: &str = include_str!("Set.fss");
+const MAP_SOURCE: &str = include_str!("Map.fss");
 
 /// One collection a comprehension can build. The bracket pair is how
 /// `enclosing_application` names the form; the builder is the method the
@@ -60,20 +61,38 @@ struct Kind {
     name: &'static str,
     source: &'static str,
     builder: &'static str,
+    /// How many static arguments the collection takes, and therefore how many
+    /// expressions one element contributes: a `List` and a `Set` hold ONE
+    /// value per element, a `Map` holds a key AND a value.
+    arity: usize,
 }
 
-const KINDS: [Kind; 2] = [
+const KINDS: [Kind; 3] = [
     Kind {
         bracket: "<|_|>",
         name: "List",
         source: LIST_SOURCE,
         builder: "append",
+        arity: 1,
     },
     Kind {
         bracket: "{_}",
         name: "Set",
         source: SET_SOURCE,
         builder: "insert",
+        arity: 1,
+    },
+    // THE SAME BRACKET AS THE SET, AND THE ELEMENT DECIDES WHICH. `{a, b}` is
+    // a set and `{k |-> v}` is a map; 1.0 spells them with one encloser too
+    // (`Library/Set.fsi:55` and `Library/Map.fsi`) and tells them apart the
+    // same way. That is why `kind_for` takes the shape of the element and not
+    // just the brackets.
+    Kind {
+        bracket: "{_}",
+        name: "Map",
+        source: MAP_SOURCE,
+        builder: "insert",
+        arity: 2,
     },
 ];
 
@@ -85,8 +104,20 @@ const SET: &str = "Set";
 /// and that is what this pass looks for.
 const SET_LITERAL: &str = "{_}";
 
-fn kind_for(bracket: &str) -> Option<&'static Kind> {
-    KINDS.iter().find(|k| k.bracket == bracket)
+/// Which collection a bracket pair builds. `mapping` is whether the element --
+/// a literal's argument, or a comprehension's body -- is written `k |-> v`.
+fn kind_for(bracket: &str, mapping: bool) -> Option<&'static Kind> {
+    let wanted = if mapping { 2 } else { 1 };
+    KINDS
+        .iter()
+        .find(|k| k.bracket == bracket && k.arity == wanted)
+}
+
+/// A map form written with a bracket that has no map collection behind it --
+/// `<| k |-> v |>`. Told apart from an ordinary unsupported bracket so the
+/// diagnostic can say which half is the problem.
+fn is_mapping(e: &Expr) -> bool {
+    matches!(e, Expr::Mapping { .. })
 }
 
 pub fn lower(component: &Component) -> Result<Component, TypeError> {
@@ -261,6 +292,14 @@ impl Pass {
             | Expr::Var { .. }
             | Expr::Exit { value: None, .. } => {}
             Expr::Comprehension { .. } => self.comprehension(e, None)?,
+            // A MAPPING REACHES HERE ONLY OUTSIDE A MAP FORM. Inside one, the
+            // literal and the comprehension take its halves apart themselves
+            // and this arm never sees it; anywhere else it is refused by the
+            // checker, because `k |-> v` is one entry of a map and not a value.
+            Expr::Mapping { key, value, .. } => {
+                self.expr(key, None)?;
+                self.expr(value, None)?;
+            }
             Expr::Tuple { items, .. } | Expr::Juxt { items, .. } => {
                 for item in items {
                     self.expr(item, None)?;
@@ -434,21 +473,27 @@ impl Pass {
         };
         let span = *span;
         let (written, is_literal) = match &**callee {
-            Expr::Var { name, .. } => (None, name == SET_LITERAL),
+            Expr::Var { name, .. } => (Vec::new(), name == SET_LITERAL),
             Expr::Instantiate {
                 callee: inner,
                 args: statics,
                 ..
             } => match &**inner {
-                Expr::Var { name, .. } if name == SET_LITERAL => (statics.first().cloned(), true),
-                _ => (None, false),
+                Expr::Var { name, .. } if name == SET_LITERAL => (statics.clone(), true),
+                _ => (Vec::new(), false),
             },
-            _ => (None, false),
+            _ => (Vec::new(), false),
         };
         if !is_literal {
             return Ok(false);
         }
-        let Some(kind) = kind_for("{_}") else {
+        let mapping = args.iter().any(is_mapping);
+        // A LITERAL MAY NOT MIX THE TWO. `{1, k |-> v}` is neither a set nor a
+        // map, and reading it as either drops half of what was written.
+        if mapping && !args.iter().all(is_mapping) {
+            return Err(TypeError::MappingOutsideAMap { span });
+        }
+        let Some(kind) = kind_for(SET_LITERAL, mapping) else {
             return Ok(false);
         };
         // NAMED `from_slot` AND NOT `slot`, AND THE DEMAND MARKING IS A HELPER,
@@ -457,11 +502,14 @@ impl Pass {
         // obvious way, these two lines are byte-identical to the ones in
         // `comprehension` above and apply-gate's rows silently stopped being
         // unique -- reported as "could not be applied", never as a failure.
-        let element = match (written, wanted.and_then(|w| element_of(kind, w))) {
-            (Some(w), _) => w,
-            (None, Some(from_slot)) => from_slot,
-            (None, None) => return Err(TypeError::SetLiteralElementUnwritten { span }),
+        let statics = match (written.is_empty(), wanted.and_then(|w| args_of(kind, w))) {
+            (false, _) => written,
+            (true, Some(from_slot)) => from_slot,
+            (true, None) => return Err(TypeError::SetLiteralElementUnwritten { span }),
         };
+        if statics.len() != kind.arity {
+            return Err(TypeError::SetLiteralElementUnwritten { span });
+        }
         let mut elements = std::mem::take(args);
         for element_expr in &mut elements {
             self.expr(element_expr, None)?;
@@ -476,7 +524,7 @@ impl Pass {
             value: call(
                 Expr::Instantiate {
                     callee: Box::new(var(kind.name, span)),
-                    args: vec![element],
+                    args: statics,
                     span,
                 },
                 vec![zero(span)],
@@ -486,9 +534,16 @@ impl Pass {
             span,
         })];
         for element_expr in elements {
+            // ONE ELEMENT, ONE `insert`, AND A MAPPING CONTRIBUTES TWO
+            // ARGUMENTS. The mapping is taken apart HERE and never lowered as
+            // a value, which is what `MappingOutsideAMap` says.
+            let built = match element_expr {
+                Expr::Mapping { key, value, .. } => vec![*key, *value],
+                other => vec![other],
+            };
             items.push(BlockItem::Expr(call(
                 field(var(&acc, span), kind.builder, span),
-                vec![element_expr],
+                built,
                 span,
             )));
         }
@@ -505,7 +560,7 @@ impl Pass {
     /// exactly one place to match.
     fn demand(&mut self, kind: &Kind) {
         for (k, flag) in KINDS.iter().zip(self.demanded.iter_mut()) {
-            if k.bracket == kind.bracket {
+            if k.name == kind.name {
                 *flag = true;
             }
         }
@@ -523,33 +578,46 @@ impl Pass {
             return Ok(());
         };
         let span = *span;
-        let Some(kind) = kind_for(bracket) else {
+        let mapping = is_mapping(body);
+        let Some(kind) = kind_for(bracket, mapping) else {
+            // WHICH HALF IS UNSUPPORTED IS A DIFFERENT SENTENCE. `<| k |-> v |
+            // ... |>` has a bracket that IS implemented and a BODY that has no
+            // collection behind it -- there is no list of mappings -- and
+            // saying "this bracket's lowering is not implemented" of a bracket
+            // that plainly works sends the reader to the wrong place.
+            if mapping && kind_for(bracket, false).is_some() {
+                return Err(TypeError::ComprehensionGeneratorUnsupported {
+                    span,
+                    form: "a mapping body, which only the `{ }` brackets build,",
+                });
+            }
             return Err(TypeError::ComprehensionUnsupported {
                 span,
                 bracket: bracket.clone(),
             });
         };
-        // A MAP COMPREHENSION IS WRITTEN WITH THE SET'S BRACKETS AND IS NOT
-        // THIS. `{ k |-> v | ... }` builds a `Map[\K,V\]` and carries TWO
-        // static arguments; `not_working_static_tests/SetComprehension.fss`
-        // writes `{[\ZZ32,ZZ32\] a | a<-3:10 }`, which is that shape with an
-        // element that is not a mapping. Refused BY NAME on the ARITY of the
-        // written static arguments rather than let through to build a set of
-        // the wrong thing.
+        // TWO STATIC ARGUMENTS OVER A BODY THAT IS NOT A MAPPING IS NOT A MAP.
+        // `not_working_static_tests/SetComprehension.fss` writes
+        // `{[\ZZ32,ZZ32\] a | a<-3:10 }` -- a map's static arguments over a
+        // set's body -- and it is refused BY NAME rather than let through to
+        // build one collection with the other's shape.
         if kind.name == SET && static_args.len() > 1 {
             return Err(TypeError::ComprehensionGeneratorUnsupported {
                 span,
-                form: "a map comprehension, written `{ k |-> v | ... }`",
+                form: "a map comprehension, whose body must be written `k |-> v`,",
             });
         }
-        let element = match (
-            static_args.first(),
-            wanted.and_then(|w| element_of(kind, w)),
+        let statics = match (
+            static_args.is_empty(),
+            wanted.and_then(|w| args_of(kind, w)),
         ) {
-            (Some(written), _) => written.clone(),
-            (None, Some(slot)) => slot,
-            (None, None) => return Err(TypeError::ComprehensionElementUnwritten { span }),
+            (false, _) => static_args.clone(),
+            (true, Some(slot)) => slot,
+            (true, None) => return Err(TypeError::ComprehensionElementUnwritten { span }),
         };
+        if statics.len() != kind.arity {
+            return Err(TypeError::ComprehensionElementUnwritten { span });
+        }
         let mut body = (**body).clone();
         self.expr(&mut body, None)?;
         let mut gens = std::mem::take(gens);
@@ -566,7 +634,14 @@ impl Pass {
         let acc = format!("acc${index}");
 
         // Innermost first: each clause wraps what the ones to its right built.
-        let mut inner = call(field(var(&acc, span), kind.builder, span), vec![body], span);
+        // A MAPPING BODY CONTRIBUTES TWO ARGUMENTS and is taken apart here,
+        // exactly as the literal takes its elements apart. It is never lowered
+        // as a value, which is what `MappingOutsideAMap` says.
+        let built = match body {
+            Expr::Mapping { key, value, .. } => vec![*key, *value],
+            other => vec![other],
+        };
+        let mut inner = call(field(var(&acc, span), kind.builder, span), built, span);
         for (depth, clause) in gens.iter().enumerate().rev() {
             inner = self.clause(clause, inner, index, depth, &acc, span)?;
         }
@@ -579,7 +654,7 @@ impl Pass {
                     value: call(
                         Expr::Instantiate {
                             callee: Box::new(var(kind.name, span)),
-                            args: vec![element],
+                            args: statics,
                             span,
                         },
                         vec![zero(span)],
@@ -690,10 +765,10 @@ impl Pass {
 /// slot does not give a SET comprehension its element type, and the other way
 /// round -- the two are different collections and reading one as the other
 /// would silently build the wrong one.
-fn element_of(kind: &Kind, wanted: &TypeRef) -> Option<TypeRef> {
+fn args_of(kind: &Kind, wanted: &TypeRef) -> Option<Vec<TypeRef>> {
     match wanted {
-        TypeRef::Named { name, args, .. } if name == kind.name && args.len() == 1 => {
-            args.first().cloned()
+        TypeRef::Named { name, args, .. } if name == kind.name && args.len() == kind.arity => {
+            Some(args.clone())
         }
         _ => None,
     }

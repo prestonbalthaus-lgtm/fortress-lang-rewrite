@@ -1,9 +1,11 @@
 component badmapcomprehension
 export Executable
 
-(* `{[\K,V\] ... }` is a MAP comprehension, told from a set by the ARITY of the
-   written static arguments. `not_working_static_tests/SetComprehension.fss`
-   writes exactly this. *)
+(* A MAP'S STATIC ARGUMENTS OVER A SET'S BODY. Which collection `{ }` builds is
+   decided by the ELEMENT -- `{a, b}` is a set and `{k |-> v}` is a map -- so
+   two static arguments with a body that is not a mapping is neither, and is
+   refused rather than let through to build one with the other's shape.
+   `not_working_static_tests/SetComprehension.fss` writes exactly this. *)
 run(): () = do
   m = {[\ZZ32,ZZ32\] a | a <- 3:10}
   println(1)

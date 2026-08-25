@@ -1,0 +1,10 @@
+component badmapmixed
+export Executable
+
+(* NEITHER A SET NOR A MAP. Reading it as either drops half of what is written,
+   so it is refused rather than resolved to whichever came first. *)
+run(): () = do
+  m = {[\ZZ32,ZZ32\] 1, 2 |-> 8}
+  println(1)
+end
+end
