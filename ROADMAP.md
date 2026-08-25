@@ -847,6 +847,63 @@ in the wrong order. FOUR NEW MUTATION ROWS, and the one that matters makes the
 membership test answer `false` for everything -- the set silently becomes a
 list, and nothing but that size assertion can tell.
 
+**THE SET LITERAL, AND `opr IN`, 2026-08-25.** `{a, b, c}` lowers onto the same
+minted `Set[\T\]` the comprehension builds. ZERO corpus files gained, zero lost,
+all 446 pre-existing objects BYTE-IDENTICAL IR. TWO files moved MESSAGE, both
+onto something more specific.
+
+IT IS NOT A LITERAL NODE. `enclosed` (`parser/src/lib.rs:4314`) builds an
+enclosing operator's name as `open + "_" + close`, so `{0, 1, 2}` is an ordinary
+`Expr::Call` to a function named `{_}` with the elements as its arguments. The
+lowering is therefore a rewrite in the same pass the comprehension lives in, and
+it emits the obvious block: construct, `insert` each element in written order,
+yield the accumulator.
+
+**THE BRIEF ORDERED THE OTHER ROUTE AND THE OTHER ROUTE IS DEAD.** The plan was
+to stop the resolver skipping `Decl::Function` from an api, so that
+`Library/Set.fsi:55`'s `opr {[\E\] es: E... }: Set[\E\]` would merge. THREE
+INDEPENDENT MEASUREMENTS SAY NO, and the first is decisive on its own:
+
+  * **VARARGS ARE NOT IMPLEMENTED.** `f(es: ZZ32...)` parses as ONE parameter
+    and `f(1,2,3)` reports `f takes 1 argument(s), found 3`. The api's
+    declaration is varargs, so merging it would surface a declaration no call
+    site could ever reach. The set literal would be no closer.
+  * **THE DECLARATION IS BODILESS**, because an api has no bodies. A bodiless
+    signature types a call and names a return and is never a dispatch target,
+    so there is nothing to call even once the name resolves.
+  * **THE SPEC PUTS IT THE OTHER WAY UP.** `source-code.tex:313-320` makes an
+    api's function declarations OBLIGATIONS THE IMPORTING COMPONENT MUST
+    SATISFY, not names it receives. Link 5's own rule 3 is the same rule one
+    level down -- a merged functional method is not lifted into a component --
+    and it was measured at 24 files when it was tried the other way.
+
+So the resolver is untouched, and the literal is built the way the collection it
+builds already was: minted, stamped by expansion, no new allocation path.
+
+THE ELEMENT TYPE IS WRITTEN OR IT COMES OFF THE SLOT, AND HERE THAT IS
+STRUCTURAL RATHER THAN STYLISTIC. `Set[\T\]` is STAMPED by monomorphization,
+which runs before the checker exists; an element type discoverable only by
+TYPING the elements cannot be stamped at all, because there are no types yet and
+the pass that would make them runs after expansion has frozen the concrete set.
+`SeqIterate` is not a precedent for deferring it -- that walks a collection that
+already exists and mints nothing. `SetLiteralElementUnwritten` says exactly that,
+and it is why the ceiling below is zero rather than one.
+
+AND THE CEILING WAS MEASURED FIRST AND IT IS ZERO. Exactly ONE corpus file
+first-blocks on `unknown name {_}`: `SpecData/examples/basic/Expr.Set.fss`,
+which writes `3 IN {0, 1, 2, 3, 4, 5}` -- no slot to take an element type from,
+so it moves onto the new refusal rather than compiling. `Documentation/
+Specification/Code/If4.fss` moves too, from `unknown name z` -- true and useless
+-- onto the same named wall, which is the second file and the reason this is
+worth having anyway. THE TWO `SpecData` COMPREHENSION FILES DO NOT MOVE: they
+write `t:Set[\ZZ32\] = {0, 1, 2, 3, 4}` on one line, which now works, and
+`s = { x DIV 2 | x <- t}` on the next, which has no written element type either.
+
+`opr IN` IS FREE AND IT IS 1.0's OWN SPELLING. `opr IN(x: T, self): Boolean` on
+the minted set -- a FUNCTIONAL METHOD with `self` in the SECOND position,
+because the element is on the left -- so `3 IN t` is the ordinary dispatch this
+compiler already does. Two corpus files write it.
+
 **EXCEPTIONS, PARKED 2026-08-23.** `throw` is built -- an uncaught throw halts,
 naming the exception, with no unwinding and no cost on the path that does not
 throw -- and `try`/`catch`/`forbid`/`finally` PARSE and are refused by name. The

@@ -744,6 +744,14 @@ pub enum TypeError {
         span: Span,
         form: &'static str,
     },
+    /// `{a, b, c}` with no written element type and no slot to take one from.
+    /// NOT A MISSING INFERENCE PASS: this compiler stamps `Set[\T\]` during
+    /// monomorphization, which runs BEFORE the checker exists, so an element
+    /// type that could only be discovered by typing the elements cannot be
+    /// stamped at all.
+    SetLiteralElementUnwritten {
+        span: Span,
+    },
     /// The component declares a collection of its OWN under the name the
     /// minted one needs. An IMPORTED one is not this error -- a merged
     /// declaration loses to the minted collection the way it loses to a
@@ -1030,6 +1038,7 @@ impl TypeError {
             | Self::TupleLocalUnsplittable { span }
             | Self::ComprehensionElementUnwritten { span }
             | Self::ComprehensionGeneratorUnsupported { span, .. }
+            | Self::SetLiteralElementUnwritten { span }
             | Self::ComprehensionNameTaken { span, .. }
             | Self::FunctionValueUnresolved { span, .. }
             | Self::AlsoBlockNotVoid { span, .. }
@@ -1614,6 +1623,13 @@ impl core::fmt::Display for TypeError {
             Self::ComprehensionGeneratorUnsupported { form, .. } => write!(
                 f,
                 "{form} is not implemented in a comprehension"
+            ),
+            Self::SetLiteralElementUnwritten { .. } => write!(
+                f,
+                "this set literal's element type is not written anywhere. It is \
+                 never inferred -- the collection is STAMPED before the type \
+                 checker exists -- so write `{{[\\T\\] a, b, c }}`, or give the \
+                 binding it initialises the type `Set[\\T\\]`"
             ),
             Self::ComprehensionNameTaken { name, .. } => write!(
                 f,

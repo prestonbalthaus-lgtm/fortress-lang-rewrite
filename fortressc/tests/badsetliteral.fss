@@ -1,0 +1,13 @@
+component badsetliteral
+export Executable
+
+(* NOT A MISSING INFERENCE PASS. `Set[\T\]` is STAMPED by monomorphization,
+   which runs before the checker exists, so an element type discoverable only
+   by typing the elements cannot be stamped at all. `SeqIterate` is not a
+   precedent for deferring it -- that walks a collection that already exists
+   and mints nothing. *)
+run(): () = do
+  n = {1, 2, 3}
+  println(1)
+end
+end

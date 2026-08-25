@@ -79,6 +79,12 @@ const KINDS: [Kind; 2] = [
 
 const SET: &str = "Set";
 
+/// The enclosing-operator NAME a set literal parses to. `enclosed` builds
+/// `open + "_" + close`, so `{a, b, c}` is a CALL to a function called `{_}`
+/// with the elements as its arguments -- there is no literal node to match on,
+/// and that is what this pass looks for.
+const SET_LITERAL: &str = "{_}";
+
 fn kind_for(bracket: &str) -> Option<&'static Kind> {
     KINDS.iter().find(|k| k.bracket == bracket)
 }
@@ -227,6 +233,15 @@ impl Pass {
     fn expr(&mut self, e: &mut Expr, wanted: Option<&TypeRef>) -> Result<(), TypeError> {
         if matches!(e, Expr::Comprehension { .. }) {
             return self.comprehension(e, wanted);
+        }
+        // A SET LITERAL IS A `Call`, NOT A LITERAL NODE, so it has to be tried
+        // before the ordinary Call walk -- `set_literal` reports whether it
+        // took the node, and having taken it, it has already walked the
+        // elements. Falling through would walk the REWRITTEN block a second
+        // time, which is harmless today and is exactly the kind of double walk
+        // that stops being harmless the moment a pass counts something.
+        if self.set_literal(e, wanted)? {
+            return Ok(());
         }
         self.children(e)
     }
@@ -392,6 +407,110 @@ impl Pass {
         Ok(())
     }
 
+    /// `{a, b, c}`, lowered onto the same minted `Set[\T\]` the comprehension
+    /// builds:
+    ///
+    /// ```text
+    ///   do
+    ///     acc$0 = Set[\T\](0)
+    ///     acc$0.insert(a)
+    ///     acc$0.insert(b)
+    ///     acc$0.insert(c)
+    ///     acc$0
+    ///   end
+    /// ```
+    ///
+    /// THE ELEMENT TYPE IS WRITTEN OR IT COMES OFF THE SLOT, and there is no
+    /// third option HERE FOR A STRUCTURAL REASON rather than a stylistic one.
+    /// This pass runs before `mono::expand`, which is what STAMPS
+    /// `Set[\ZZ32\]`; a literal whose element type is only discoverable by
+    /// TYPING its elements cannot be stamped, because there are no types yet
+    /// and the checker that would make them runs after expansion has frozen
+    /// the concrete set. `SeqIterate` is not a precedent for doing it later --
+    /// that walks a collection that already exists, and mints nothing.
+    fn set_literal(&mut self, e: &mut Expr, wanted: Option<&TypeRef>) -> Result<bool, TypeError> {
+        let Expr::Call { callee, args, span } = e else {
+            return Ok(false);
+        };
+        let span = *span;
+        let (written, is_literal) = match &**callee {
+            Expr::Var { name, .. } => (None, name == SET_LITERAL),
+            Expr::Instantiate {
+                callee: inner,
+                args: statics,
+                ..
+            } => match &**inner {
+                Expr::Var { name, .. } if name == SET_LITERAL => (statics.first().cloned(), true),
+                _ => (None, false),
+            },
+            _ => (None, false),
+        };
+        if !is_literal {
+            return Ok(false);
+        }
+        let Some(kind) = kind_for("{_}") else {
+            return Ok(false);
+        };
+        // NAMED `from_slot` AND NOT `slot`, AND THE DEMAND MARKING IS A HELPER,
+        // for the same reason: `tools/mutation-patterns.py` matches a row's
+        // pattern with `grep -F` and a row must hit EXACTLY ONCE. Written the
+        // obvious way, these two lines are byte-identical to the ones in
+        // `comprehension` above and apply-gate's rows silently stopped being
+        // unique -- reported as "could not be applied", never as a failure.
+        let element = match (written, wanted.and_then(|w| element_of(kind, w))) {
+            (Some(w), _) => w,
+            (None, Some(from_slot)) => from_slot,
+            (None, None) => return Err(TypeError::SetLiteralElementUnwritten { span }),
+        };
+        let mut elements = std::mem::take(args);
+        for element_expr in &mut elements {
+            self.expr(element_expr, None)?;
+        }
+        let index = self.counter;
+        self.counter = self.counter.saturating_add(1);
+        self.demand(kind);
+        let acc = format!("acc${index}");
+        let mut items = vec![BlockItem::Binding(Binding {
+            name: acc.clone(),
+            ty: None,
+            value: call(
+                Expr::Instantiate {
+                    callee: Box::new(var(kind.name, span)),
+                    args: vec![element],
+                    span,
+                },
+                vec![zero(span)],
+                span,
+            ),
+            mutable: false,
+            span,
+        })];
+        for element_expr in elements {
+            items.push(BlockItem::Expr(call(
+                field(var(&acc, span), kind.builder, span),
+                vec![element_expr],
+                span,
+            )));
+        }
+        items.push(BlockItem::Expr(var(&acc, span)));
+        *e = Expr::Block { items, span };
+        Ok(true)
+    }
+
+    /// Record that this component needs one collection minted. ZIPPED RATHER
+    /// THAN INDEXED, because `clippy::indexing_slicing` is denied here and a
+    /// compiler pass is the last place that wants a panicking index; the two
+    /// arrays are the same length by construction. ONE function rather than
+    /// two copies of the loop, so the mutation row that clears the flag has
+    /// exactly one place to match.
+    fn demand(&mut self, kind: &Kind) {
+        for (k, flag) in KINDS.iter().zip(self.demanded.iter_mut()) {
+            if k.bracket == kind.bracket {
+                *flag = true;
+            }
+        }
+    }
+
     fn comprehension(&mut self, e: &mut Expr, wanted: Option<&TypeRef>) -> Result<(), TypeError> {
         let Expr::Comprehension {
             bracket,
@@ -443,14 +562,7 @@ impl Pass {
 
         let index = self.counter;
         self.counter = self.counter.saturating_add(1);
-        // ZIPPED RATHER THAN INDEXED, because `clippy::indexing_slicing` is
-        // denied here and a compiler pass is the last place that wants a
-        // panicking index. The two arrays are the same length by construction.
-        for (k, flag) in KINDS.iter().zip(self.demanded.iter_mut()) {
-            if k.bracket == kind.bracket {
-                *flag = true;
-            }
-        }
+        self.demand(kind);
         let acc = format!("acc${index}");
 
         // Innermost first: each clause wraps what the ones to its right built.
