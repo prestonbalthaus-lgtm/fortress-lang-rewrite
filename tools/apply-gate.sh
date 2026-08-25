@@ -543,6 +543,7 @@ tupleflat|7\n30\nHello World!\n7\n7\n0.25|a tuple parameter, a tuple value and a
 compgenerator|10\n20\n30\n11\n21\n31\n100\n101\n102\n2\n20|a comprehension walks a COLLECTION -- an array, a List and a user object
 setcomprehension|5\n0\n1\n2\n3\n4\n3\n1\n3\n3\n2\n6|a SET comprehension deduplicates, keeps first-occurrence order, and walks a collection
 comprehensionmerged|3\n1|a MERGED `List` and `Set` lose to the minted collections instead of colliding
+setliteral|5\n0\n4\n2\n7\n3\n2\n0\ntrue\nfalse|a SET LITERAL dedups, keeps written order, takes its type from the slot or the brackets, and `IN` answers
 bindingcond|7\n1\n2\n3\n2\n1\n99|a binding condition yields zero or one value, and `while` re-evaluates it
 tupleresult|3\n4\n7\nhi\n10\n20\n30\n7\n16\n41\n42\nmade\n11\n3|a tuple RESULT is an LLVM aggregate, and the source is evaluated ONCE
 wrappedparams|7\nhi\n9\n42|an object's value-parameter list may begin on the NEXT line
@@ -639,6 +640,7 @@ badsetcomp.fss|element type is not written anywhere
 badbracketcomp.fss|comprehension parses and its lowering is not implemented
 badcompsettaken.fss|mints its own `Set`, and this component declares one of its own
 badmapcomprehension.fss|a map comprehension, written
+badsetliteral.fss|set literal's element type is not written anywhere
 badcompelement.fss|element type is not written anywhere
 badcomplisttaken.fss|mints its own `List`, and this component declares one of its own
 badtuplevalue.fss|is a tuple and tuples are FLATTENED here

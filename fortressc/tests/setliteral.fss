@@ -1,0 +1,27 @@
+component setliteral
+export Executable
+
+(* THE ORDER AND THE DEDUP ARE BOTH ASSERTED BY VALUE. `{7, 7, 7, 3, 7}` has
+   five elements written and two distinct, in that order: a literal that built
+   a list would print 5, and one that built its elements backwards would print
+   3 before 7. An exit code sees neither. *)
+run(): () = do
+  t: Set[\ZZ32\] = {0, 1, 2, 3, 4}
+  println(t.size())
+  println(t[0])
+  println(t[4])
+  d: Set[\ZZ64\] = {7, 7, 7, 3, 7}
+  println(d.size())
+  println(d[0])
+  println(d[1])
+  (* the element type WRITTEN on the literal rather than on the slot *)
+  w = {[\ZZ64\] 5, 6}
+  println(w.size())
+  (* an EMPTY literal is one enclosing run and still needs its type *)
+  e: Set[\ZZ32\] = {}
+  println(e.size())
+  (* `x IN s`, the spelling the corpus writes *)
+  println(3 IN t)
+  println(9 IN t)
+end
+end

@@ -55,6 +55,12 @@ object Set[\T\](capacity: ZZ64)
     found
   end
 
+  (* `x IN s`, WHICH IS THE SPELLING A PROGRAM WRITES. 1.0 declares it on
+     `Set[\E\]` (`Library/Set.fsi`) and `SpecData/examples/basic/Expr.Set.fss`
+     is the corpus witness -- `3 IN {0, 1, 2, 3, 4, 5}`. A FUNCTIONAL METHOD
+     with `self` in the SECOND position, because the element is on the left. *)
+  opr IN(x: T, self): Boolean = contains(x)
+
   insert(x: T): () = do
     if NOT contains(x) then
       if count >= length(store) then reserve() end

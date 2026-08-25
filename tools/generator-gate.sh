@@ -426,6 +426,15 @@ run(): () = if (a, b) <- Just1(1) then println(a) end'
     fixture_refused 'a MAP comprehension is refused by name' \
         badmapcomprehension 'a map comprehension, written'
 
+    # A SET LITERAL IS A `Call` TO `{_}`, NOT A LITERAL NODE, and it lowers onto
+    # the SAME minted collection. Order and dedup are both asserted by value:
+    # `{7, 7, 7, 3, 7}` is five written and two distinct, in that order.
+    fixture_runs 'a set LITERAL dedups, keeps written order, and answers `IN`' \
+        setliteral "$(printf '5\n0\n4\n2\n7\n3\n2\n0\ntrue\nfalse')"
+
+    fixture_refused 'an untyped set literal is refused by name' \
+        badsetliteral "element type is not written anywhere"
+
     # The minted Set has to carry the protocol in 1.0's spelling for the same
     # reason the List does, or `for x <- aSet` works through a name this
     # compiler invented.
@@ -465,6 +474,9 @@ MUTATIONS=(
   'crates/types/src/Set.fss|if store[i] = x then found := true end|if false then found := true end|MAKE THE MEMBERSHIP TEST LIE -- every element reads as new, the set stops deduplicating and becomes a list, and NOTHING but the size assertion in setcomprehension.fss can tell'
   'crates/types/src/comprehension.rs|builder: "insert",|builder: "append",|build a set with the LIST builder, so duplicates survive and the brackets stop meaning what they say'
   'crates/types/src/comprehension.rs|named(decl) == Some(name) && !merged(decl)|named(decl) == Some(name)|refuse a MERGED collection name again, taking the three corpus files back down'
+  'crates/types/src/comprehension.rs|for element_expr in elements {|for element_expr in elements.into_iter().rev() {|build a set literal BACKWARDS -- same size, same elements, wrong order, and only a value assertion sees it'
+  'crates/types/src/comprehension.rs|(None, Some(from_slot)) => from_slot,|(None, Some(_from_slot)) => return Err(TypeError::SetLiteralElementUnwritten { span }),|stop taking a set literal element type from the slot it initialises'
+  'crates/types/src/Set.fss|opr IN(x: T, self): Boolean = contains(x)|opr IN(x: T, self): Boolean = NOT contains(x)|make `IN` answer the opposite, which every exit code accepts'
 )
 
 mutate_needs_the_built_compiler() {
