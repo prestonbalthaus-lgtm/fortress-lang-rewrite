@@ -493,9 +493,10 @@ pub enum TypeError {
         span: Span,
         name: String,
     },
-    /// A comprehension whose bracket is not `<| |>`. THE LIST FORM IS BUILT --
-    /// it lowers onto a minted `List[\T\]` -- and a set, map or array
-    /// comprehension needs the collection its own brackets name.
+    /// A comprehension whose bracket is neither `<| |>` nor `{ }`. THE LIST
+    /// AND SET FORMS ARE BUILT -- each lowers onto a minted collection of its
+    /// own -- and an array comprehension needs the collection its own brackets
+    /// name.
     ComprehensionUnsupported {
         span: Span,
         bracket: String,
@@ -743,10 +744,14 @@ pub enum TypeError {
         span: Span,
         form: &'static str,
     },
-    /// The component already declares or imports a `List`, so the minted one
-    /// would be a duplicate.
-    ComprehensionListTaken {
+    /// The component declares a collection of its OWN under the name the
+    /// minted one needs. An IMPORTED one is not this error -- a merged
+    /// declaration loses to the minted collection the way it loses to a
+    /// builtin, because an api declares and never defines and so the merged
+    /// one was never constructible.
+    ComprehensionNameTaken {
         span: Span,
+        name: &'static str,
     },
     /// A `fn` or an anonymous `object` closing over a MUTABLE local. The hoist
     /// makes a capture a constructor argument, which copies it, so a later
@@ -1025,7 +1030,7 @@ impl TypeError {
             | Self::TupleLocalUnsplittable { span }
             | Self::ComprehensionElementUnwritten { span }
             | Self::ComprehensionGeneratorUnsupported { span, .. }
-            | Self::ComprehensionListTaken { span }
+            | Self::ComprehensionNameTaken { span, .. }
             | Self::FunctionValueUnresolved { span, .. }
             | Self::AlsoBlockNotVoid { span, .. }
             | Self::CaseHasNoArms { span }
@@ -1440,7 +1445,8 @@ impl core::fmt::Display for TypeError {
             Self::ComprehensionUnsupported { bracket, .. } => write!(
                 f,
                 "a `{bracket}` comprehension parses and its lowering is not \
-                 implemented; only the list form `<| e | x <- lo:hi |>` is"
+                 implemented; the list form `<| e | x <- lo:hi |>` and the set \
+                 form `{{ e | x <- lo:hi }}` are"
             ),
             Self::TryUnsupported { .. } => write!(
                 f,
@@ -1602,17 +1608,17 @@ impl core::fmt::Display for TypeError {
                 f,
                 "this comprehension's element type is not written anywhere. A \
                  static argument is never inferred here -- write \
-                 `<|[\\T\\] e | ... |>`, or give the binding it initialises \
-                 the type `List[\\T\\]`"
+                 `<|[\\T\\] e | ... |>` or `{{[\\T\\] e | ... }}`, or give the \
+                 binding it initialises the type `List[\\T\\]` or `Set[\\T\\]`"
             ),
             Self::ComprehensionGeneratorUnsupported { form, .. } => write!(
                 f,
                 "{form} is not implemented in a comprehension"
             ),
-            Self::ComprehensionListTaken { .. } => write!(
+            Self::ComprehensionNameTaken { name, .. } => write!(
                 f,
-                "a list comprehension mints its own `List`, and this component \
-                 already has one"
+                "a comprehension mints its own `{name}`, and this component \
+                 declares one of its own under that name"
             ),
             Self::CaptureIsMutable { name, .. } => write!(
                 f,

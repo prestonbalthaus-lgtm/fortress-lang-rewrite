@@ -1,0 +1,11 @@
+component badmapcomprehension
+export Executable
+
+(* `{[\K,V\] ... }` is a MAP comprehension, told from a set by the ARITY of the
+   written static arguments. `not_working_static_tests/SetComprehension.fss`
+   writes exactly this. *)
+run(): () = do
+  m = {[\ZZ32,ZZ32\] a | a <- 3:10}
+  println(1)
+end
+end

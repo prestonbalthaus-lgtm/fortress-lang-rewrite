@@ -84,8 +84,15 @@ const IMPLICITLY_IMPORTED: [&str; 2] = ["CompilerBuiltin", "FortressLibrary"];
 /// `IFS='|'`, so `||` cannot appear in a line a table has to reach. The second
 /// guard was the api-only early return; Link 5 neutered it to `if false` rather
 /// than deleting it, and the dead block came out on 2026-08-25 with the comment
-/// above. Nothing targets it -- `apply-gate.sh`'s row for this function matches
-/// `if component.name == name {`.
+/// above. Nothing targets it: `apply-gate.sh`'s row for this function matches
+/// the self-import guard below, not the block that came out.
+///
+/// AND THAT SENTENCE USED TO QUOTE THE GUARD VERBATIM, which made
+/// `grep -F -c` find TWO hits and quietly disabled the row -- a mutation
+/// pattern that matches its own explanation is not unique, and the table
+/// reports "could not be applied" rather than failing anything. Recorded as
+/// "A PREFLIGHT GREP CAN MATCH ITS OWN EXPLANATION"; caught by
+/// `tools/mutation-patterns.py` read with the pipe off.
 fn implicit_import(component: &Component, queue: &mut Vec<ImportDecl>) {
     for name in IMPLICITLY_IMPORTED {
         // `break` AND NOT `continue`, AND THAT ONE WORD IS THE LAYERING. The
