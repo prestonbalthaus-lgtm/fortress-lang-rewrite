@@ -1,0 +1,43 @@
+component varargs
+export Executable
+
+(* A VARARGS PARAMETER COLLECTS ITS TRAILING ARGUMENTS INTO A RANK-ONE ARRAY.
+   `basic/overloading.tex:214-226` reads a varargs declaration as "(possibly
+   infinitely) many declarations, one for each number of arguments it may be
+   called with", bounded in practice by "the maximum number of arguments that
+   the functional is called with anywhere in the program" -- which is
+   whole-program demand, exactly what monomorphization already does.
+
+   EVERY ARITY BELOW IS A SEPARATE STAMP, and the zero case is the one the
+   specification's own worked example starts from: it expands
+   `f(x:ZZ, y:ZZ, z:ZZ...)` beginning at `f(x:ZZ, y:ZZ)`. *)
+count(es: ZZ32...): ZZ64 = length(es)
+
+(* A FIXED PREFIX BEFORE THE VARARGS. The prefix is consumed positionally and
+   only what is left over is collected, so `tagged("x")` collects nothing. *)
+tagged(tag: String, es: ZZ32...): ZZ64 = length(es)
+
+(* THE COLLECTED ARRAY IS AN ORDINARY RANK-ONE ARRAY, so it iterates. `seq` is
+   required because the loop assigns to an enclosing mutable and a parallel body
+   may not -- that is the ordinary reduction rule, nothing to do with varargs. *)
+total(es: ZZ32...): ZZ32 = do
+  t: ZZ32 := 0
+  for x <- seq(es) do t := t + x end
+  t
+end
+
+(* CALLED AT ONE ARITY FROM TWO PLACES IS ONE STAMP, not two: demand is keyed by
+   name and arity, the way `MethodRequest` already keys `m[\ZZ32\](x)`. *)
+twice(): ZZ64 = count(7, 8) + count(9, 10)
+
+run(): () = do
+  println(count())
+  println(count(10))
+  println(count(10, 20, 30))
+  println(tagged("x"))
+  println(tagged("x", 1, 2))
+  println(total(1, 2, 3, 4))
+  println(twice())
+end
+
+end

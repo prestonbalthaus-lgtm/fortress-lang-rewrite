@@ -16,9 +16,9 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use fortress_ast::{
-    Assign, BlockItem, BoundObligation, CaseArm, Component, CutMember, Decl, Expr, ExtentRange,
-    FieldDecl, FnDecl, Member, MethodDecl, ObjectDecl, Param, Span, StaticExpr, StaticOp,
-    StaticParam, TraitDecl, TypeCaseArm, TypeRef,
+    Assign, BlockItem, BoundObligation, CaseArm, Component, CutMember, Decl, Expr, ExtentForm,
+    ExtentRange, FieldDecl, FnDecl, Member, MethodDecl, ObjectDecl, Param, ShapeSpelling, Span,
+    StaticExpr, StaticOp, StaticParam, TraitDecl, TypeCaseArm, TypeRef,
 };
 
 use crate::error::TypeError;
@@ -90,12 +90,47 @@ struct MethodRequest {
     span: Span,
 }
 
+/// A BODIED, GROUND `f(p1..pk, es: T...)`. `prefix` is `k`.
+///
+/// BODIED ONLY, and that is design §3: a varargs parameter in a bodiless api
+/// declaration is RECORDED AND NEVER LOWERED. The rule and the mechanism agree
+/// here -- a bodiless declaration also has no body to call from, so it files no
+/// demand either way. Fifteen library apis, `Library/FortressLibrary.fsi` among
+/// them, compile only because of this.
+///
+/// GROUND ONLY, measured: 41 corpus sites write a BODIED GROUND varargs against
+/// 13 bodied GENERIC ones. A generic one needs the trailing element type
+/// substituted before the array type can be written, which is this same stamper
+/// with `Subst` threaded through it -- a follow-up, not a redesign.
+///
+/// ONE DECLARATION OF THE NAME ONLY. If `f` is overloaded, the name alone
+/// cannot say which declaration a call means, and this pass has no types to ask
+/// with. An overloaded name is left alone and its call reaches the ordinary
+/// arity check, which is a refusal rather than a wrong answer.
+struct VarargsTemplate<'a> {
+    prefix: usize,
+    decl: &'a FnDecl,
+}
+
 struct Instance {
     origin: String,
     /// Which member of the origin's overload set this came from. Emission uses
     /// it to place each instance under its own source declaration exactly once.
     member: usize,
     decl: Decl,
+}
+
+/// The stamp's name, `f$va3`. UNWRITABLE: `$` never lexes as part of an
+/// identifier, so no source file can collide with one.
+///
+/// GIVING EACH ARITY ITS OWN NAME IS WHAT DISSOLVES THE MANGLE COLLISION.
+/// `mangle` joins parameter symbols with `_`, so arity is implicit for a fixed
+/// list -- but a varargs stamp collapses its trailing arguments into ONE
+/// `T[n-k]` parameter, so `f`@3 and `f`@4 would otherwise both mangle to
+/// `f$zz32_array_zz32`. Distinct declaration names mean `mangle` never sees the
+/// collision at all, and it is not touched by this milestone.
+fn varargs_stamp_name(name: &str, arity: usize) -> String {
+    format!("{name}$va{arity}")
 }
 
 pub fn expand(component: &Component) -> Result<Component, TypeError> {
@@ -143,6 +178,14 @@ struct Expander<'a> {
     /// one request no matter how many times it appears.
     method_demand: BTreeMap<(String, usize), MethodRequest>,
     stamps: BTreeMap<(OwnerKey, usize, String), MethodDecl>,
+    /// Bodied, ground varargs declarations, by name.
+    varargs_templates: BTreeMap<String, VarargsTemplate<'a>>,
+    /// Keyed by name and CALL arity, so `f(1,2,3)` and `f(4,5,6)` are ONE
+    /// stamp. `method_demand` two fields up is keyed the same way and for the
+    /// same reason: pushing into a `Vec` files one job per call site and burns
+    /// `MAX_INSTANTIATIONS` on a program that repeats one call.
+    varargs_demand: BTreeMap<(String, usize), Span>,
+    varargs_stamps: BTreeMap<(String, usize), Decl>,
 }
 
 impl<'a> Expander<'a> {
@@ -182,6 +225,43 @@ impl<'a> Expander<'a> {
                 }
             }
         }
+        // BODIED, GROUND, UNOVERLOADED varargs declarations. Counted first so
+        // an overloaded name can be dropped: with two declarations of one name
+        // this pass cannot say which a call means, because it has no types.
+        let mut varargs_counts: BTreeMap<&str, usize> = BTreeMap::new();
+        for decl in &component.decls {
+            if let Decl::Function(f) = decl {
+                *varargs_counts.entry(f.name.as_str()).or_insert(0) += 1;
+            }
+        }
+        let mut varargs_templates: BTreeMap<String, VarargsTemplate<'a>> = BTreeMap::new();
+        for decl in &component.decls {
+            let Decl::Function(f) = decl else { continue };
+            // Spelled as a `let ... else` rather than the obvious emptiness
+            // test on `body`, because generics-gate anchors a mutation row on
+            // that exact expression in this file and a second occurrence
+            // silently stops the row being unique. Do not "simplify" it back.
+            let Some(_body) = &f.body else { continue };
+            if !f.static_params.is_empty() {
+                continue;
+            }
+            if varargs_counts.get(f.name.as_str()).copied().unwrap_or(0) != 1 {
+                continue;
+            }
+            let Some(at) = f.params.iter().position(|p| p.varargs) else {
+                continue;
+            };
+            // The parser's `reject_varargs_position` already guarantees the
+            // varargs parameter is the last ordinary one, so `at` IS the prefix
+            // length and no second position check is needed here.
+            varargs_templates.insert(
+                f.name.clone(),
+                VarargsTemplate {
+                    prefix: at,
+                    decl: f,
+                },
+            );
+        }
         Ok(Self {
             generics,
             instances: Instances::new(),
@@ -198,6 +278,9 @@ impl<'a> Expander<'a> {
             templates: BTreeMap::new(),
             method_demand: BTreeMap::new(),
             stamps: BTreeMap::new(),
+            varargs_templates,
+            varargs_demand: BTreeMap::new(),
+            varargs_stamps: BTreeMap::new(),
         })
     }
 
@@ -225,7 +308,9 @@ impl<'a> Expander<'a> {
         // stamp still has to be made from.
         loop {
             self.expand_types()?;
-            if !self.stamp_methods()? {
+            let methods = self.stamp_methods()?;
+            let varargs = self.stamp_varargs()?;
+            if !methods && !varargs {
                 break;
             }
         }
@@ -337,11 +422,96 @@ impl<'a> Expander<'a> {
         Ok(true)
     }
 
-    /// One ceiling for the whole component, counting type instantiations and
-    /// method stamps together. Two separate ceilings would each be reachable
-    /// while the total was twice what was intended.
+    fn is_varargs_template(&self, decl: &Decl) -> bool {
+        let Decl::Function(f) = decl else {
+            return false;
+        };
+        self.varargs_templates.contains_key(&f.name) && f.params.iter().any(|p| p.varargs)
+    }
+
+    /// One batch of varargs stamps: every demanded (name, arity) that has not
+    /// been stamped yet. Returns whether anything was made.
+    ///
+    /// THE RETURN VALUE IS THE FIXPOINT'S TERMINATION SIGNAL. A stamper that
+    /// always returns `true` never terminates -- and a stamp's BODY is expanded
+    /// here, so it can file fresh demand (a varargs function calling another,
+    /// or itself at a second arity), which is exactly why it has to be inside
+    /// the loop rather than run once after it.
+    fn stamp_varargs(&mut self) -> Result<bool, TypeError> {
+        let work: Vec<((String, usize), Span)> = self
+            .varargs_demand
+            .iter()
+            .filter(|(key, _)| !self.varargs_stamps.contains_key(key))
+            .map(|(key, span)| (key.clone(), *span))
+            .collect();
+        let mut made = false;
+        for ((name, arity), span) in work {
+            let Some(template) = self.varargs_templates.get(&name) else {
+                continue;
+            };
+            if self.total() >= MAX_INSTANTIATIONS {
+                return Err(TypeError::TooManyInstantiations {
+                    span,
+                    name,
+                    limit: MAX_INSTANTIATIONS,
+                });
+            }
+            let prefix = template.prefix;
+            let mut stamped = template.decl.clone();
+            let Some(param) = stamped.params.get(prefix).cloned() else {
+                continue;
+            };
+            let collected = arity.saturating_sub(prefix);
+            let element = param.ty.clone();
+            let array_ty = TypeRef::Shaped {
+                base: Box::new(element),
+                spelling: ShapeSpelling::Bracket,
+                extents: vec![ExtentRange {
+                    lower: None,
+                    upper: Some(TypeRef::Static {
+                        expr: StaticExpr::Int(collected as i64),
+                        span: param.span,
+                    }),
+                    form: ExtentForm::Size,
+                    span: param.span,
+                }],
+                span: param.span,
+            };
+            let replacement = Param {
+                varargs: false,
+                ty: array_ty,
+                ..param
+            };
+            // RESERVED BEFORE THE BODY IS WALKED, the same way `stamp_methods`
+            // memoises at its own `stamps.insert`: expanding the body can
+            // demand this very stamp again (direct recursion at one arity) and
+            // without the reservation that is an unbounded loop, not a fixpoint.
+            self.varargs_stamps
+                .insert((name.clone(), arity), Decl::Function(stamped.clone()));
+            stamped.name = varargs_stamp_name(&name, arity);
+            if let Some(slot) = stamped.params.get_mut(prefix) {
+                *slot = replacement;
+            }
+            let expanded = self.decl(&Decl::Function(stamped), &Subst::new(), None)?;
+            self.varargs_stamps.insert((name, arity), expanded);
+            made = true;
+        }
+        Ok(made)
+    }
+
+    /// One ceiling for the whole component, counting type instantiations,
+    /// method stamps and varargs arity stamps together. Two separate ceilings
+    /// would each be reachable while the total was twice what was intended.
+    ///
+    /// VARARGS IS THE FIRST DEMAND SOURCE DRIVEN BY CALL ARITY rather than by
+    /// written type structure, so `f(es: ZZ32...)` called at 4097 distinct
+    /// arities reaches this limit with not one generic in the program. That is
+    /// correct, and it is a new way to reach `TooManyInstantiations`.
     fn total(&self) -> usize {
-        self.instances.len().saturating_add(self.stamps.len())
+        self.instances
+            .len()
+            .saturating_add(self.stamps.len())
+            .saturating_add(self.varargs_stamps.len())
     }
 
     fn expand_types(&mut self) -> Result<(), TypeError> {
@@ -428,7 +598,40 @@ impl<'a> Expander<'a> {
         let mut ground = ground.into_iter().peekable();
         for (index, decl) in component.decls.iter().enumerate() {
             if static_params(decl).is_empty() {
-                if let Some((_, d)) = ground.next_if(|(i, _)| *i == index) {
+                let taken = ground.next_if(|(i, _)| *i == index);
+                // A VARARGS TEMPLATE IS NOT EMITTED. `basic/overloading.tex:214`
+                // makes it "(possibly infinitely) many declarations, one for
+                // each number of arguments it may be called with" -- so the
+                // template itself denotes no single declaration and there is
+                // nothing to emit for it. Its arity stamps are appended below.
+                //
+                // WITHOUT THIS the template survives with its varargs flag
+                // dropped by `build_signatures`, i.e. as `f(es: ZZ32)`, and its
+                // own body fails to check: `length(es)` reports "expected an
+                // array, found ZZ32".
+                //
+                // A template nothing calls therefore emits NOTHING, which is
+                // the same reading: zero call arities, zero declarations.
+                if self.is_varargs_template(decl) {
+                    // ITS STAMPS GO HERE, IN THE TEMPLATE'S OWN POSITION, and
+                    // that is not tidiness. `resolve_inferred_returns` is a
+                    // DECLARATION-ORDER fixpoint, so a stamp appended after its
+                    // callers keeps a `Void` placeholder and the caller is then
+                    // told an integer cannot be used where `()` is required --
+                    // a message blaming the call site for the callee's
+                    // unresolved return. `restTest.fss` is the witness: it
+                    // reported `unknown name SUM` at the declaration and, with
+                    // the stamps appended at the end, an integer-versus-`()`
+                    // error at the call three lines later.
+                    let name = decl_name(decl);
+                    for ((origin, arity), stamp) in &self.varargs_stamps {
+                        if origin == name {
+                            emitted.push((OwnerKey::Ground(index + arity), stamp.clone()));
+                        }
+                    }
+                    continue;
+                }
+                if let Some((_, d)) = taken {
                     emitted.push((OwnerKey::Ground(index), d));
                 }
                 continue;
@@ -450,7 +653,7 @@ impl<'a> Expander<'a> {
             }
         }
 
-        let mut decls = Vec::with_capacity(emitted.len());
+        let mut decls = Vec::with_capacity(emitted.len() + self.varargs_stamps.len());
         for (key, mut decl) in emitted {
             let extra: Vec<Member> = self
                 .stamps
@@ -1001,6 +1204,53 @@ impl<'a> Expander<'a> {
                             args: self.exprs(args, subst)?,
                             span: *span,
                         });
+                    }
+                }
+                // A VARARGS CALL. `f(1,2,3)` against `f(es: T...)` becomes
+                // `f$va3([1,2,3])`: the trailing arguments collected into a
+                // rank-one ARRAY LITERAL, a node that already lowers through
+                // `fortress_array_alloc`.
+                //
+                // THAT IS WHY CODEGEN IS UNTOUCHED BY THIS MILESTONE. The
+                // collection is an ordinary array aggregate, so there is no new
+                // shim, no second allocation path and no boxing -- and the
+                // zero-trailing-argument case the specification requires
+                // (`basic/overloading.tex:222-226` expands
+                // `f(x,y,z: ZZ...)` starting at `f(x,y)`) is `[]`, which
+                // already builds a `T[0]`.
+                //
+                // DEMAND IS THE CALL'S ARITY, which makes this the first demand
+                // kind in this pass that is not sourced from a written static
+                // argument.
+                if let Expr::Var {
+                    name,
+                    span: name_span,
+                } = callee.as_ref()
+                {
+                    if let Some(prefix) = self.varargs_templates.get(name).map(|t| t.prefix) {
+                        if args.len() >= prefix {
+                            let arity = args.len();
+                            self.varargs_demand
+                                .entry((name.clone(), arity))
+                                .or_insert(*span);
+                            let (head, tail) = args.split_at(prefix);
+                            let mut out = self.exprs(head, subst)?;
+                            let items = self.exprs(tail, subst)?;
+                            let extents = vec![items.len()];
+                            out.push(Expr::ArrayLit {
+                                items,
+                                extents,
+                                span: *span,
+                            });
+                            return Ok(Expr::Call {
+                                callee: Box::new(Expr::Var {
+                                    name: varargs_stamp_name(name, arity),
+                                    span: *name_span,
+                                }),
+                                args: out,
+                                span: *span,
+                            });
+                        }
                     }
                 }
                 Expr::Call {

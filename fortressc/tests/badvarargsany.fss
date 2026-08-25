@@ -1,0 +1,20 @@
+component badvarargsany
+export Executable
+
+(* `Any...` AT A BODIED SITE. The trailing arguments are collected into a
+   rank-one array, and this backend does not box -- `occupies_a_trait_slot` is
+   an allowlist admitting only a pointer to a tagged block, so a `ZZ32` in an
+   `Any[]` slot has no representation.
+
+   THE REFUSAL IS THE ARRAY ELEMENT GUARD'S, NOT A SECOND RULE. That is the
+   whole point of collecting into an array: the existing allowlist already
+   refuses the element type, so widening it has to come back through one place.
+
+   30 of the 86 corpus varargs sites write `Any...` and every one is in a
+   BODILESS api declaration, where the parameter is recorded and never lowered
+   and so never reaches this guard. *)
+f(es: Any...): ZZ64 = length(es)
+
+run(): () = println(f(1, 2))
+
+end
