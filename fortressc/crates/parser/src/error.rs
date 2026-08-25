@@ -176,6 +176,26 @@ pub enum ParseError {
         span: Span,
         name: String,
     },
+    /// `f(a: ZZ32..., b: ZZ32)`. `concrete-syntax.tex:696-708` makes a
+    /// parameter list `(Param,)* [Varargs,] Keyword(,Keyword)*` or
+    /// `(Param,)* Varargs`, so there is AT MOST ONE varargs and no ORDINARY
+    /// parameter may follow it. A second varargs is caught by the same rule,
+    /// because the first one then has a parameter after it.
+    ///
+    /// THE RULE IS DELIBERATELY NOT "A VARARGS MUST BE LAST". Seven corpus
+    /// sites write a varargs followed by a KEYWORD parameter --
+    /// `Compiled5.aw.fss:17`, `XXXtestTuple.fss:16,21,24,25,27` and
+    /// `OverloadedFunctions.fss:19`, all of the shape `y: ZZ32..., z: ZZ32 = 0`
+    /// -- and that is the grammar's FIRST alternative and legal 1.0. Keyword
+    /// parameters are not in this subset, so `params` stops at their `=` with
+    /// `expected )` before this check ever runs; wording the rule as "last"
+    /// would have blamed varargs for a keyword-parameter gap the moment
+    /// keyword parameters landed.
+    VarargsNotLast {
+        span: Span,
+        name: String,
+        following: String,
+    },
     /// `trait Stream ... end WriteStream`. `TraitObject.rats:13` permits the
     /// declaration's own name after `end`; a DIFFERENT name is a static error,
     /// and accepting one silently would be a new wrong acceptance rather than
@@ -265,6 +285,7 @@ impl ParseError {
             | Self::BigReductionUnsupported { span, .. }
             | Self::AlsoFormUnsupported { span, .. }
             | Self::ObjectVarargsParameter { span, .. }
+            | Self::VarargsNotLast { span, .. }
             | Self::ClosingNameDiffers { span, .. }
             | Self::OperatorsUnrelated { span, .. }
             | Self::LopsidedOperator { span, .. }
@@ -394,6 +415,16 @@ impl core::fmt::Display for ParseError {
                 f,
                 "{}..{}: the object value parameter `{name}` is varargs; an \
                  object's varargs parameter must be declared `transient`",
+                span.start, span.end
+            ),
+            Self::VarargsNotLast {
+                span,
+                name,
+                following,
+            } => write!(
+                f,
+                "{}..{}: the varargs parameter `{name}` is followed by the parameter \
+                 `{following}`; a varargs parameter is the last ordinary parameter",
                 span.start, span.end
             ),
             Self::ClosingNameDiffers {

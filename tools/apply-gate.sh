@@ -623,6 +623,8 @@ badctortie.fss|`Pair` is ambiguous for (Both, Both)
 badsingletoncall.fss|`Marker` is a singleton object; write `Marker`, not `Marker(...)`
 badselfvalue.fss|reserved word `Self` is not in the implemented subset
 badsettercompound.fss|is a setter, so `o.n := e` is a call
+badvarargsnotlast.fss|is followed by the parameter `b`
+badvarargstwice.fsi|is followed by the parameter `b`
 badthrowscalar.fss|`throw` can only throw objects of Exception type, and this expression is of type ZZ32
 badthrownotexception.fss|and this expression is of type FooExn
 badmergedfunction.fss|unknown name `gcd`
@@ -933,6 +935,14 @@ CASES
 }
 
 MUTATIONS=(
+  # AT MOST ONE VARARGS AND NO ORDINARY PARAMETER AFTER IT. The guard has ZERO
+  # corpus exercisers -- the seven sites that write a varargs followed by
+  # something die at a KEYWORD parameter's `=` inside `params` first -- so
+  # `badvarargsnotlast.fss` and `badvarargstwice.fsi` are the only things
+  # holding it, and this row is what proves they still reach it. `nth(9)` on an
+  # iterator this short is None, so the guard returns Ok and both fixtures
+  # compile. The pattern is bar-free on purpose: the row splits on IFS.
+  'crates/parser/src/lib.rs|        let Some(after) = rest.next() else {|        let Some(after) = rest.nth(9) else {|stop refusing a parameter that follows a varargs one'
   # A WRAPPED VALUE-PARAMETER LIST. One line, +9 corpus files, and the risk it
   # carries is the opposite one: skipping newlines before `(` must not swallow a
   # MEMBER. `wrappedparams.fss`'s third object exists for exactly that.
