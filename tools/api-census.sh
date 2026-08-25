@@ -74,7 +74,19 @@ while i < len(args):
         opt[a[2:]] = True; i += 1
     else:
         print(f'unknown argument {a}', file=sys.stderr); sys.exit(2)
-jobs = int(opt.get('jobs', os.cpu_count() or 4))
+# HOW MANY WORKERS. `os.cpu_count()` IS THE WRONG QUESTION -- it reports the
+# machine's CPUs and ignores this process's AFFINITY, so under
+# `taskset -c 2-7` it still says 14 and this pool would put 14 compilers on 6
+# cores. `sched_getaffinity` reports what we may actually run on. It matters
+# here beyond tidiness: this box has 14 physical cores, NO SMT, and the host's
+# systemd is pinned to CPUs 0-1, so an oversubscribed sweep starves the kernel's
+# own threads and the desktop stutters.
+def _workers():
+    try:
+        return len(os.sched_getaffinity(0))
+    except AttributeError:      # not Linux
+        return os.cpu_count() or 4
+jobs = int(opt.get('jobs', _workers()))
 
 # ------------------------------------------------------------- the groups
 #

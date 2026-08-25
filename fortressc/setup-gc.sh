@@ -45,7 +45,11 @@ cd "${WORK}/gc-${VERSION}"
     --with-libatomic-ops=none \
     > "${WORK}/configure.log" 2>&1
 
-make -j"$(nproc)" > "${WORK}/make.log" 2>&1
+# `nproc` DOES respect CPU affinity, so under `taskset -c 2-7` this is 6
+# already. The cap is for the UNPINNED invocation: this box has 14 physical
+# cores, no SMT, and the host's systemd is confined to CPUs 0-1, so a
+# 14-job build starves the kernel's own threads and the desktop locks up.
+make -j"$(( $(nproc) < 6 ? $(nproc) : 6 ))" > "${WORK}/make.log" 2>&1
 
 rm -rf "${ROOT}"
 make install > "${WORK}/install.log" 2>&1

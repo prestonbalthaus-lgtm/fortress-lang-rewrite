@@ -358,6 +358,32 @@ because Fedora splits both packages across a runtime half and a `-devel` half,
 and the `-devel` half needs root; the scripts unpack it into `~/.local` instead.
 With root, `dnf install llvm-devel gc-devel` does the same job.
 
+### Parallelism, and why it is capped
+
+`fortressc/.cargo/config.toml` caps the build at **6 jobs**, and every tool that
+fans out — `triage.sh`, `oracle-gate.sh`, `api-census.sh`, `api-conformance.sh`
+— sizes its pool from **`sched_getaffinity`, not `os.cpu_count()`**. Those are
+different numbers the moment anything is pinned: under `taskset -c 2-7`,
+`os.cpu_count()` still reports 14 and would put fourteen compilers on six cores.
+
+The reason is the development box, and it generalises. It has **14 physical
+cores and no SMT**, and its `systemd` is confined to CPUs 0-1. A sweep that
+takes all fourteen is therefore not using spare capacity — it is competing with
+the kernel's own threads for the two cores they are allowed on, and the desktop
+locks up. `oracle-gate.sh` alone builds and runs 454 binaries.
+
+So: run the tooling pinned.
+
+```
+taskset -c 2-7 cargo build --workspace
+taskset -c 2-7 tools/oracle-gate.sh
+```
+
+Cargo needs no flag for that — `available_parallelism` respects affinity
+(measured: 14 unpinned, 6 under the pin), so a pinned build limits itself and
+the config line above is only for the unpinned case. Override either with
+`cargo build -j N` or `--jobs N`.
+
 `gc.h` and `-lgc` are needed wherever a Fortress program is *linked*, not just
 where the compiler is built: `runtime/shims.c` is compiled by the linking C
 compiler so that it matches the target's C library.

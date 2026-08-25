@@ -1,0 +1,13 @@
+# JOBS, CAPPED. Cargo defaults to `available_parallelism`, which DOES respect
+# CPU affinity -- measured: 14 unpinned, 6 under `taskset -c 2-7` -- so a pinned
+# invocation already limits itself and this line changes nothing there.
+#
+# IT IS HERE FOR THE UNPINNED ONE. This box has 14 PHYSICAL cores and NO SMT,
+# and the host's own systemd is confined to CPUs 0-1, so a 14-job build is not
+# spare capacity: it competes with the kernel's threads for the two cores they
+# are allowed on, and the desktop locks up. Six is the size of the 2-7 window
+# the rest of the tooling pins to.
+#
+# Raise it with `cargo build -j N`, which overrides this.
+[build]
+jobs = 6
