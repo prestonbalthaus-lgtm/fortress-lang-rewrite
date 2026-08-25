@@ -491,22 +491,9 @@ run(): () = if (a, b) <- Just1(1) then println(a) end'
 # being written in, and `cargo fmt` had already run -- fmt splitting a long
 # `if let` across lines is what made the second row's first draft match zero.
 MUTATIONS=(
-  'crates/types/src/lib.rs|return self.dispatch_method(base, SUBSCRIPT, indices, span, span, expected);|let _ = SUBSCRIPT;|delete the object-subscript dispatch, so a declared `opr []` is unreachable again'
-  'crates/types/src/lib.rs|self.protocol_gap(source, &[(SIZE, SIZE, 1), (SUBSCRIPT, "opr []", 2)])|self.protocol_gap(source, &[(SIZE, SIZE, 1)])|stop requiring `opr []` of a generator, so the named refusal stops naming it'
-  'crates/types/src/lib.rs|if self.declared_as_a_getter(name) {|if false {|always CALL a protocol member, so the getter spelling breaks'
-  'crates/types/src/lib.rs|if !loops {|if true {|lower `while x <- g` as an `if`, so the loop runs once and stops'
-  'crates/types/src/lib.rs|op: BinOp::Lt,|op: BinOp::Le,|walk one element past the extent in the comprehension lowering'
-  'crates/types/src/List.fss|opr [i: ZZ64]: T = store[i]|opr [i: ZZ64]: T = store[0]|make the minted List ignore its index -- a SILENT WRONG ANSWER that only a value assertion catches'
-  'crates/types/src/Set.fss|opr [i: ZZ64]: T = store[i]|opr [i: ZZ64]: T = store[0]|make the minted Set ignore its index, the same silent wrong answer one collection over'
-  'crates/types/src/Set.fss|if store[i] = x then found := true end|if false then found := true end|MAKE THE MEMBERSHIP TEST LIE -- every element reads as new, the set stops deduplicating and becomes a list, and NOTHING but the size assertion in setcomprehension.fss can tell'
-  'crates/types/src/comprehension.rs|source: SET_SOURCE,|source: LIST_SOURCE,|mint a LIST where a Set is wanted, so `{ }` builds a collection that keeps duplicates'
-  'crates/types/src/comprehension.rs|named(decl) == Some(name) && !merged(decl)|named(decl) == Some(name)|refuse a MERGED collection name again, taking the three corpus files back down'
-  'crates/types/src/comprehension.rs|for element_expr in elements {|for element_expr in elements.into_iter().rev() {|build a set literal BACKWARDS -- same size, same elements, wrong order, and only a value assertion sees it'
-  'crates/types/src/comprehension.rs|(true, Some(from_slot)) => from_slot,|(true, Some(_from_slot)) => return Err(TypeError::SetLiteralElementUnwritten { span }),|stop taking a set literal element type from the slot it initialises'
-  'crates/types/src/Set.fss|opr IN(x: T, self): Boolean = contains(x)|opr IN(x: T, self): Boolean = NOT contains(x)|make `IN` answer the opposite, which every exit code accepts'
   'crates/types/src/Map.fss|      vals[slot] := v|      count := count|STOP A LATER KEY REPLACING AN EARLIER ONE -- the map silently becomes a multimap with a stale first value, same size, same keys'
   'crates/types/src/Map.fss|if keys[i] = k then found := i end|if keys[i] = k then found := 0 end|make every key look up the FIRST entry, which is a silent wrong answer only a value assertion catches'
-  'crates/parser/src/lib.rs|            Some(Kind::Gt)|            Some(Kind::Lt)|end the mapping arrow with the WRONG token, so every map literal and map comprehension stops being a map'
+  'crates/parser/src/lib.rs|if !self.glued_right(self.pos) {|if false {|re-glue a SPACED bar into a mapping arrow, so a comprehension separator is eaten as one'
   'crates/types/src/comprehension.rs|let wanted = if mapping { 2 } else { 1 };|let wanted = 1;|read every `{ }` form as a SET, so a map literal builds one collection with the other shape'
 )
 

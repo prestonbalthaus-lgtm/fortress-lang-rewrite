@@ -4218,6 +4218,17 @@ impl<'t, 'a> Parser<'t, 'a> {
     /// operator `{_|` -- so the error lands on the `>` two characters later,
     /// as `expected an expression, found Gt`. Eleven corpus files stop there
     /// and only seven of them are maps.
+    /// THE TWO GLUING CHECKS ARE A SHAPE GUARD WITH NO REACHABLE EXERCISER,
+    /// and that is recorded rather than papered over. A mutation removing the
+    /// first one SURVIVED, so the question was asked the right way round --
+    /// which program separates the two readings? -- and the answer is none:
+    /// reaching it needs a literal `| - >` in sequence, and `{ x | -> y }` is
+    /// refused as `expected an expression, found Gt` with the guard either way.
+    /// The row that bites instead is the one on the arrow's last token; the
+    /// guards stay because a comprehension separator is a bare `|` and reading
+    /// a spaced one as half an arrow is the defect they exist to make
+    /// impossible, not one they can currently be shown to catch. Same call
+    /// `tuple_value`'s element check got.
     fn mapping_arrow_here(&self) -> bool {
         if !matches!(self.peek_kind(), Some(Kind::Bar)) {
             return false;
