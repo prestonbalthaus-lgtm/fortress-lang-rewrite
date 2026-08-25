@@ -1,0 +1,77 @@
+(* THE COLLECTION A SET COMPREHENSION BUILDS.
+
+   The `List.fss` precedent, one collection over: written in Fortress and
+   MINTED INTO THE COMPONENT that needs it, so expansion stamps one
+   `Set[\T\]` per element type and nothing in codegen had to learn a second
+   collection. Storage is an ordinary `Array[\T\]`, so every byte still comes
+   from `fortress_array_alloc` and there is still exactly one allocation path.
+
+   MEMBERSHIP IS A LINEAR SCAN OVER `=`, WHICH IS THE HONEST SHAPE HERE. 1.0's
+   `Library/Set.fsi:56` bounds its set's element by
+   `StandardTotalOrder[\T\]` and keeps the elements SORTED; this compiler has
+   no first-class ordering to demand of a written static argument, and a
+   comparison-keyed tree would need one. `=` is what every scalar already has,
+   so `Set[\ZZ32\]` and `Set[\String\]` work and `Set[\SomeObject\]` is
+   refused at the stamp unless that object declares `=`. That refusal is a
+   type error at the instantiation, naming the element type, and not a silent
+   wrong answer.
+
+   INSERTION ORDER OF FIRST OCCURRENCE, AND THAT IS A NAMED DEVIATION. 1.0's
+   set is sorted. Ordering here would need the bound above, so what is
+   preserved instead is the order the generator produced first occurrences in
+   -- deterministic, reproducible, and the property a gate can assert. The
+   SEMANTIC that matters for a set comprehension, that duplicates collapse, is
+   exact.
+
+   O(n) PER INSERT AND SO O(n^2) TO BUILD. Measured against the alternative
+   rather than assumed: the alternative is a hash, which needs a hash function
+   per element type -- a whole protocol -- for a construct whose corpus
+   witnesses build sets of tens of elements. Revisit it when something builds
+   a large one. *)
+component FortressSet
+
+object Set[\T\](capacity: ZZ64)
+  var count: ZZ64 := 0
+  var store: Array[\T\] = array(capacity)
+
+  size(): ZZ64 = count
+
+  (* THE ELEMENT HALF OF THE INDEXED GENERATOR PROTOCOL, spelled the way
+     `Indexed[\E,I\]` spells it, so `for x <- aSet` and a comprehension over
+     one both walk `size` and this. *)
+  opr [i: ZZ64]: T = store[i]
+
+  (* THE WHOLE OF THE SET SEMANTICS IS HERE. A mutation row inverts this test
+     so it always answers `false`, which turns the set back into a list and is
+     invisible to an exit code -- only a value assertion on `size()` catches
+     it. *)
+  contains(x: T): Boolean = do
+    found: Boolean := false
+    i: ZZ64 := 0
+    while i < count do
+      if store[i] = x then found := true end
+      i := i + 1
+    end
+    found
+  end
+
+  insert(x: T): () = do
+    if NOT contains(x) then
+      if count >= length(store) then reserve() end
+      store[count] := x
+      count := count + 1
+    end
+  end
+
+  reserve(): () = do
+    bigger: Array[\T\] = array(2 count + 8)
+    i: ZZ64 := 0
+    while i < count do
+      bigger[i] := store[i]
+      i := i + 1
+    end
+    store := bigger
+  end
+end
+
+end

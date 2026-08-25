@@ -1,4 +1,5 @@
-//! `<| e | x <- lo:hi, guard |>`, lowered to a real `List[\T\]`.
+//! `<| e | x <- lo:hi, guard |>` and `{ e | x <- lo:hi, guard }`, lowered to a
+//! real `List[\T\]` and a real `Set[\T\]`.
 //!
 //! ROUTE 4, and the whole of it is here: an AST-to-AST pass that rewrites the
 //! comprehension into an ordinary block over a minted `List[\T\]` object, and
@@ -44,35 +45,103 @@ use fortress_ast::{
 
 use crate::error::TypeError;
 
-/// The minted collection. Parsed, never linked: only its declarations are
-/// spliced, and only into a component that used a comprehension.
+/// The minted collections. Parsed, never linked: only their declarations are
+/// spliced, and only into a component that used a comprehension of that shape.
 const LIST_SOURCE: &str = include_str!("List.fss");
+const SET_SOURCE: &str = include_str!("Set.fss");
 
-/// The bracket pair a LIST comprehension is written with, as
-/// `enclosing_application` names it.
-const LIST_BRACKET: &str = "<|_|>";
+/// One collection a comprehension can build. The bracket pair is how
+/// `enclosing_application` names the form; the builder is the method the
+/// lowering calls once per element that survives the guards, and it is the
+/// ONLY thing that differs between the two lowerings -- `append` keeps every
+/// element, `insert` keeps the first of each.
+struct Kind {
+    bracket: &'static str,
+    name: &'static str,
+    source: &'static str,
+    builder: &'static str,
+}
 
-const LIST: &str = "List";
+const KINDS: [Kind; 2] = [
+    Kind {
+        bracket: "<|_|>",
+        name: "List",
+        source: LIST_SOURCE,
+        builder: "append",
+    },
+    Kind {
+        bracket: "{_}",
+        name: "Set",
+        source: SET_SOURCE,
+        builder: "insert",
+    },
+];
+
+const SET: &str = "Set";
+
+fn kind_for(bracket: &str) -> Option<&'static Kind> {
+    KINDS.iter().find(|k| k.bracket == bracket)
+}
 
 pub fn lower(component: &Component) -> Result<Component, TypeError> {
     let mut pass = Pass {
         counter: 0,
-        demanded: false,
+        demanded: [false; KINDS.len()],
     };
     let mut out = component.clone();
     for decl in &mut out.decls {
         pass.decl(decl)?;
     }
-    if pass.demanded {
-        let already = out.decls.iter().any(|d| named(d) == Some(LIST));
-        if already {
-            return Err(TypeError::ComprehensionListTaken {
+    for (kind, demanded) in KINDS.iter().zip(pass.demanded.iter()) {
+        if !*demanded {
+            continue;
+        }
+        // THE FILE'S OWN DECLARATION WINS AND A MERGED ONE LOSES, which is
+        // LINK 5's RULE 1 ONE LEVEL DOWN -- a merged declaration loses to a
+        // builtin of its own name, and the minted collection is morally a
+        // builtin: it is what `<|..|>` and `{..}` are DEFINED to build.
+        //
+        // AND THE MERGED ONE COULD NEVER HAVE BEEN USED ANYWAY. An api
+        // DECLARES and a component DEFINES, so an imported `List` or `Set` is
+        // `MergedObjectNotConstructible` -- there is no way to write one down.
+        // Replacing it with a constructible object of the same name and arity
+        // strictly widens what a program can do; refusing instead is what took
+        // `Test3.fss`, `FunctionalMethodAsUnifyParam.fss` and `importBig.fss`
+        // down, all three for writing `import List.{...}` beside a
+        // comprehension.
+        //
+        // A DECLARATION THE FILE WROTE ITSELF IS STILL A REFUSAL, because that
+        // one IS constructible and the program means it. `badcomplisttaken
+        // .fss` is the fixture and it declares `object List(n: ZZ64)`.
+        if out.decls.iter().any(|d| collides(d, kind.name)) {
+            return Err(TypeError::ComprehensionNameTaken {
                 span: component.span,
+                name: kind.name,
             });
         }
-        out.decls.extend(minted_list());
+        out.decls.retain(|d| named(d) != Some(kind.name));
+        out.decls.extend(minted(kind.source));
     }
     Ok(out)
+}
+
+/// The collision that is a REFUSAL, on ONE LINE AND WITH NO VERTICAL BAR in
+/// it: a mutation row splits on `IFS='|'`, so the predicate a table has to
+/// reach cannot live inside a closure. Dropping the `merged` half is that
+/// row, and it puts the three corpus files back on the floor.
+fn collides(decl: &Decl, name: &str) -> bool {
+    named(decl) == Some(name) && !merged(decl)
+}
+
+/// Whether a declaration came out of an imported api rather than out of this
+/// file. Only a TRAIT or an OBJECT carries the flag, which is exactly the two
+/// shapes a collection name can collide with.
+fn merged(decl: &Decl) -> bool {
+    match decl {
+        Decl::Trait(t) => t.merged,
+        Decl::Object(o) => o.merged,
+        Decl::Function(_) | Decl::Value(_) => false,
+    }
 }
 
 fn named(decl: &Decl) -> Option<&str> {
@@ -84,14 +153,14 @@ fn named(decl: &Decl) -> Option<&str> {
     }
 }
 
-/// `List.fss`'s declarations. Parsed once per component that needs them; the
-/// file is a `component` so it reads as ordinary Fortress rather than as a
-/// fragment with no home.
-fn minted_list() -> Vec<Decl> {
-    let tokens = match fortress_lexer::lex(LIST_SOURCE) {
+/// A minted collection's declarations. Parsed once per component that needs
+/// them; each file is a `component` so it reads as ordinary Fortress rather
+/// than as a fragment with no home.
+fn minted(source: &str) -> Vec<Decl> {
+    let tokens = match fortress_lexer::lex(source) {
         Ok(t) => t,
         // Unreachable: the source is a constant in this crate, and
-        // `list_source_parses` is the test that says so.
+        // `minted_sources_parse` is the test that says so.
         Err(_) => return Vec::new(),
     };
     match fortress_parser::parse(&tokens) {
@@ -102,7 +171,7 @@ fn minted_list() -> Vec<Decl> {
 
 struct Pass {
     counter: usize,
-    demanded: bool,
+    demanded: [bool; KINDS.len()],
 }
 
 impl Pass {
@@ -335,13 +404,29 @@ impl Pass {
             return Ok(());
         };
         let span = *span;
-        if bracket != LIST_BRACKET {
+        let Some(kind) = kind_for(bracket) else {
             return Err(TypeError::ComprehensionUnsupported {
                 span,
                 bracket: bracket.clone(),
             });
+        };
+        // A MAP COMPREHENSION IS WRITTEN WITH THE SET'S BRACKETS AND IS NOT
+        // THIS. `{ k |-> v | ... }` builds a `Map[\K,V\]` and carries TWO
+        // static arguments; `not_working_static_tests/SetComprehension.fss`
+        // writes `{[\ZZ32,ZZ32\] a | a<-3:10 }`, which is that shape with an
+        // element that is not a mapping. Refused BY NAME on the ARITY of the
+        // written static arguments rather than let through to build a set of
+        // the wrong thing.
+        if kind.name == SET && static_args.len() > 1 {
+            return Err(TypeError::ComprehensionGeneratorUnsupported {
+                span,
+                form: "a map comprehension, written `{ k |-> v | ... }`",
+            });
         }
-        let element = match (static_args.first(), wanted.and_then(list_element)) {
+        let element = match (
+            static_args.first(),
+            wanted.and_then(|w| element_of(kind, w)),
+        ) {
             (Some(written), _) => written.clone(),
             (None, Some(slot)) => slot,
             (None, None) => return Err(TypeError::ComprehensionElementUnwritten { span }),
@@ -358,11 +443,18 @@ impl Pass {
 
         let index = self.counter;
         self.counter = self.counter.saturating_add(1);
-        self.demanded = true;
+        // ZIPPED RATHER THAN INDEXED, because `clippy::indexing_slicing` is
+        // denied here and a compiler pass is the last place that wants a
+        // panicking index. The two arrays are the same length by construction.
+        for (k, flag) in KINDS.iter().zip(self.demanded.iter_mut()) {
+            if k.bracket == kind.bracket {
+                *flag = true;
+            }
+        }
         let acc = format!("acc${index}");
 
         // Innermost first: each clause wraps what the ones to its right built.
-        let mut inner = call(field(var(&acc, span), "append", span), vec![body], span);
+        let mut inner = call(field(var(&acc, span), kind.builder, span), vec![body], span);
         for (depth, clause) in gens.iter().enumerate().rev() {
             inner = self.clause(clause, inner, index, depth, &acc, span)?;
         }
@@ -374,7 +466,7 @@ impl Pass {
                     ty: None,
                     value: call(
                         Expr::Instantiate {
-                            callee: Box::new(var(LIST, span)),
+                            callee: Box::new(var(kind.name, span)),
                             args: vec![element],
                             span,
                         },
@@ -481,11 +573,14 @@ impl Pass {
     }
 }
 
-/// `List[\T\]` written in a slot, and nothing else: the element type a
-/// comprehension takes from the binding it initialises.
-fn list_element(wanted: &TypeRef) -> Option<TypeRef> {
+/// This kind's collection written in a slot, and nothing else: the element
+/// type a comprehension takes from the binding it initialises. A `List[\T\]`
+/// slot does not give a SET comprehension its element type, and the other way
+/// round -- the two are different collections and reading one as the other
+/// would silently build the wrong one.
+fn element_of(kind: &Kind, wanted: &TypeRef) -> Option<TypeRef> {
     match wanted {
-        TypeRef::Named { name, args, .. } if name == LIST && args.len() == 1 => {
+        TypeRef::Named { name, args, .. } if name == kind.name && args.len() == 1 => {
             args.first().cloned()
         }
         _ => None,

@@ -541,6 +541,8 @@ concatbeside|Ux\n5|concatenation survives an unrelated declaration of its name
 listcomp|5\n10\n16\n4\n7\n6\n32\n5\n36\nq\n40\n40|a list comprehension builds a real monomorphized `List` and it GROWS
 tupleflat|7\n30\nHello World!\n7\n7\n0.25|a tuple parameter, a tuple value and a written tuple are FLATTENED
 compgenerator|10\n20\n30\n11\n21\n31\n100\n101\n102\n2\n20|a comprehension walks a COLLECTION -- an array, a List and a user object
+setcomprehension|5\n0\n1\n2\n3\n4\n3\n1\n3\n3\n2\n6|a SET comprehension deduplicates, keeps first-occurrence order, and walks a collection
+comprehensionmerged|3\n1|a MERGED `List` and `Set` lose to the minted collections instead of colliding
 bindingcond|7\n1\n2\n3\n2\n1\n99|a binding condition yields zero or one value, and `while` re-evaluates it
 tupleresult|3\n4\n7\nhi\n10\n20\n30\n7\n16\n41\n42\nmade\n11\n3|a tuple RESULT is an LLVM aggregate, and the source is evaluated ONCE
 wrappedparams|7\nhi\n9\n42|an object's value-parameter list may begin on the NEXT line
@@ -633,9 +635,12 @@ badprefixand.fss|expected an expression, found OpWord("AND")
 badasif.fss|is a type ASSUMPTION
 badtypedsubtype.fss|an integer literal cannot be used where Boolean is required
 badmergedfunctional.fss|where Cup is required
-badsetcomp.fss|only the list form
+badsetcomp.fss|element type is not written anywhere
+badbracketcomp.fss|comprehension parses and its lowering is not implemented
+badcompsettaken.fss|mints its own `Set`, and this component declares one of its own
+badmapcomprehension.fss|a map comprehension, written
 badcompelement.fss|element type is not written anywhere
-badcomplisttaken.fss|mints its own `List`, and this component already has one
+badcomplisttaken.fss|mints its own `List`, and this component declares one of its own
 badtuplevalue.fss|is a tuple and tuples are FLATTENED here
 badtuplemutable.fss|a mutable tuple binding is not flattened
 badtupleoverload.fss|`g` is declared twice on the same argument types (ZZ32, ZZ32)
@@ -1116,9 +1121,9 @@ MUTATIONS=(
   # row -- `IFS` splits on the bar it is made of -- so it is a named const, and
   # `List.fss` is a mutation target because `include_str!` puts it in the
   # dependency graph.
-  'crates/types/src/comprehension.rs|if bracket != LIST_BRACKET {|if false {|lower a set comprehension as if it were a list'
+  'crates/types/src/comprehension.rs|let Some(kind) = kind_for(bracket) else {|let Some(kind) = KINDS.first() else {|lower EVERY comprehension bracket as a list, so an array comprehension silently builds one'
   'crates/types/src/comprehension.rs|            (None, Some(slot)) => slot,|            (None, Some(_slot)) => return Err(TypeError::ComprehensionElementUnwritten { span }),|stop taking the element type from the slot it initialises'
-  'crates/types/src/comprehension.rs|        self.demanded = true;|        self.demanded = false;|lower a comprehension without minting the List it names'
+  'crates/types/src/comprehension.rs|                *flag = true;|                *flag = false;|lower a comprehension without minting the collection it names'
   'crates/types/src/comprehension.rs|            infix_le(var(&counter, span), hi, span)|            infix_lt(var(&counter, span), hi, span)|read an inclusive range as exclusive'
   'crates/types/src/List.fss|if count >= length(store) then reserve() end|if false then reserve() end|stop the minted List growing its storage'
   # ARITY FLATTENING, four axes. `overloading.tex:125` makes `f(x:(A,B))` and

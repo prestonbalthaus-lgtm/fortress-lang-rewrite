@@ -1,0 +1,29 @@
+component setcomprehension
+export Executable
+
+(* NINE ELEMENTS GENERATED, FIVE DISTINCT. The dedup is the whole semantics of
+   the construct and an exit code cannot see it: a `Set` that forgot to be a
+   set prints 9 here and still exits 0. The walk that follows asserts the
+   ORDER of first occurrence as well, so a shuffled or repeated element is
+   caught by the same fixture. *)
+run(): () = do
+  s = {[\ZZ64\] x + y | x <- 0:2, y <- 0:2}
+  println(s.size())
+  i: ZZ64 := 0
+  while i < s.size() do
+    println(s[i])
+    i := i + 1
+  end
+  (* a guard, and the element type taken from the SLOT rather than written on
+     the comprehension *)
+  t: Set[\ZZ64\] = {x | x <- 1:5, x < 4}
+  println(t.size())
+  println(t[0])
+  println(t[2])
+  (* a set comprehension over a COLLECTION, which walks `size` and `opr []` *)
+  u = {[\ZZ64\] 2 v | v <- t}
+  println(u.size())
+  println(u[0])
+  println(u[2])
+end
+end

@@ -1,0 +1,15 @@
+component badbracketcomp
+export Executable
+
+(* A BRACKET THAT IS NOT A COLLECTION THIS COMPILER MINTS. `<| |>` builds a
+   `List` and `{ }` builds a `Set`; every other enclosing bracket parses as a
+   comprehension and has nothing to build, so it is refused BY NAME rather
+   than lowered onto whichever collection happens to be first in the table.
+   `{| |}` is used here because it is REACHABLE -- `[ ... | ... ]` never gets
+   as far as the comprehension parse, so an array comprehension cannot be the
+   fixture for this. *)
+run(): () = do
+  a = {| x | x <- 1:3 |}
+  println(1)
+end
+end

@@ -798,6 +798,55 @@ three gains have no `.test` file, so oracle-gate builds and RUNS them and
 reaches no verdict -- the binary count moves 451 -> 454 and the pass count does
 not. Expected, not a miss.
 
+**SET COMPREHENSIONS, AND THE MINTED COLLECTION STOPS COLLIDING, 2026-08-25.**
+`{ e | x <- lo:hi, p }` lowers onto a real monomorphized `Set[\T\]`, minted the
+way `List[\T\]` is. ZERO CORPUS FILES GAINED, zero lost, and all 446
+pre-existing objects emit BYTE-IDENTICAL IR -- measured with two binaries, the
+instrument self-tested both ways on a changed integer LITERAL.
+
+THE CEILING WAS MEASURED BEFORE ANY CODE WAS WRITTEN AND IT IS ZERO, which is
+the finding. Four corpus files first-block on the `{_}` bracket. Reading all
+four rather than counting them: `SetComprehension.fss` writes
+`{[\ZZ32,ZZ32\] a | a<-3:10 }`, which is a MAP comprehension with two static
+arguments and is now refused by name for exactly that; and the other three --
+both `SpecData` examples and `desugarBug0.fss` -- write `s = { x DIV 2 | x <- t}`
+with no static argument and no typed slot, so they walk off the "not
+implemented" wall onto THE ELEMENT TYPE IS NEVER INFERRED, which is the same
+rule the list form has always had. Behind that sits a second wall in the two
+`SpecData` files, `t: Set[\ZZ32\] = {0, 1, 2, 3, 4}`: a set LITERAL, which is
+`opr {[\E\] es: E... }` at `Library/Set.fsi:55` and never merges, because the
+resolver skips `Decl::Function` from an api. THREE WALLS DEEP, AND THE
+COMPREHENSION WAS THE FIRST OF THEM.
+
+WHAT IT ACTUALLY BUYS IS THE COLLISION RULE, AND THAT IS WORTH MORE THAN THE
+FEATURE. `ComprehensionListTaken` refused any component that already had a
+`List` in scope, and "in scope" included a MERGED one -- so `import List.{...}`
+beside a comprehension was fatal. That took `BirdyLib/Test3.fss`,
+`tests/FunctionalMethodAsUnifyParam.fss` and `tests/importBig.fss` down, and it
+was wrong: an api DECLARES and never DEFINES, so the merged `List` was
+`MergedObjectNotConstructible` and could never have been written down anyway.
+THE RULE IS NOW LINK 5's RULE 1 ONE LEVEL DOWN -- a merged declaration loses to
+the minted collection the way it loses to a builtin -- and A DECLARATION THE
+FILE WROTE ITSELF STILL WINS, because that one is constructible and the program
+means it. All three files walked forward; `badcomplisttaken.fss` still refuses.
+
+THE MINTED `Set[\T\]` IS `Array[\T\]` PLUS A LINEAR MEMBERSHIP SCAN OVER `=`,
+and both halves are named deviations. 1.0's `Library/Set.fsi:56` bounds its
+element by `StandardTotalOrder[\T\]` and keeps the elements SORTED; there is no
+first-class ordering to demand of a written static argument here, so what is
+preserved instead is INSERTION ORDER OF FIRST OCCURRENCE -- deterministic, and
+a property a gate can assert. The set SEMANTICS, that duplicates collapse, is
+exact. Storage is an ordinary `Array[\T\]`, so there is still exactly one
+allocation path and codegen learned nothing.
+
+AND THE DEDUP IS INVISIBLE TO AN EXIT CODE, which decides how it is gated.
+`generator-gate.sh` part D builds nine elements from `x + y | x <- 0:2, y <- 0:2`
+and asserts `size()` is FIVE and the walk is `0 1 2 3 4`: a `Set` that forgot to
+be a set prints 9 and exits 0, and a shuffled walk prints the same five numbers
+in the wrong order. FOUR NEW MUTATION ROWS, and the one that matters makes the
+membership test answer `false` for everything -- the set silently becomes a
+list, and nothing but that size assertion can tell.
+
 **EXCEPTIONS, PARKED 2026-08-23.** `throw` is built -- an uncaught throw halts,
 naming the exception, with no unwinding and no cost on the path that does not
 throw -- and `try`/`catch`/`forbid`/`finally` PARSE and are refused by name. The

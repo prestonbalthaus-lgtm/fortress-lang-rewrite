@@ -107,6 +107,44 @@ probe() {
     fi
 }
 
+# An in-tree fixture, COMPILED AND RUN, asserting its exact output. In the tree
+# rather than in $build because a fixture that writes `import List.{...}`
+# resolves nothing outside the source path.
+fixture_runs() {
+    mkdir -p "$build"
+    local label=$1 name=$2 want=$3 got
+    if ! "$fortressc" "$repo/fortressc/tests/$name.fss" -o "$build/$name" \
+            >"$build/$name.err" 2>&1; then
+        bad "$label compiles" "$(grep -v '^fortressc: ' "$build/$name.err" | head -1)"
+        return
+    fi
+    got=$(timeout 20 "$build/$name" 2>&1)
+    if [[ $got == "$want" ]]; then
+        ok "$label -> $(printf '%s' "$got" | tr '\n' ' ')"
+    else
+        bad "$label" "got '$(printf '%s' "$got" | tr '\n' ' ')', want '$(printf '%s' "$want" | tr '\n' ' ')'"
+    fi
+}
+
+# An in-tree fixture that must be REFUSED, asserting the MESSAGE and not the
+# exit code: both readings of every one of these refuses, so only the message
+# separates them.
+fixture_refused() {
+    mkdir -p "$build"
+    local label=$1 name=$2 want=$3 err rc
+    err=$("$fortressc" "$repo/fortressc/tests/$name.fss" --emit-obj -o /dev/null 2>&1 >/dev/null); rc=$?
+    if refused_cleanly $rc; then
+        ok "$label is refused cleanly"
+    else
+        bad "$label is refused cleanly" "exit $rc"
+    fi
+    if names_mechanism "$err" "$want"; then
+        ok "$label -- the diagnostic names the mechanism"
+    else
+        bad "$label -- the diagnostic names the mechanism" "got: $(head -1 <<<"$err")"
+    fi
+}
+
 selftest() {
     printf '== gate self test ==\n'
     # THE VALUE COMPARISON MUST BE ABLE TO SAY NO, and it must reject a
@@ -359,6 +397,52 @@ run(): () = if (a, b) <- Just1(1) then println(a) end'
         bad 'the minted List declares `size`'
     fi
 
+    printf '\n== part D: the SET comprehension ==\n'
+
+    # THE FIXTURES FOR THIS PART LIVE IN THE TREE AND NOT IN $build, and that
+    # is not tidiness: two of them write `import List.{...}`, and a probe
+    # outside the source path does not get the implicit core import and does
+    # not resolve an import at all. It measures a different compiler.
+    fixture_runs 'a set comprehension dedups, keeps first-occurrence order, and walks a collection' \
+        setcomprehension "$(printf '5\n0\n1\n2\n3\n4\n3\n1\n3\n3\n2\n6')"
+
+    # LINK 5's RULE 1, ONE LEVEL DOWN. Both imports bring a `List` and a `Set`
+    # an api DECLARES and never DEFINES, so neither was ever constructible;
+    # the minted collections replace them instead of colliding with them.
+    fixture_runs 'a MERGED `List` and `Set` lose to the minted ones' \
+        comprehensionmerged "$(printf '3\n1')"
+
+    # AND A DECLARATION THE FILE WROTE ITSELF STILL WINS, because that one IS
+    # constructible and the program means it.
+    fixture_refused "a file's OWN \`List\` is still a refusal" \
+        badcomplisttaken 'declares one of its own under that name'
+    fixture_refused "a file's OWN \`Set\` is a refusal too" \
+        badcompsettaken 'mints its own `Set`'
+
+    # A MAP COMPREHENSION IS THE SET'S BRACKETS WITH TWO STATIC ARGUMENTS, and
+    # it is refused BY NAME rather than let through to build a set of the
+    # wrong thing. `not_working_static_tests/SetComprehension.fss` is the
+    # corpus witness.
+    fixture_refused 'a MAP comprehension is refused by name' \
+        badmapcomprehension 'a map comprehension, written'
+
+    # The minted Set has to carry the protocol in 1.0's spelling for the same
+    # reason the List does, or `for x <- aSet` works through a name this
+    # compiler invented.
+    if grep -q 'opr \[i: ZZ64\]: T = store\[i\]' "$repo/fortressc/crates/types/src/Set.fss"; then
+        ok 'the minted `Set[\T\]` declares `opr []`, not an invented `get`'
+    else
+        bad 'the minted Set declares `opr []`' 'the element half is not 1.0 spelling'
+    fi
+    # THE MEMBERSHIP TEST IS THE ONE THING THAT MAKES IT A SET. A mutation row
+    # makes it always answer `false`; this asserts the shape that row matches.
+    if grep -q 'if store\[i\] = x then found := true end' "$repo/fortressc/crates/types/src/Set.fss"; then
+        ok 'the minted `Set[\T\]` decides membership with `=` over its store'
+    else
+        bad 'the minted Set decides membership with `=`' \
+            'the mutation row that makes the test lie will not match'
+    fi
+
     printf '\n%d passed, %d failed\n' "$passed" "$failed"
     printf 'generator first-blockers in the corpus at the last measurement: %s\n' \
         "$GENERATOR_FIRST_BLOCKERS"
@@ -377,6 +461,10 @@ MUTATIONS=(
   'crates/types/src/lib.rs|if !loops {|if true {|lower `while x <- g` as an `if`, so the loop runs once and stops'
   'crates/types/src/lib.rs|op: BinOp::Lt,|op: BinOp::Le,|walk one element past the extent in the comprehension lowering'
   'crates/types/src/List.fss|opr [i: ZZ64]: T = store[i]|opr [i: ZZ64]: T = store[0]|make the minted List ignore its index -- a SILENT WRONG ANSWER that only a value assertion catches'
+  'crates/types/src/Set.fss|opr [i: ZZ64]: T = store[i]|opr [i: ZZ64]: T = store[0]|make the minted Set ignore its index, the same silent wrong answer one collection over'
+  'crates/types/src/Set.fss|if store[i] = x then found := true end|if false then found := true end|MAKE THE MEMBERSHIP TEST LIE -- every element reads as new, the set stops deduplicating and becomes a list, and NOTHING but the size assertion in setcomprehension.fss can tell'
+  'crates/types/src/comprehension.rs|builder: "insert",|builder: "append",|build a set with the LIST builder, so duplicates survive and the brackets stop meaning what they say'
+  'crates/types/src/comprehension.rs|named(decl) == Some(name) && !merged(decl)|named(decl) == Some(name)|refuse a MERGED collection name again, taking the three corpus files back down'
 )
 
 mutate_needs_the_built_compiler() {
