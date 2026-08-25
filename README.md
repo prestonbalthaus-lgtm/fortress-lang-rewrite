@@ -252,9 +252,10 @@ chained comparison; getters, setters, `self` and top-level values; dotted
 methods; generic and functional methods; operators and the builtin set; the
 parallel `for` and `spawn`; `atomic` and reduction variables; multi-dimensional
 arrays and the matrix aggregate; `Char`; radix numerals; dimensions and units as
-far as declaration and checking; `Object`/`Any` as real root traits; LIST AND
-SET comprehensions and the SET LITERAL on monomorphized `List[\T\]` and
-`Set[\T\]`; arity flattening; and the GENERATOR PROTOCOL.
+far as declaration and checking; `Object`/`Any` as real root traits; LIST, SET
+AND MAP comprehensions and the set and map LITERALS, on monomorphized
+`List[\T\]`, `Set[\T\]` and `Map[\K,V\]`; arity flattening; and the GENERATOR
+PROTOCOL.
 
 **The generator protocol is `Indexed`, walked EXTERNALLY, and that is a named
 deviation with three measured reasons.** 1.0's protocol is

@@ -891,6 +891,11 @@ impl<'a> Expander<'a> {
 
     fn expr(&mut self, e: &Expr, subst: &Subst) -> Result<Expr, TypeError> {
         Ok(match e {
+            Expr::Mapping { key, value, span } => Expr::Mapping {
+                key: Box::new(self.expr(key, subst)?),
+                value: Box::new(self.expr(value, subst)?),
+                span: *span,
+            },
             Expr::Unit { .. }
             | Expr::IntLit { .. }
             | Expr::FloatLit { .. }

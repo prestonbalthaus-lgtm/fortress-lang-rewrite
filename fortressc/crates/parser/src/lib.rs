@@ -4140,6 +4140,24 @@ impl<'t, 'a> Parser<'t, 'a> {
         if !empty {
             loop {
                 args.push(self.expr()?);
+                // `k |-> v`, ONE ENTRY OF A MAP. Checked BEFORE the newline
+                // skip and before the comprehension test, because the arrow
+                // binds its two operands tighter than either: a mapping is a
+                // single element of `{...}`, and `{ k |-> v | x <- g }` is a
+                // map COMPREHENSION whose body happens to be one.
+                if self.mapping_arrow_here() {
+                    self.pos += 3;
+                    self.skip_newlines();
+                    let value = self.expr()?;
+                    if let Some(key) = args.pop() {
+                        let span = Span::new(key.span().start, value.span().end);
+                        args.push(Expr::Mapping {
+                            key: Box::new(key),
+                            value: Box::new(value),
+                            span,
+                        });
+                    }
+                }
                 self.skip_newlines();
                 // A COMPREHENSION, and the separator is a BARE `|` WITH
                 // WHITESPACE ON BOTH SIDES -- `DelimitedExpr.rats:298,306` write
@@ -4183,6 +4201,54 @@ impl<'t, 'a> Parser<'t, 'a> {
             return Err(self.error("the closing half of an enclosing operator"));
         }
         Ok(self.enclosed(start, &open, &close, static_args, args))
+    }
+
+    /// `|->`, THE MAPPING ARROW, RE-GLUED BY SPAN ADJACENCY RATHER THAN LEXED.
+    /// `->` and `<-` are already handled this way -- neither is a token in
+    /// ASCII, and `Symbol.rats:197` gives the Unicode spellings tokens of their
+    /// own precisely because the ASCII ones are runs. Doing the same here keeps
+    /// decision 3's rule that mathematical symbols never become new lexer
+    /// tokens, and it costs nothing: measured over all 1956 corpus files, 439
+    /// sites write `|->` and ZERO write `| ->`, so a maximal-munch reading
+    /// takes no spelling away from anything.
+    ///
+    /// WITHOUT THIS, `{ 1 |-> 4 }` DOES NOT FAIL WHERE A READER EXPECTS. The
+    /// element loop breaks on the non-comma, `operator_run` reads the bare `|`
+    /// as a closing run of the right LENGTH, and the call is built against the
+    /// operator `{_|` -- so the error lands on the `>` two characters later,
+    /// as `expected an expression, found Gt`. Eleven corpus files stop there
+    /// and only seven of them are maps.
+    /// THE TWO GLUING CHECKS ARE A SHAPE GUARD WITH NO REACHABLE EXERCISER,
+    /// and that is recorded rather than papered over. A mutation removing the
+    /// first one SURVIVED, so the question was asked the right way round --
+    /// which program separates the two readings? -- and the answer is none:
+    /// reaching it needs a literal `| - >` in sequence, and `{ x | -> y }` is
+    /// refused as `expected an expression, found Gt` with the guard either way.
+    /// The row that bites instead is the one on the arrow's last token; the
+    /// guards stay because a comprehension separator is a bare `|` and reading
+    /// a spaced one as half an arrow is the defect they exist to make
+    /// impossible, not one they can currently be shown to catch. Same call
+    /// `tuple_value`'s element check got.
+    fn mapping_arrow_here(&self) -> bool {
+        if !matches!(self.peek_kind(), Some(Kind::Bar)) {
+            return false;
+        }
+        if !self.glued_right(self.pos) {
+            return false;
+        }
+        if !matches!(
+            self.tokens.get(self.pos + 1).map(|t| &t.kind),
+            Some(Kind::Minus)
+        ) {
+            return false;
+        }
+        if !self.glued_right(self.pos + 1) {
+            return false;
+        }
+        matches!(
+            self.tokens.get(self.pos + 2).map(|t| &t.kind),
+            Some(Kind::Gt)
+        )
     }
 
     /// A bare `|` that separates a comprehension's body from its generators.

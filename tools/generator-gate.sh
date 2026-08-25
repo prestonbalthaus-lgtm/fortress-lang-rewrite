@@ -424,7 +424,7 @@ run(): () = if (a, b) <- Just1(1) then println(a) end'
     # wrong thing. `not_working_static_tests/SetComprehension.fss` is the
     # corpus witness.
     fixture_refused 'a MAP comprehension is refused by name' \
-        badmapcomprehension 'a map comprehension, written'
+        badmapcomprehension 'whose body must be written `k |-> v`'
 
     # A SET LITERAL IS A `Call` TO `{_}`, NOT A LITERAL NODE, and it lowers onto
     # the SAME minted collection. Order and dedup are both asserted by value:
@@ -434,6 +434,33 @@ run(): () = if (a, b) <- Just1(1) then println(a) end'
 
     fixture_refused 'an untyped set literal is refused by name' \
         badsetliteral "element type is not written anywhere"
+
+    printf '\n== part E: the MAP forms, on the SET brackets ==\n'
+
+    # A LATER KEY REPLACES AN EARLIER ONE, which is the whole difference between
+    # a map and a multimap and is invisible to an exit code: three entries
+    # written, two keys, and `m[1]` is the SECOND value given for key 1.
+    fixture_runs 'a MAP literal and comprehension, key replacement and all' \
+        mapliteral "$(printf '2\n9\n8\n1\n6\n3\n2\n6\n2')"
+
+    fixture_refused 'a literal mixing an element and a mapping is refused' \
+        badmapmixed 'is one entry of a map and is not a value on its own'
+
+    fixture_refused 'a mapping body in the LIST brackets names the BODY' \
+        badmappingvalue 'a mapping body, which only the `{ }` brackets build'
+
+    # `|->` IS NOT A LEXER TOKEN. It is `Bar` glued to `Minus` glued to `Gt`,
+    # re-glued on span adjacency the way `->` and `<-` already are.
+    if grep -q 'fn mapping_arrow_here' "$repo/fortressc/crates/parser/src/lib.rs"; then
+        ok '`|->` is re-glued by the parser, not lexed'
+    else
+        bad '`|->` is re-glued by the parser' 'a new lexer token would break decision 3'
+    fi
+    if grep -q 'insert(k: K, v: V)' "$repo/fortressc/crates/types/src/Map.fss"; then
+        ok 'the minted `Map[\K,V\]` inserts a KEY and a VALUE'
+    else
+        bad 'the minted Map inserts a key and a value'
+    fi
 
     # The minted Set has to carry the protocol in 1.0's spelling for the same
     # reason the List does, or `for x <- aSet` works through a name this
@@ -472,11 +499,15 @@ MUTATIONS=(
   'crates/types/src/List.fss|opr [i: ZZ64]: T = store[i]|opr [i: ZZ64]: T = store[0]|make the minted List ignore its index -- a SILENT WRONG ANSWER that only a value assertion catches'
   'crates/types/src/Set.fss|opr [i: ZZ64]: T = store[i]|opr [i: ZZ64]: T = store[0]|make the minted Set ignore its index, the same silent wrong answer one collection over'
   'crates/types/src/Set.fss|if store[i] = x then found := true end|if false then found := true end|MAKE THE MEMBERSHIP TEST LIE -- every element reads as new, the set stops deduplicating and becomes a list, and NOTHING but the size assertion in setcomprehension.fss can tell'
-  'crates/types/src/comprehension.rs|builder: "insert",|builder: "append",|build a set with the LIST builder, so duplicates survive and the brackets stop meaning what they say'
+  'crates/types/src/comprehension.rs|source: SET_SOURCE,|source: LIST_SOURCE,|mint a LIST where a Set is wanted, so `{ }` builds a collection that keeps duplicates'
   'crates/types/src/comprehension.rs|named(decl) == Some(name) && !merged(decl)|named(decl) == Some(name)|refuse a MERGED collection name again, taking the three corpus files back down'
   'crates/types/src/comprehension.rs|for element_expr in elements {|for element_expr in elements.into_iter().rev() {|build a set literal BACKWARDS -- same size, same elements, wrong order, and only a value assertion sees it'
-  'crates/types/src/comprehension.rs|(None, Some(from_slot)) => from_slot,|(None, Some(_from_slot)) => return Err(TypeError::SetLiteralElementUnwritten { span }),|stop taking a set literal element type from the slot it initialises'
+  'crates/types/src/comprehension.rs|(true, Some(from_slot)) => from_slot,|(true, Some(_from_slot)) => return Err(TypeError::SetLiteralElementUnwritten { span }),|stop taking a set literal element type from the slot it initialises'
   'crates/types/src/Set.fss|opr IN(x: T, self): Boolean = contains(x)|opr IN(x: T, self): Boolean = NOT contains(x)|make `IN` answer the opposite, which every exit code accepts'
+  'crates/types/src/Map.fss|      vals[slot] := v|      count := count|STOP A LATER KEY REPLACING AN EARLIER ONE -- the map silently becomes a multimap with a stale first value, same size, same keys'
+  'crates/types/src/Map.fss|if keys[i] = k then found := i end|if keys[i] = k then found := 0 end|make every key look up the FIRST entry, which is a silent wrong answer only a value assertion catches'
+  'crates/parser/src/lib.rs|            Some(Kind::Gt)|            Some(Kind::Lt)|end the mapping arrow with the WRONG token, so every map literal and map comprehension stops being a map'
+  'crates/types/src/comprehension.rs|let wanted = if mapping { 2 } else { 1 };|let wanted = 1;|read every `{ }` form as a SET, so a map literal builds one collection with the other shape'
 )
 
 mutate_needs_the_built_compiler() {

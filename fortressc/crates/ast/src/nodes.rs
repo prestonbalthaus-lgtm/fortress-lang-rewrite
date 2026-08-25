@@ -793,6 +793,20 @@ pub enum Expr {
         items: Vec<Expr>,
         span: Span,
     },
+    /// `k |-> v`, ONE ENTRY OF A MAP and nothing else. It is NOT a tuple and
+    /// must not be represented as one: `mapConstants.fss:33` writes
+    /// `("Hi",3) |-> ("Lois",23)`, whose key AND value are tuples, so a
+    /// two-element tuple cannot tell a mapping from its own operands.
+    ///
+    /// `|->` IS NOT A LEXER TOKEN, the same way `->` and `<-` are not: it is
+    /// `Bar` glued to `Minus` glued to `Gt`, re-glued by the parser on span
+    /// adjacency. Measured before it was written: 439 sites write `|->` and
+    /// ZERO write `| ->`, so re-gluing takes nothing away.
+    Mapping {
+        key: Box<Expr>,
+        value: Box<Expr>,
+        span: Span,
+    },
     /// Digits with group separators already removed. Arbitrary precision at
     /// this stage: the types crate decides `ZZ32` versus `ZZ64`.
     IntLit {
@@ -1266,6 +1280,7 @@ impl Expr {
         match self {
             Self::Unit { span }
             | Self::Tuple { span, .. }
+            | Self::Mapping { span, .. }
             | Self::IntLit { span, .. }
             | Self::FloatLit { span, .. }
             | Self::ObjectExpr { span, .. }

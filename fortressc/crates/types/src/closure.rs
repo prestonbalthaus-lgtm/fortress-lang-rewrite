@@ -968,6 +968,10 @@ impl Pass {
 
     fn rewrite_expr(&mut self, e: &mut Expr, scope: &mut Scope) -> Result<(), TypeError> {
         match e {
+            Expr::Mapping { key, value, .. } => {
+                self.rewrite_expr(key, scope)?;
+                self.rewrite_expr(value, scope)
+            }
             Expr::Unit { .. }
             | Expr::IntLit { .. }
             | Expr::FloatLit { .. }
@@ -1452,6 +1456,10 @@ impl Pass {
 pub(crate) fn free_names(e: &Expr, bound: &mut Vec<BTreeSet<String>>, out: &mut BTreeSet<String>) {
     let is_bound = |bound: &Vec<BTreeSet<String>>, n: &str| bound.iter().any(|f| f.contains(n));
     match e {
+        Expr::Mapping { key, value, .. } => {
+            free_names(key, bound, out);
+            free_names(value, bound, out);
+        }
         Expr::Var { name, .. } => {
             if !is_bound(bound, name) {
                 out.insert(name.clone());

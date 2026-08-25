@@ -744,6 +744,12 @@ pub enum TypeError {
         span: Span,
         form: &'static str,
     },
+    /// `k |-> v` written where a VALUE is expected. A mapping is ONE ENTRY of a
+    /// map and has no representation of its own: the map forms take its halves
+    /// apart, and nothing else can.
+    MappingOutsideAMap {
+        span: Span,
+    },
     /// `{a, b, c}` with no written element type and no slot to take one from.
     /// NOT A MISSING INFERENCE PASS: this compiler stamps `Set[\T\]` during
     /// monomorphization, which runs BEFORE the checker exists, so an element
@@ -1038,6 +1044,7 @@ impl TypeError {
             | Self::TupleLocalUnsplittable { span }
             | Self::ComprehensionElementUnwritten { span }
             | Self::ComprehensionGeneratorUnsupported { span, .. }
+            | Self::MappingOutsideAMap { span }
             | Self::SetLiteralElementUnwritten { span }
             | Self::ComprehensionNameTaken { span, .. }
             | Self::FunctionValueUnresolved { span, .. }
@@ -1623,6 +1630,12 @@ impl core::fmt::Display for TypeError {
             Self::ComprehensionGeneratorUnsupported { form, .. } => write!(
                 f,
                 "{form} is not implemented in a comprehension"
+            ),
+            Self::MappingOutsideAMap { .. } => write!(
+                f,
+                "`k |-> v` is one entry of a map and is not a value on its own. \
+                 It is taken apart by the map forms -- `{{k |-> v, ...}}` and \
+                 `{{k |-> v | x <- g}}` -- and has no representation anywhere else"
             ),
             Self::SetLiteralElementUnwritten { .. } => write!(
                 f,

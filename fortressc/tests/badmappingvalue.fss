@@ -1,0 +1,12 @@
+component badmappingvalue
+export Executable
+
+(* THE BRACKET IS IMPLEMENTED AND THE BODY IS NOT. There is no list OF
+   MAPPINGS: a mapping is one entry of a map, so only `{ }` builds one. Saying
+   "this bracket's lowering is not implemented" of `<| |>`, which plainly
+   works, would send the reader to the wrong place. *)
+run(): () = do
+  z = <|[\ZZ64,ZZ64\] x |-> x | x <- 1:3 |>
+  println(1)
+end
+end

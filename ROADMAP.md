@@ -904,6 +904,64 @@ the minted set -- a FUNCTIONAL METHOD with `self` in the SECOND position,
 because the element is on the left -- so `3 IN t` is the ordinary dispatch this
 compiler already does. Two corpus files write it.
 
+**MAP LITERALS AND MAP COMPREHENSIONS, 2026-08-25.** `{k |-> v, ...}` and
+`{k |-> v | x <- g}` lower onto a minted `Map[\K,V\]`. ZERO corpus files gained,
+zero lost, all 446 pre-existing objects BYTE-IDENTICAL IR. TEN files moved
+MESSAGE.
+
+**THE FIRST WALL WAS NOT THE COMPREHENSION, IT WAS `|->`.** Eleven corpus files
+stopped at `expected an expression, found Gt`, and reading the reported line of
+all eleven -- rather than counting them -- gives THREE features and not one:
+five map comprehensions, two map LITERALS, and four files that have nothing to
+do with maps (`Bazaar.fss` writes `|s| >> ...`, `BooleanOps.fss` writes
+`a<->b`, `conditionalOp.fss` writes `->:`). The error did not even land on the
+arrow: with no mapping rule, `{ 1 |-> 4 }` breaks its element loop on the
+non-comma, `operator_run` reads the bare `|` as a closing run OF THE RIGHT
+LENGTH, and the call is built against an operator called `{_|` -- so the
+diagnostic points at the `>` two characters later.
+
+`|->` IS RE-GLUED BY THE PARSER AND IS NOT A LEXER TOKEN, which is what `->`
+and `<-` already do: neither is a token in ASCII, and `Symbol.rats:197` gives
+the UNICODE spellings tokens of their own precisely because the ASCII ones are
+runs. Decision 3's rule -- mathematical symbols never become new lexer tokens --
+is kept. MEASURED BEFORE IT WAS WRITTEN: 439 sites write `|->` and ZERO write
+`| ->`, so a maximal-munch reading takes no spelling away from anything.
+
+`Expr::Mapping` IS ITS OWN NODE AND MUST NOT BE A TUPLE.
+`not_passing_yet/mapConstants.fss:33` writes `("Hi",3) |-> ("Lois",23)`, whose
+key AND value are tuples, so a two-element tuple cannot tell a mapping from its
+own operands. The variant forced SEVEN arms through E0004 and each one is a
+real decision: the four walkers recurse into both halves, and the CHECKER
+refuses it by name -- a mapping is one entry of a map and has no representation
+of its own, so anything reaching the checker was written where a value belongs.
+
+THE BRACKET DOES NOT DECIDE THE COLLECTION, THE ELEMENT DOES. `{a, b}` is a set
+and `{k |-> v}` is a map, on one encloser, which is how 1.0 spells them too
+(`Library/Set.fsi:55` against `Library/Map.fsi`). `Kind` gained an `arity`, and
+`kind_for` takes the shape of the element as well as the brackets. Three
+refusals fall out and each names its own half: a literal MIXING an element and a
+mapping is neither; two static arguments over a non-mapping body is neither;
+and a mapping body in the LIST brackets is a BODY problem, not a bracket
+problem -- saying "this bracket's lowering is not implemented" of `<| |>`,
+which plainly works, would send the reader to the wrong place.
+
+THE MINTED `Map[\K,V\]` IS TWO PARALLEL ARRAYS AND NOT AN ARRAY OF PAIRS,
+because a pair would be a TUPLE VALUE and this backend has none: a tuple is
+FLATTENED, never boxed, so two arrays are that flattening written down. A later
+`insert` at a present key REPLACES its value, which is the whole difference
+between a map and a multimap and is invisible to an exit code -- so the fixture
+writes three entries at two keys and asserts `m[1]` is the SECOND value. Two
+mutation rows attack exactly that.
+
+AND THE CEILING IS ZERO, MEASURED FIRST. Of the 23 corpus files that write a map
+comprehension, TWO already compile, ONE first-blocks on the map refusal, and the
+other twenty stop on unrelated walls -- local functions, `MIN` over a
+collection, untyped parameters, ordinary parse errors. The two best candidates
+were read in full and neither is close: `mapConstants.fss` needs `//`, `assert`
+and tuple keys and its own comment records a known bug in the construct, and
+`mapCombine.fss` needs `println` of an object, `asif` (refused by name),
+`identity` and five closures.
+
 **EXCEPTIONS, PARKED 2026-08-23.** `throw` is built -- an uncaught throw halts,
 naming the exception, with no unwinding and no cost on the path that does not
 throw -- and `try`/`catch`/`forbid`/`finally` PARSE and are refused by name. The
