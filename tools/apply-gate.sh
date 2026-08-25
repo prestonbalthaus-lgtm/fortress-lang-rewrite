@@ -545,6 +545,7 @@ setcomprehension|5\n0\n1\n2\n3\n4\n3\n1\n3\n3\n2\n6|a SET comprehension deduplic
 comprehensionmerged|3\n1|a MERGED `List` and `Set` lose to the minted collections instead of colliding
 setliteral|5\n0\n4\n2\n7\n3\n2\n0\ntrue\nfalse|a SET LITERAL dedups, keeps written order, takes its type from the slot or the brackets, and `IN` answers
 varargs|0\n1\n3\n0\n2\n10\n4|a varargs parameter collects its trailing arguments
+setliteraldefault|true\nfalse\nfalse|a set literal of one literal kind takes that kind
 mapliteral|2\n9\n8\n1\n6\n3\n2\n6\n2|a MAP literal and a MAP comprehension, key replacement and all, on the SET's brackets
 arraycomprehension|17\n0\n32\n0\n9|an ARRAY comprehension, indexed, taking its extent from the slot it fills
 bindingcond|7\n1\n2\n3\n2\n1\n99|a binding condition yields zero or one value, and `while` re-evaluates it
@@ -624,6 +625,7 @@ badctortie.fss|`Pair` is ambiguous for (Both, Both)
 badsingletoncall.fss|`Marker` is a singleton object; write `Marker`, not `Marker(...)`
 badselfvalue.fss|reserved word `Self` is not in the implemented subset
 badsettercompound.fss|is a setter, so `o.n := e` is a call
+badsetliteralmixed.fss|element type is not written anywhere
 badvarargsany.fss|is not a supported array element type
 badvarargsnotlast.fss|is followed by the parameter `b`
 badvarargstwice.fsi|is followed by the parameter `b`
@@ -955,6 +957,12 @@ MUTATIONS=(
   # own body stops checking: `length(es)` reports `expected an array, found
   # ZZ32`. This row is what holds that.
   'crates/types/src/mono.rs|                if self.is_varargs_template(decl) {|                if self.is_varargs_template(decl) && false {|emit the varargs template beside its own arity stamps'
+  # A SET LITERAL OF ONE LITERAL KIND TAKES THAT KIND. It is a SHAPE rule, not
+  # inference -- which is what lets it run before `Checker::new`, where
+  # `Set[\T\]` is stamped. Refuse every literal set and `setliteraldefault.fss`
+  # loses its element type again; `badsetliteralmixed.fss` is unaffected either
+  # way, which is why the row names only the first.
+  'crates/types/src/comprehension.rs|    let first = kinds.next().flatten()?;|    let first = None::<&str>?;|stop defaulting a set literal of one literal kind'
   # A WRAPPED VALUE-PARAMETER LIST. One line, +9 corpus files, and the risk it
   # carries is the opposite one: skipping newlines before `(` must not swallow a
   # MEMBER. `wrappedparams.fss`'s third object exists for exactly that.

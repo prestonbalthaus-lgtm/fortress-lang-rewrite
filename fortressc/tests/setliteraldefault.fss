@@ -1,0 +1,29 @@
+component setliteraldefault
+export Executable
+
+(* A SET LITERAL WHOSE ELEMENTS ARE ALL LITERALS OF ONE KIND takes that kind as
+   its element type. `3 IN {0, 1, 2, 3, 4, 5}` is the corpus witness
+   (`SpecData/examples/basic/Expr.Set.fss`) and it is the whole reason this rule
+   exists.
+
+   IT IS NOT INFERENCE. It reads the SHAPE of what was written, which is what
+   lets it run where it has to run: monomorphization stamps `Set[\T\]` BEFORE
+   `Checker::new`, so a type discoverable only by TYPING the elements cannot be
+   stamped at all. A literal needs no typing to be recognised.
+
+   An integer literal defaults to ZZ32, which is the fallback the checker
+   already applies to a bare integer -- so the `3` on the left of `IN` and the
+   element type agree instead of disagreeing.
+
+   A STRING SET IS NOT EXERCISED HERE AND THAT IS NOT AN OVERSIGHT. `opr IN`
+   over a String set is broken independently of this rule -- an EXPLICITLY
+   typed `{[\String\] "a", "b"}` fails the same way, with `condition must be
+   Boolean, found String` -- so a String row would be asserting someone else's
+   bug. The default itself produces `String` correctly. *)
+run(): () = do
+  println(3 IN {0, 1, 2, 3, 4, 5})
+  println(9 IN {0, 1, 2})
+  println(true IN {false})
+end
+
+end

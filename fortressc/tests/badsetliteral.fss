@@ -5,9 +5,21 @@ export Executable
    which runs before the checker exists, so an element type discoverable only
    by typing the elements cannot be stamped at all. `SeqIterate` is not a
    precedent for deferring it -- that walks a collection that already exists
-   and mints nothing. *)
+   and mints nothing.
+
+   REWRITTEN 2026-08-25, AND THE REWRITE IS THE POINT. This file used to write
+   `n = {1, 2, 3}`, which now COMPILES: a set literal whose elements are all
+   literals of one kind takes that kind, a SHAPE rule that needs no typing and
+   so can run before the stamp. The gate went red on a deliberate change and it
+   was right to -- the invariant MOVED rather than died.
+
+   `a` IS A LOCAL, NOT A LITERAL, so its type is discoverable only by typing it
+   and the refusal still stands. That is the boundary the syntactic default
+   stops at, and it is the same boundary the nine comprehension files sit
+   behind. *)
 run(): () = do
-  n = {1, 2, 3}
+  a: ZZ32 = 1
+  n = {a, a}
   println(1)
 end
 end

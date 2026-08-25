@@ -125,6 +125,52 @@ fn is_mapping(e: &Expr) -> bool {
     matches!(e, Expr::Mapping { .. })
 }
 
+/// The type a LITERAL element denotes on its own, with nothing around it.
+///
+/// An integer literal is `ZZ32`, which is the fallback the checker already
+/// applies to a bare integer everywhere else -- so `3 IN {0, 1, 2}` agrees with
+/// the `3` on its left rather than disagreeing with it.
+fn literal_type_name(e: &Expr) -> Option<&'static str> {
+    match e {
+        Expr::IntLit { .. } => Some("ZZ32"),
+        Expr::FloatLit { .. } => Some("RR64"),
+        Expr::StrLit { .. } => Some("String"),
+        Expr::CharLit { .. } => Some("Char"),
+        Expr::BoolLit { .. } => Some("Boolean"),
+        _ => None,
+    }
+}
+
+/// A SET LITERAL WHOSE ELEMENTS ARE ALL LITERALS OF ONE KIND takes that kind as
+/// its element type.
+///
+/// THIS IS NOT INFERENCE AND MUST NOT GROW INTO IT. It reads the SHAPE of what
+/// was written, the same way the elided-parameter-name rule and the
+/// statically-evaluable static-argument rule do, and it runs where it has to
+/// run: monomorphization stamps `Set[\T\]` BEFORE `Checker::new`, so a type
+/// discoverable only by TYPING the elements cannot be stamped at all. A literal
+/// needs no typing to be recognised, which is the whole reason this case can be
+/// served and the comprehension case cannot.
+///
+/// MEASURED CEILING, TWO FILES, and the other nine that first-block on the
+/// element-type wall are comprehensions over a binder -- `<| 2 x | x <- v |>`,
+/// `{x DIV 2 | x <- t}` -- whose element type is the type of an EXPRESSION.
+/// No syntactic rule reaches those; they are the inference milestone, and this
+/// one deliberately stops short of them.
+///
+/// ONE KIND ONLY. `{1, "a"}` stays refused: a mixed literal set has no single
+/// element type to default to, and guessing one would be a wrong answer rather
+/// than a missing feature.
+fn all_one_literal_kind(args: &[Expr]) -> Option<&'static str> {
+    let mut kinds = args.iter().map(literal_type_name);
+    let first = kinds.next().flatten()?;
+    if kinds.all(|k| k == Some(first)) {
+        Some(first)
+    } else {
+        None
+    }
+}
+
 pub fn lower(component: &Component) -> Result<Component, TypeError> {
     let mut pass = Pass {
         counter: 0,
@@ -510,7 +556,14 @@ impl Pass {
         let statics = match (written.is_empty(), wanted.and_then(|w| args_of(kind, w))) {
             (false, _) => written,
             (true, Some(from_slot)) => from_slot,
-            (true, None) => return Err(TypeError::SetLiteralElementUnwritten { span }),
+            (true, None) => match all_one_literal_kind(args) {
+                Some(name) => vec![TypeRef::Named {
+                    name: name.to_owned(),
+                    args: Vec::new(),
+                    span,
+                }],
+                None => return Err(TypeError::SetLiteralElementUnwritten { span }),
+            },
         };
         if statics.len() != kind.arity {
             return Err(TypeError::SetLiteralElementUnwritten { span });

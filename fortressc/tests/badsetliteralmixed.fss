@@ -1,0 +1,13 @@
+component badsetliteralmixed
+export Executable
+
+(* MIXED LITERAL KINDS STAY REFUSED. A set of an integer and a string has no
+   single element type to default to, and picking one would be a wrong answer
+   rather than a missing feature -- so the syntactic default declines and the
+   original "element type is not written anywhere" refusal stands.
+
+   This is the boundary of the rule. Widening it to a common supertype would be
+   inference, which is the milestone this deliberately stops short of. *)
+run(): () = println(1 IN {1, "a"})
+
+end
